@@ -87,8 +87,8 @@ jobs:
           while IFS= read -r number; do
             [[ -n "$number" ]] || continue
             comments="$RUNNER_TEMP/comments-${number}.txt"
-            gh api --paginate --slurp "repos/$ISSUE_REPOSITORY/issues/$number/comments?per_page=100" \
-              --jq 'add | map(select(.user.type != "Bot") | select((.body // "") | contains("<!-- agent-progress -->") | not))' > "$comments"
+            gh api --paginate --slurp "repos/$ISSUE_REPOSITORY/issues/$number/comments?per_page=100" > "$RUNNER_TEMP/all-comments-${number}.json"
+            jq 'add | map(select(.user.type != "Bot") | select((.body // "") | contains("<!-- agent-progress -->") | not))' "$RUNNER_TEMP/all-comments-${number}.json" > "$comments"
             if ! grep -Fxq "$number" "$refined_numbers"; then
               printf '%s\n' "$number" >> "$candidates"
               continue
@@ -104,8 +104,8 @@ jobs:
             [[ -n "$number" ]] || continue
             grep -Fxq "$number" "$unrefined_numbers" && continue
             comments="$RUNNER_TEMP/comments-${number}.txt"
-            gh api --paginate --slurp "repos/$ISSUE_REPOSITORY/issues/$number/comments?per_page=100" \
-              --jq 'add | map(select(.user.type != "Bot") | select((.body // "") | contains("<!-- agent-progress -->") | not))' > "$comments"
+            gh api --paginate --slurp "repos/$ISSUE_REPOSITORY/issues/$number/comments?per_page=100" > "$RUNNER_TEMP/all-comments-${number}.json"
+            jq 'add | map(select(.user.type != "Bot") | select((.body // "") | contains("<!-- agent-progress -->") | not))' "$RUNNER_TEMP/all-comments-${number}.json" > "$comments"
             refined_at="$(gh issue view "$number" -R "$ISSUE_REPOSITORY" --json body,updatedAt --jq 'if (.body | test("<!-- agent-refined: [^ ]+ -->")) then (.body | capture("<!-- agent-refined: (?<timestamp>[^ ]+) -->").timestamp) else .updatedAt end')"
             jq --arg refined_at "$refined_at" 'map(select(.created_at > $refined_at))' "$comments" > "$RUNNER_TEMP/new-comments-${number}.json"
             if [[ "$(jq 'length' "$RUNNER_TEMP/new-comments-${number}.json")" -gt 0 ]]; then

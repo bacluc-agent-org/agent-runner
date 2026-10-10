@@ -1301,6 +1301,32 @@ class TestRefineIssuesNoCandidates:
             "(( refined > 0 )) || exit 1"
         )
 
+    def test_refined_issues_are_merged_and_deduplicated(self):
+        content = self.WORKFLOW.read_text()
+        assert 'is:open+is:issue+label:agent-refined+-label:ready-for-implementation+-label:agent-ignore+sort:updated-desc&per_page=10' in content
+        assert 'awk \'!seen[$0]++\' "$candidates"' in content
+        assert 'done < "$unrefined_numbers"' in content
+        assert 'done < "$refined_numbers"' in content
+
+    def test_refined_issue_requires_new_non_bot_non_progress_comment(self):
+        content = self.WORKFLOW.read_text()
+        assert 'gh api --paginate --slurp "repos/$ISSUE_REPOSITORY/issues/$number/comments?per_page=100"' in content
+        assert 'select(.user.type != "Bot")' in content
+        assert 'contains("<!-- agent-progress -->") | not' in content
+        assert "select(.created_at > $refined_at)" in content
+        assert 'capture("<!-- agent-refined: (?<timestamp>[^ ]+) -->")' in content
+        assert 'printf \'%s\\n\' "$number" >> "$candidates"' in content
+
+    def test_refinement_marker_is_written_after_validation_and_removed_from_prompt(self):
+        content = self.WORKFLOW.read_text()
+        validation = content.index("if (( validation_status == 0 )); then")
+        marker_write = content.index("printf '\\n\\n<!-- agent-refined: %s -->\\n'")
+        issue_edit = content.index('gh issue edit "$number" --body-file "$out"')
+        prompt_body = content[content.index('body="$(gh issue view'):content.index('prompt="$RUNNER_TEMP/refine-prompt.txt"')]
+        assert validation < marker_write < issue_edit
+        assert "sed '/<!-- agent-refined: [^ ]* -->/d'" in prompt_body
+        assert "This is a prior refinement; the newest comments are new feedback" in content
+
 
 class TestWorkflowOpenRouterSelection:
     WORKFLOWS = [

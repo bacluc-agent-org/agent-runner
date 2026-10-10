@@ -1301,21 +1301,45 @@ class TestRefineIssuesNoCandidates:
             "(( refined > 0 )) || exit 1"
         )
 
-    def test_refined_issues_are_merged_and_deduplicated(self):
+    def test_refinement_candidate_filtering_preserves_unrefined_first_and_skips_their_comments(self, tmp_path):
         content = self.WORKFLOW.read_text()
         assert 'is:open+is:issue+label:agent-refined+-label:ready-for-implementation+-label:agent-ignore+sort:updated-desc&per_page=10' in content
-        assert 'awk \'!seen[$0]++\' "$candidates"' in content
-        assert 'done < "$unrefined_numbers"' in content
-        assert 'done < "$refined_numbers"' in content
+        start = content.index('          candidates="$RUNNER_TEMP/candidate-numbers.txt"')
+        end = content.index('          if [[ ! -s "$candidates" ]]; then', start)
+        block = content[start:end]
+        assert block.count('while IFS= read -r number; do') == 1
+        fake_gh = tmp_path / "gh"
+        fake_gh.write_text('''#!/usr/bin/env python3
+import json, sys
+args = sys.argv[1:]
+if args[0] == "api" and any(arg.startswith("search/issues?") for arg in args):
+    query = next(arg for arg in args if arg.startswith("search/issues?"))
+    issues = [11] if "sort:created-asc" in query else [22, 33]
+    print(json.dumps([{"number": number} for number in issues]))
+elif args[0] == "api":
+    endpoint = next(arg for arg in args if arg.startswith("repos/"))
+    number = int(endpoint.split("/")[4])
+    comments = {22: [{"user":{"type":"User"},"body":"new feedback","created_at":"2026-02-02T00:00:00Z"}], 33: [{"user":{"type":"Bot"},"body":"bot","created_at":"2026-02-03T00:00:00Z"},{"user":{"type":"User"},"body":"<!-- agent-progress -->","created_at":"2026-02-04T00:00:00Z"},{"user":{"type":"User"},"body":"old","created_at":"2026-02-01T00:00:00Z"}]}
+    print(json.dumps([comments.get(number, [])]))
+elif args[0] == "issue":
+    print("2026-02-01T00:00:00Z" if args[2] == "22" else "2026-02-05T00:00:00Z")
+''')
+        fake_gh.chmod(0o755)
+        result = subprocess.run(
+            ["bash", "-Eeuo", "pipefail", "-c", f"ISSUE_REPOSITORY=example/issues\nRUNNER_TEMP={str(tmp_path)!r}\nPATH={str(tmp_path)!r}:$PATH\n{block}cat \"$candidates\""],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.rstrip().splitlines() == ["11", "22"]
+        assert len(list(tmp_path.glob("all-comments-*.json"))) == 2
 
-    def test_refined_issue_requires_new_non_bot_non_progress_comment(self):
+    def test_refined_issue_filter_excludes_bots_progress_and_old_comments(self):
         content = self.WORKFLOW.read_text()
-        assert 'gh api --paginate --slurp "repos/$ISSUE_REPOSITORY/issues/$number/comments?per_page=100"' in content
+        assert content.count('gh api --paginate --slurp "repos/$ISSUE_REPOSITORY/issues/$number/comments?per_page=100"') == 1
         assert 'select(.user.type != "Bot")' in content
         assert 'contains("<!-- agent-progress -->") | not' in content
         assert "select(.created_at > $refined_at)" in content
-        assert 'capture("<!-- agent-refined: (?<timestamp>[^ ]+) -->")' in content
-        assert 'printf \'%s\\n\' "$number" >> "$candidates"' in content
 
     def test_refinement_marker_is_written_after_validation_and_removed_from_prompt(self):
         content = self.WORKFLOW.read_text()

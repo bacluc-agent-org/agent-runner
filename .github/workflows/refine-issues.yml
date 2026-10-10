@@ -75,34 +75,14 @@ jobs:
           candidates="$RUNNER_TEMP/candidate-numbers.txt"
           unrefined_json="$RUNNER_TEMP/unrefined-candidates.json"
           refined_json="$RUNNER_TEMP/refined-candidates.json"
-          unrefined_numbers="$RUNNER_TEMP/unrefined-candidate-numbers.txt"
-          refined_numbers="$RUNNER_TEMP/refined-candidate-numbers.txt"
           gh api "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+-label:agent-refined+-label:ready-for-implementation+-label:agent-ignore+sort:created-asc&per_page=5" \
             --jq '.items' > "$unrefined_json"
           gh api "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:agent-refined+-label:ready-for-implementation+-label:agent-ignore+sort:updated-desc&per_page=10" \
             --jq '.items' > "$refined_json"
-          jq -r '.[].number | tostring' "$unrefined_json" > "$unrefined_numbers"
-          jq -r '.[].number | tostring' "$refined_json" > "$refined_numbers"
-          : > "$candidates"
+          jq -r '.[].number | tostring' "$unrefined_json" > "$candidates"
           while IFS= read -r number; do
             [[ -n "$number" ]] || continue
-            comments="$RUNNER_TEMP/comments-${number}.txt"
-            gh api --paginate --slurp "repos/$ISSUE_REPOSITORY/issues/$number/comments?per_page=100" > "$RUNNER_TEMP/all-comments-${number}.json"
-            jq 'add | map(select(.user.type != "Bot") | select((.body // "") | contains("<!-- agent-progress -->") | not))' "$RUNNER_TEMP/all-comments-${number}.json" > "$comments"
-            if ! grep -Fxq "$number" "$refined_numbers"; then
-              printf '%s\n' "$number" >> "$candidates"
-              continue
-            fi
-            refined_at="$(gh issue view "$number" -R "$ISSUE_REPOSITORY" --json body,updatedAt --jq 'if (.body | test("<!-- agent-refined: [^ ]+ -->")) then (.body | capture("<!-- agent-refined: (?<timestamp>[^ ]+) -->").timestamp) else .updatedAt end')"
-            jq --arg refined_at "$refined_at" 'map(select(.created_at > $refined_at))' "$comments" > "$RUNNER_TEMP/new-comments-${number}.json"
-            if [[ "$(jq 'length' "$RUNNER_TEMP/new-comments-${number}.json")" -gt 0 ]]; then
-              mv "$RUNNER_TEMP/new-comments-${number}.json" "$comments"
-              printf '%s\n' "$number" >> "$candidates"
-            fi
-          done < "$unrefined_numbers"
-          while IFS= read -r number; do
-            [[ -n "$number" ]] || continue
-            grep -Fxq "$number" "$unrefined_numbers" && continue
+            grep -Fxq "$number" "$candidates" && continue
             comments="$RUNNER_TEMP/comments-${number}.txt"
             gh api --paginate --slurp "repos/$ISSUE_REPOSITORY/issues/$number/comments?per_page=100" > "$RUNNER_TEMP/all-comments-${number}.json"
             jq 'add | map(select(.user.type != "Bot") | select((.body // "") | contains("<!-- agent-progress -->") | not))' "$RUNNER_TEMP/all-comments-${number}.json" > "$comments"
@@ -112,9 +92,7 @@ jobs:
               mv "$RUNNER_TEMP/new-comments-${number}.json" "$comments"
               printf '%s\n' "$number" >> "$candidates"
             fi
-          done < "$refined_numbers"
-          awk '!seen[$0]++' "$candidates" > "$RUNNER_TEMP/deduplicated-candidates.txt"
-          mv "$RUNNER_TEMP/deduplicated-candidates.txt" "$candidates"
+          done < <(jq -r '.[].number | tostring' "$refined_json")
           if [[ ! -s "$candidates" ]]; then
             printf '%s\n' 'No unrefined open issues; nothing to do.'
             exit 0

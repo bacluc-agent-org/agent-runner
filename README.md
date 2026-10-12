@@ -155,11 +155,12 @@ and verifies forwarding and historical denial in a later step outside the checko
 
 Set these in Settings → Secrets and variables → Actions → Variables:
 
-| Variable                         | Description                                                                                                                                | Default             |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------- |
-| `ISSUE_REPOSITORY`               | Repository for issue tracking and cache (format: `owner/repo`)                                                                             | `github.repository` |
-| `MODEL_AVAILABILITY_CACHE_ISSUE` | Issue number used as the model-availability cache                                                                                          | auto-detected       |
-| `FORK_INVITE_USER`               | GitHub user invited with `push` on every new fork (exposed to the `github-fork-invite` skill as `GITHUB_FORK_INVITE_USER`; empty disables) | unset (skill no-op) |
+| Variable                         | Description                                                                                                                                | Default                   |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------- |
+| `ISSUE_REPOSITORY`               | Repository for issue tracking and cache (format: `owner/repo`)                                                                             | `github.repository`       |
+| `MODEL_AVAILABILITY_CACHE_ISSUE` | Issue number used as the model-availability cache                                                                                          | auto-detected             |
+| `FORK_INVITE_USER`               | GitHub user invited with `push` on every new fork (exposed to the `github-fork-invite` skill as `GITHUB_FORK_INVITE_USER`; empty disables) | unset (skill no-op)       |
+| `REVIEW_FIXES_OWNER`             | Owner (organization or user) whose repositories the _review-fixes_ workflow searches for PRs with review comments                          | `github.repository_owner` |
 
 ## Secrets
 

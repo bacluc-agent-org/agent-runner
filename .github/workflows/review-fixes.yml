@@ -15,10 +15,6 @@ on:
         description: Optional OpenCode model override (e.g. opencode-go-openai/glm-5.2)
         required: false
         type: string
-      org:
-        description: Organization/user to search for review-fixes PRs (defaults to the repository owner)
-        required: false
-        type: string
   push:
     paths:
       - ".github/workflows/review-fixes.yml"
@@ -56,7 +52,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
           OVERRIDE_PROMPT: ${{ inputs.prompt }}
-          SEARCH_OWNER: ${{ inputs.org || github.repository_owner }}
+          SEARCH_OWNER: ${{ vars.REVIEW_FIXES_OWNER || github.repository_owner }}
         run: |
           set -Eeuo pipefail
           printf '::add-mask::%s\n' "$GITHUB_TOKEN"

@@ -33,7 +33,7 @@ jobs:
   # Job 1: Find all open PRs with review comments from @Bacluc or @bacluc-agent
   # ---------------------------------------------------------------------------
   find-prs:
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404-arm
     timeout-minutes: 30
     outputs:
       prs: ${{ steps.find.outputs.prs }}

@@ -33,7 +33,7 @@ jobs:
     # claim leaks and the issue stays out of selection until a human unlabels it. Upgrade path:
     # timeout-based claims — encode the run id in the claim (agent-running:<run_id>) and treat a
     # claim whose run is no longer in-progress as expired at selection time.
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404-arm
     timeout-minutes: 120
     outputs:
       prompt: ${{ steps.pick.outputs.prompt }}

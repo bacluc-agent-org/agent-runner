@@ -2,7 +2,7 @@ name: Hourly issue runner
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "37 */4 * * *"
   workflow_dispatch:
     inputs:
       selection_prompt:

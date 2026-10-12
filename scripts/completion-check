@@ -3,6 +3,18 @@ set -Eeuo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+# The .opencode tests import TypeScript directly and use node --test globs,
+# which need Node >= 22. Prefer a newer Node when the default is too old
+# (e.g. the Blacksmith runners ship Node 20).
+if ! node --version | grep -qE '^v(2[2-9]|[3-9][0-9])\.'; then
+  for node_dir in /opt/hostedtoolcache/node/*/x64/bin; do
+    if "$node_dir/node" --version | grep -qE '^v(2[2-9]|[3-9][0-9])\.'; then
+      export PATH="$node_dir:$PATH"
+      break
+    fi
+  done
+fi
+
 # renovate: datasource=docker depName=ghcr.io/bacluc/prettier-image/prettier-image
 PRETTIER_VERSION=5.1.0
 # renovate: datasource=docker depName=rhysd/actionlint

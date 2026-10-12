@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   gh-cli-wrapper-integration:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 10
     steps:
       - name: Check out repository
@@ -38,7 +38,7 @@ jobs:
         run: python3 scripts/test_gh_cli_wrapper.py --verify-installed
 
   completion-check:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 10
     steps:
       - name: Check out repository

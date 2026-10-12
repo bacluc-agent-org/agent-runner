@@ -65,7 +65,7 @@ jobs:
             seen[$pr]=1
           done < <(
             gh api --paginate \
-              "search/issues?q=is:pr+is:open+author:${{ github.repository_owner }}+reviewed-by:Bacluc+-label:\"agents-ignore\"&per_page=100" \
+              "search/issues?q=is:pr+is:open+org:${{ github.repository_owner }}+reviewed-by:Bacluc+-label:\"agents-ignore\"&per_page=100" \
               --jq '.items[] | "\(.repository_url | sub("https://api.github.com/repos/"; ""))#\(.number)"' 2>/dev/null || true
           )
 
@@ -74,7 +74,7 @@ jobs:
             seen[$pr]=1
           done < <(
             gh api --paginate \
-              "search/issues?q=is:pr+is:open+author:${{ github.repository_owner }}+reviewed-by:${{ github.repository_owner }}+-label:\"agents-ignore\"&per_page=100" \
+              "search/issues?q=is:pr+is:open+org:${{ github.repository_owner }}+reviewed-by:bacluc-agent+-label:\"agents-ignore\"&per_page=100" \
               --jq '.items[] | "\(.repository_url | sub("https://api.github.com/repos/"; ""))#\(.number)"' 2>/dev/null || true
           )
 

@@ -19,6 +19,5 @@
     }
   ],
   "extends": ["config:recommended"],
-  "minimumReleaseAge": "14 days",
-  "rebaseWhen": "conflicted"
+  "minimumReleaseAge": "14 days"
 }

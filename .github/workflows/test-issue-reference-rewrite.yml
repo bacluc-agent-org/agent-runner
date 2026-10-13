@@ -1,6 +1,11 @@
 name: Issue reference rewrite tests
 
 on:
+  push:
+    paths:
+      - scripts/rewrite_issue_repo_references.py
+      - scripts/test_rewrite_issue_repo_references.py
+      - .github/workflows/test-issue-reference-rewrite.yml
   workflow_dispatch:
 
 permissions:

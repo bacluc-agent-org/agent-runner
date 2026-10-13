@@ -191,6 +191,8 @@ jobs:
 
           requested="${MODEL_TEXT:-}"
           if [[ -z "$requested" && "${MODEL_CHOICE:-auto}" != auto ]]; then requested="$MODEL_CHOICE"; fi
+          model_source='requested'
+          if [[ -z "$requested" ]]; then model_source=''; fi
 
           printf '::add-mask::%s\n' "$GITHUB_TOKEN"
           printf '::add-mask::%s\n' "$OPENCODE_GO_API_KEY"
@@ -207,11 +209,11 @@ jobs:
           # Exclude known-weak free models per scripts/model-deny-list.txt (shared with
           # hourly-issue.yml and refine-issues.yml); they pass the trivial OK probe but
           # fail as coordinator/selector in 10+ runs (e.g. 34029380869, 34042660858).
-          # The diagnostics checkout tracks main, so the file is absent until this
-          # change merges; deny_re then degrades to an inert pattern.
+          # The diagnostics checkout resolves to the event ref/SHA, so branch runs read this
+          # branch's list; a missing file degrades deny_re to inert ^$ (fail-open, per bacluc-agent/agent-runner#124).
           deny_re="$(grep -vE '^[[:space:]]*(#|$)' "$RUNNER_TEMP/agent-runner/scripts/model-deny-list.txt" 2>/dev/null | paste -sd'|' - || true)"
           [[ -n "$deny_re" ]] || deny_re='^$'
-          if [[ -n "$requested" ]] && grep -Eq "$deny_re" <<<"$requested"; then
+          if [[ "$model_source" != requested && -n "$requested" ]] && grep -Eq "$deny_re" <<<"$requested"; then
             printf '%s\n' 'Requested model is deny-listed; not dispatching.' >&2
             exit 1
           fi
@@ -369,6 +371,16 @@ jobs:
           if [[ "$resolution" == available ]]; then
             printf 'Model availability: requested %q is available; resolved model %q\n' "$requested_model" "$resolved"
             model="$resolved"
+            if [[ "$model_source" != requested ]] && grep -Eq "$deny_re" <<<"$model"; then
+              if [[ -n "$fallback_model" ]]; then
+                printf 'Model availability: requested %q resolved to deny-listed model %q; falling back to %q\n' "$requested_model" "$model" "$fallback_model"
+                model="$fallback_model"
+                model_source='fallback: deny-listed requested model'
+              else
+                printf 'Model availability: requested %q resolved to deny-listed model %q and no fallback is available; not dispatching.\n' "$requested_model" "$model" >&2
+                exit 1
+              fi
+            fi
           else
             printf 'Model availability: requested %q is unavailable (%s)\n' "$requested_model" "$resolution"
             if [[ "$resolution" == ambiguous ]]; then

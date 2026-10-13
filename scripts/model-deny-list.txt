@@ -30,3 +30,13 @@
 /liquid/lfm-2\.5
 # inclusionai/ling-3.0-flash-sante:free: retry_limit in run 36237757334.
 /inclusionai/ling-3\.0-flash-sante
+# mimo-v2.6-flash-free: ok:false in cache issue 49; selector/coordinator timeouts in runs 36419821279, 36341933623.
+/mimo-v2\.6-flash
+# space-bunny-free: ok:false in cache issue 49; retry_limit/coordinator timeouts in runs 36370700758, 36421630037.
+/space-bunny
+# longcat-2.5-preview-free: ok:true in cache issue 49 but coordinator timeouts in runs 36376341322, 36352361852.
+/longcat-2\.5-preview
+# qwen/qwen3.8-27b:free: ok:false in cache issue 49; retry_limit in run 36365028762.
+/qwen/qwen3\.8-27b
+# poolside/laguna-s-2.1:free: ok:false in cache issue 49; coordinator selection in run 36368492150 (failure indirect).
+/poolside/laguna-s-2\.1

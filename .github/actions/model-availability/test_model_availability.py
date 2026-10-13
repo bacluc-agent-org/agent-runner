@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import types
 from datetime import datetime, timezone
@@ -1368,13 +1369,41 @@ class TestWorkflowOpenRouterSelection:
         assert result.returncode == 1
         assert "not dispatching" in result.stderr
 
-    def test_opencode_rejects_deny_list_model_override(self):
+    def test_opencode_honors_explicit_weak_model_and_falls_back_for_auto(self):
         content = Path(".github/workflows/opencode.yml").read_text()
-        # Explicit requested models are honored; the live guard only deny-checks non-requested
-        # (discovery/auto/last-resort) resolved models.
-        assert '"$model_source" != requested' in content or "model_source != requested" in content
-        assert 'grep -Eq "$deny_re" <<<"$model"' in content
-        assert "Requested model is deny-listed; not dispatching." not in content
+        lines = content.splitlines()
+        start = next(i for i, line in enumerate(lines) if 'if [[ "$model_source" != requested ]]' in line)
+        balance = 0
+        guard_lines = []
+        for line in lines[start:]:
+            stripped = line.strip()
+            if stripped.startswith("if "):
+                balance += 1
+            elif stripped == "fi":
+                balance -= 1
+            guard_lines.append(line.strip())
+            if not balance:
+                break
+        guard = "\n".join(guard_lines)
+
+        for source, expected_model in [
+            ("requested", "opencode/nemotron-3-ultra-free"),
+            ("auto", "opencode/big-pickle"),
+        ]:
+            result = subprocess.run(
+                ["bash", "-Eeuo", "pipefail", "-c", f'model="opencode/nemotron-3-ultra-free"\n{guard}\nprintf "%s\\n" "$model"'],
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "model_source": source,
+                    "requested_model": "opencode/nemotron-3-ultra-free",
+                    "deny_re": "/nemotron-",
+                    "fallback_model": "opencode/big-pickle",
+                },
+            )
+            assert result.returncode == 0, result.stderr
+            assert result.stdout.strip().endswith(expected_model)
 
     def test_deny_list_file_exists(self):
         root = Path(__file__).parents[3]

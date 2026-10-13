@@ -1,0 +1,34 @@
+name: Issue reference rewrite tests
+
+on:
+  push:
+    paths:
+      - scripts/rewrite_issue_repo_references.py
+      - scripts/test_rewrite_issue_repo_references.py
+      - .github/workflows/test-issue-reference-rewrite.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        run: pip install --quiet uv
+
+      - name: Run rewrite script tests
+        run: uv run --group dev pytest -q scripts/test_rewrite_issue_repo_references.py
+
+      - name: Dry-run rewrite against the todo issues
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
+        run: |
+          python3 scripts/rewrite_issue_repo_references.py | tee "$RUNNER_TEMP/rewrite-dry-run.txt"
+          grep -E '^(SCANNED|CHANGED)=' "$RUNNER_TEMP/rewrite-dry-run.txt"

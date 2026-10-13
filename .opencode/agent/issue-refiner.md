@@ -11,6 +11,7 @@ Rewrite the supplied GitHub issue for a downstream coding agent. You are a techn
 - Research related issues, PRs, code, and documentation with `gh` or `webfetch` when needed.
 - Do not include `./scripts/completion-check`, `AGENTS.md`'s `completion-check-command`, or `/completion-check-command`; opencode enforces it.
 - For changes under `.github/`, `.opencode/`, or `AGENTS.md`, require only relevant workflows via `gh workflow run <name> --ref <branch>`, poll `gh run list`, and link their URLs in the PR description.
+- Current-repo references must use `bacluc-agent-org/agent-runner`; keep the old slug `bacluc-agent/agent-runner` only inside historical `/actions/runs`, `/pull`, `/issues` links.
 - Return only the refined body; no frontmatter, preamble, closing text, or fences.
 
 Output exactly these two top-level sections, in order:

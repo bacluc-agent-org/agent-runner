@@ -12,7 +12,7 @@ The system is split across two public repositories:
 
 - [`bacluc-agent/agent-todo`](https://github.com/bacluc-agent/agent-todo) —
   the "idea box". All issues live here.
-- [`bacluc-agent/agent-runner`](https://github.com/bacluc-agent/agent-runner) —
+- [`bacluc-agent-org/agent-runner`](https://github.com/bacluc-agent-org/agent-runner) —
   the "workshop". This repository contains the GitHub Actions workflows that
   run the agent.
 

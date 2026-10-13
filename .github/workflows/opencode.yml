@@ -213,10 +213,7 @@ jobs:
           # branch's list; a missing file degrades deny_re to inert ^$ (fail-open, per bacluc-agent/agent-runner#124).
           deny_re="$(grep -vE '^[[:space:]]*(#|$)' "$RUNNER_TEMP/agent-runner/scripts/model-deny-list.txt" 2>/dev/null | paste -sd'|' - || true)"
           [[ -n "$deny_re" ]] || deny_re='^$'
-          if [[ "$model_source" != requested && -n "$requested" ]] && grep -Eq "$deny_re" <<<"$requested"; then
-            printf '%s\n' 'Requested model is deny-listed; not dispatching.' >&2
-            exit 1
-          fi
+
           mapfile -t free_models < <(grep -E '^(opencode|openrouter)/[^[:space:]]+(-free|:free)$' "$available_models_file" | grep -Ev "$deny_re" | awk '!seen[$0]++')
           for candidate in \
             'opencode/big-pickle' \

@@ -1370,8 +1370,11 @@ class TestWorkflowOpenRouterSelection:
 
     def test_opencode_rejects_deny_list_model_override(self):
         content = Path(".github/workflows/opencode.yml").read_text()
-        assert 'grep -Eq "$deny_re" <<<"$requested"' in content
-        assert "Requested model is deny-listed; not dispatching." in content
+        # Explicit requested models are honored; the live guard only deny-checks non-requested
+        # (discovery/auto/last-resort) resolved models.
+        assert '"$model_source" != requested' in content or "model_source != requested" in content
+        assert 'grep -Eq "$deny_re" <<<"$model"' in content
+        assert "Requested model is deny-listed; not dispatching." not in content
 
     def test_deny_list_file_exists(self):
         root = Path(__file__).parents[3]

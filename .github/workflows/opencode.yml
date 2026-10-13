@@ -198,10 +198,6 @@ jobs:
           # branch's list; a missing file degrades deny_re to inert ^$ (fail-open, per bacluc-agent/agent-runner#124).
           deny_re="$(grep -vE '^[[:space:]]*(#|$)' "$RUNNER_TEMP/agent-runner/scripts/model-deny-list.txt" 2>/dev/null | paste -sd'|' - || true)"
           [[ -n "$deny_re" ]] || deny_re='^$'
-          if [[ -n "$requested" ]] && grep -Eq "$deny_re" <<<"$requested"; then
-            printf '%s\n' 'Requested model is deny-listed; not dispatching.' >&2
-            exit 1
-          fi
           mapfile -t free_models < <(grep -E '^(opencode|openrouter)/[^[:space:]]+(-free|:free)$' "$available_models_file" | grep -Ev "$deny_re" | awk '!seen[$0]++')
           for candidate in \
             'opencode/big-pickle' \
@@ -345,7 +341,7 @@ jobs:
           if [[ "$resolution" == available ]]; then
             printf 'Model availability: requested %q is available; resolved model %q\n' "$requested_model" "$resolved"
             model="$resolved"
-            if grep -Eq "$deny_re" <<<"$model"; then
+            if [[ "$model_source" != requested ]] && grep -Eq "$deny_re" <<<"$model"; then
               if [[ -n "$fallback_model" ]]; then
                 printf 'Model availability: requested %q resolved to deny-listed model %q; falling back to %q\n' "$requested_model" "$model" "$fallback_model"
                 model="$fallback_model"

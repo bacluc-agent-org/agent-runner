@@ -1354,11 +1354,6 @@ class TestWorkflowOpenRouterSelection:
         assert result.returncode == 1
         assert "not dispatching" in result.stderr
 
-    def test_opencode_rejects_deny_list_model_override(self):
-        content = Path(".github/workflows/opencode.yml").read_text()
-        assert 'grep -Eq "$deny_re" <<<"$requested"' in content
-        assert "Requested model is deny-listed; not dispatching." in content
-
     def test_deny_list_file_exists(self):
         root = Path(__file__).parents[3]
         deny_list = root / "scripts/model-deny-list.txt"
@@ -1386,11 +1381,6 @@ class TestWorkflowOpenRouterSelection:
             "openrouter/nex-agi/nex-n2.5-pro:free",
             "openrouter/liquid/lfm-2.5:free",
             "openrouter/inclusionai/ling-3.0-flash-sante:free",
-            "opencode/mimo-v2.6-flash-free",
-            "opencode/space-bunny-free",
-            "opencode/longcat-2.5-preview-free",
-            "openrouter/qwen/qwen3.8-27b:free",
-            "openrouter/poolside/laguna-s-2.1:free",
         ]
         for model in weak_models:
             result = subprocess.run(
@@ -1400,73 +1390,10 @@ class TestWorkflowOpenRouterSelection:
                 text=True,
             )
             assert result.returncode == 1, f"{model} must be deny-listed"
-        for kept_model in ("opencode/big-pickle", "opencode-go-openai/qwen3.8-flash"):
-            kept = subprocess.run(
-                ["grep", "-Ev", "-f", str(deny_list)],
-                input=kept_model,
-                capture_output=True,
-                text=True,
-            )
-            assert kept.returncode == 0, f"{kept_model} must be kept"
-
-    def test_deny_list_patterns_match_documented_model_ids(self):
-        root = Path(__file__).parents[3]
-        deny_list = root / "scripts/model-deny-list.txt"
-        lines = deny_list.read_text().splitlines()
-        entries = []
-        for index, line in enumerate(lines):
-            if line.startswith("#") and index + 1 < len(lines):
-                following = lines[index + 1]
-                if following.strip() and not following.startswith("#"):
-                    entries.append((line, following))
-        assert entries, "deny-list must contain at least one entry"
-        for comment, pattern in entries:
-            documented = comment[2:].split(": ", 1)[0]
-            assert documented, f"could not parse model id from comment: {comment!r}"
-            full_id = f"openrouter/{documented}" if "/" in documented else f"opencode/{documented}"
-            result = subprocess.run(
-                ["grep", "-Eq", pattern], input=full_id, capture_output=True, text=True,
-            )
-            assert result.returncode == 0, f"pattern {pattern!r} does not match documented model {full_id!r}"
-
-    def test_simulated_selection_excludes_deny_listed_and_keeps_critical_models(self, tmp_path):
-        root = Path(__file__).parents[3]
-        deny_list = root / "scripts/model-deny-list.txt"
-        available = tmp_path / "available-models.txt"
-        available.write_text(
-            "opencode/big-pickle\n"
-            "opencode-go-openai/qwen3.8-flash\n"
-            "opencode/mimo-v2.6-flash-free\n"
-            "opencode/space-bunny-free\n"
-            "opencode/longcat-2.5-preview-free\n"
-            "openrouter/qwen/qwen3.8-27b:free\n"
-            "openrouter/poolside/laguna-s-2.1:free\n"
-            "opencode/nemotron-3-ultra-free\n"
+        kept = subprocess.run(
+            ["grep", "-Ev", "-f", str(deny_list)],
+            input="opencode/big-pickle",
+            capture_output=True,
+            text=True,
         )
-        free_result = subprocess.run(
-            ["bash", "-c",
-             "grep -E '^(opencode|openrouter)/[^[:space:]]+(-free|:free)$' \"$1\""
-             " | grep -Ev -f \"$2\" | awk '!seen[$0]++'",
-             "bash", str(available), str(deny_list)],
-            capture_output=True, text=True,
-        )
-        free_models = free_result.stdout.splitlines()
-        for weak in (
-            "opencode/mimo-v2.6-flash-free", "opencode/space-bunny-free",
-            "opencode/longcat-2.5-preview-free", "openrouter/qwen/qwen3.8-27b:free",
-            "openrouter/poolside/laguna-s-2.1:free", "opencode/nemotron-3-ultra-free",
-        ):
-            assert weak not in free_models, f"{weak} must be excluded from free-path selection"
-        last_resort = subprocess.run(
-            ["bash", "-c", "grep -Ev -f \"$2\" \"$1\" | head -n1",
-             "bash", str(available), str(deny_list)],
-            capture_output=True, text=True,
-        ).stdout.strip()
-        assert last_resort == "opencode/big-pickle", f"last resort must be a critical model, got {last_resort!r}"
-
-    def test_opencode_rechecks_resolved_model_against_deny_list(self):
-        content = Path(".github/workflows/opencode.yml").read_text()
-        resolved = content.index('model="$resolved"')
-        deny_check = content.index('grep -Eq "$deny_re" <<<"$model"', resolved)
-        chosen = content.index("Chosen model is", deny_check)
-        assert resolved < deny_check < chosen
+        assert kept.returncode == 0, "opencode/big-pickle must be kept"

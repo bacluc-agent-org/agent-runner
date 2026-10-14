@@ -12,7 +12,10 @@ runs:
 
     - name: Install OpenCode
       shell: bash
-      run: npm install --global opencode-ai@1.18.32
+      run: |
+        npm install --global opencode-ai@1.18.32
+        printf '%s\n' 'OPENCODE_DISABLE_DEFAULT_PLUGINS=true' >> "$GITHUB_ENV"
+        printf '%s\n' 'OPENCODE_CONFIG_CONTENT={"plugin":[]}' >> "$GITHUB_ENV"
 
     - name: Fetch and prepare OpenCode configuration
       id: config

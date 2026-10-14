@@ -37,6 +37,43 @@ def fake_run(args, *a, **kw):
 
 
 class TestDiscoverModels:
+    def test_discovery_uses_plugin_safe_environment_and_keeps_nonzero_error(self, monkeypatch):
+        captured = {}
+
+        def fail(args, *a, **kw):
+            captured["env"] = kw["env"]
+            raise subprocess.CalledProcessError(
+                17, args, output="", stderr="Location plugins did not finish activating"
+            )
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fail)
+        with pytest.raises(subprocess.CalledProcessError) as error:
+            model_availability.discover_models()
+
+        assert error.value.returncode == 17
+        assert captured["env"]["OPENCODE_DISABLE_DEFAULT_PLUGINS"] == "true"
+        assert captured["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugin":[]}'
+
+    def test_debug_config_uses_plugin_safe_environment(self, monkeypatch):
+        captured = {}
+
+        def fake_config(args, *a, **kw):
+            captured["env"] = kw["env"]
+            kw["stdout"].write(json.dumps(CONFIG))
+            return types.SimpleNamespace(stdout="")
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_config)
+        assert model_availability.load_provider_config() == {
+            "opencode-go-openai": {"baseURL": "https://opencode.ai/zen/go/v1", "apiKey": None},
+            "opencode-go-anthropic": {
+                "baseURL": "https://opencode.ai/zen/go/v1/messages",
+                "apiKey": None,
+            },
+            "openrouter": {"baseURL": "https://openrouter.ai/api/v1", "apiKey": None},
+        }
+        assert captured["env"]["OPENCODE_DISABLE_DEFAULT_PLUGINS"] == "true"
+        assert captured["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugin":[]}'
+
     def test_discovers_models_per_provider(self, monkeypatch):
         captured = {}
 
@@ -962,6 +999,23 @@ class TestLoadProviderBaseUrls:
 
 
 class TestProbeModelLogging:
+    def test_probe_uses_plugin_safe_environment(self, tmp_path, monkeypatch):
+        captured = {}
+
+        class FakeResult:
+            returncode = 0
+            stdout = "OK\n"
+            stderr = ""
+
+        def fake_run(*args, **kwargs):
+            captured["env"] = kwargs["env"]
+            return FakeResult()
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+        assert model_availability.probe_model("opencode/a-free", str(tmp_path))
+        assert captured["env"]["OPENCODE_DISABLE_DEFAULT_PLUGINS"] == "true"
+        assert captured["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugin":[]}'
+
     def test_writes_probe_log_with_stdout_and_stderr(self, tmp_path, monkeypatch):
         class FakeResult:
             returncode = 0
@@ -1169,6 +1223,18 @@ class TestModelAvailabilityAction:
         assert "OPENCODE_AUTH_CONTENT" not in action
         assert "auth.json" not in action
         assert "python3" in action
+
+    def test_setup_exports_plugin_safe_environment(self):
+        root = Path(__file__).parents[3]
+        setup = (root / ".github/actions/setup-opencode/action.yml").read_text()
+        assert 'OPENCODE_DISABLE_DEFAULT_PLUGINS=true' in setup
+        assert 'OPENCODE_CONFIG_CONTENT={"plugin":[]}' in setup
+
+    def test_standalone_opencode_workflow_exports_plugin_safe_environment(self):
+        workflow = (Path(__file__).parents[3] / ".github/workflows/refresh-chatgpt-auth.yml").read_text()
+        validation = workflow[workflow.index("- name: Validate refreshed token with opencode") :]
+        assert "OPENCODE_DISABLE_DEFAULT_PLUGINS: true" in validation
+        assert "OPENCODE_CONFIG_CONTENT: '{\"plugin\":[]}'" in validation
 
 
 class TestMainProbeSummary:

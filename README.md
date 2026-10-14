@@ -89,12 +89,16 @@ idea (issue in agent-todo)
 Selectors apply the shared `scripts/model-deny-list.txt` and stop instead of
 dispatching when no allowed model is available.
 
-This repository's `.opencode/opencode.json` overlay enables OpenCode subagent
-nesting to depth 2. The `opencode` workflow backend is the default; `t3-code`
-is an explicit deferred option and exits with an error until headless execution
-and model switching are verified. OpenCode 1.18.32's Task tool does not expose
-a per-dispatch model override, so model assignment per child task and dynamic
-child-model selection are not supported by this runner yet.
+The workflow delegates coordinator execution to `scripts/subagent_runner.py`.
+Its JSON config accepts a backend (`opencode` or `t3-code`), parallel `agents`
+with a required explicit `model` and prompt, and optional `judge` and `fallback`
+agent objects. Each agent may set a `config` path; it is passed only to that
+process (`OPENCODE_CONFIG` or `T3_CONFIG`), keeping nested coordinators isolated.
+The runner uses `opencode run --agent ... --model ...` or `t3 exec --model ...`.
+
+The shared AI configuration is pulled from `bacluc/provision-machines` by
+`setup-opencode`; `.opencode/opencode.json` in this repository is only a local
+overlay and is not a replacement for that external configuration.
 
 ### Agents (the AI personas)
 

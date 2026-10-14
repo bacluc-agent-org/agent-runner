@@ -27,7 +27,7 @@ on:
         required: false
         type: string
       backend:
-        description: Execution backend (t3-code is deferred until headless execution and model switching are verified)
+        description: Execution backend (opencode or t3-code)
         required: false
         type: choice
         default: opencode
@@ -96,7 +96,7 @@ on:
         required: false
         type: string
       backend:
-        description: Execution backend (t3-code is deferred until headless execution and model switching are verified)
+        description: Execution backend (opencode or t3-code)
         required: false
         type: string
         default: opencode
@@ -155,11 +155,7 @@ jobs:
         shell: bash
         run: |
           case "$BACKEND" in
-            opencode) printf 'Execution backend: opencode\n' ;;
-            t3-code)
-              printf '%s\n' 'Deferred: t3-code headless execution and model switching have not been verified; use the opencode backend.' >&2
-              exit 1
-              ;;
+            opencode|t3-code) printf 'Execution backend: %s\n' "$BACKEND" ;;
             *) printf 'Unsupported execution backend: %s\n' "$BACKEND" >&2; exit 1 ;;
           esac
 
@@ -173,6 +169,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: bacluc-agent-org/agent-runner
+          ref: ${{ github.sha }}
           path: ${{ env.DIAGNOSTICS_CHECKOUT }}
           fetch-depth: 1
           persist-credentials: false
@@ -481,10 +478,16 @@ jobs:
           stop_token="$(openssl rand -hex 32)"
           : "${stop_token:?stop-commands fence token generation failed}"
           printf '::stop-commands::%s\n' "$stop_token"
-          printf 'Final coordinator command: opencode run --agent coordinator --model %q --title %q\n' "$MODEL" "$coordinator_session_title"
+          printf 'Final coordinator command: %s runner, model %q, title %q\n' "$BACKEND" "$MODEL" "$coordinator_session_title"
           printf 'Coordinator prompt:\n%s\n' "$PROMPT"
+          python3 - "$BACKEND" "$MODEL" "$PROMPT" "$coordinator_session_title" "$RUNNER_TEMP/coordinator.json" <<'PY'
+          import json, sys
+          backend, model, prompt, title, path = sys.argv[1:]
+          with open(path, "w", encoding="utf-8") as output:
+              json.dump({"backend": backend, "agents": [{"name": "coordinator", "model": model, "prompt": prompt, "title": title}]}, output)
+          PY
           set +e
-          timeout "${COORDINATOR_TIMEOUT}m" opencode run --agent coordinator --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
+          timeout "${COORDINATOR_TIMEOUT}m" python3 "$RUNNER_TEMP/agent-runner/scripts/subagent_runner.py" --config "$RUNNER_TEMP/coordinator.json" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
           coordinator_statuses=("${PIPESTATUS[@]}")
           printf '::%s::\n' "$stop_token"
           coordinator_status=${coordinator_statuses[0]}

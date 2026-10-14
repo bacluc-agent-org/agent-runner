@@ -386,7 +386,7 @@ jobs:
           if [[ "$resolution" == available ]]; then
             printf 'Model availability: requested %q is available; resolved model %q\n' "$requested_model" "$resolved"
             model="$resolved"
-            if [[ "$model_source" != requested ]] && grep -Eq "$deny_re" <<<"$model"; then
+            if [[ "$model_source" != requested ]] && grep -Eq "$deny_re" <<<"$resolved"; then
               if [[ -n "$fallback_model" ]]; then
                 printf 'Model availability: requested %q resolved to deny-listed model %q; falling back to %q\n' "$requested_model" "$model" "$fallback_model"
                 model="$fallback_model"

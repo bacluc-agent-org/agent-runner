@@ -151,6 +151,7 @@ jobs:
           DISCOVERY_TIMEOUT_MINUTES: ${{ inputs.discovery_timeout_minutes }}
 
       - name: Validate execution backend
+        id: validate-backend
         shell: bash
         run: |
           case "$BACKEND" in
@@ -645,7 +646,7 @@ jobs:
           printf '::%s::\n' "$stop_token"
 
       - name: Emit loop-termination metrics
-        if: always()
+        if: always() && steps.validate-backend.outcome == 'success'
         id: loop-metrics
         shell: bash
         env:

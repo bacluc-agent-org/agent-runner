@@ -37,6 +37,23 @@ def fake_run(args, *a, **kw):
 
 
 class TestDiscoverModels:
+    def test_retries_transient_cli_initialization_failure(self, monkeypatch):
+        calls = 0
+
+        def fail_once(args, *a, **kw):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise subprocess.CalledProcessError(
+                    1, args, stderr="ServiceUnavailableError: Location plugins did not finish activating"
+                )
+            return fake_run(args, *a, **kw)
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fail_once)
+        monkeypatch.setattr(model_availability.time, "sleep", lambda _: None)
+        assert model_availability.discover_models()[0] == ["opencode/a-free"]
+        assert calls == 3
+
     def test_discovery_uses_plugin_safe_environment_and_keeps_nonzero_error(self, monkeypatch):
         captured = {}
 

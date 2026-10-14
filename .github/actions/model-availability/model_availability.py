@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 from urllib.parse import urlsplit
 from datetime import datetime, timezone
@@ -234,18 +235,22 @@ def fetch_model_ids(endpoint: str, api_key: str | None = None) -> list[str]:
 
 def discover_models() -> tuple[list[str], dict[str, list[str]]]:
     """whitelisted_models from `opencode models`; provider_models: {provider: model_ids} per provider."""
-    try:
-        result = subprocess.run(
-            ["opencode", "models", "--standalone"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=DISCOVERY_TIMEOUT_SECONDS,
-            env=opencode_env(),
-        )
-    except Exception as e:
-        print(f"ERROR: {e}\n{getattr(e, 'stderr', '') or ''}", file=sys.stderr)
-        raise
+    for attempt in range(3):
+        try:
+            result = subprocess.run(
+                ["opencode", "models", "--standalone"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=DISCOVERY_TIMEOUT_SECONDS,
+                env=opencode_env(),
+            )
+            break
+        except subprocess.CalledProcessError as e:
+            if "Location plugins did not finish activating" not in (e.stderr or "") or attempt == 2:
+                print(f"ERROR: {e}\n{e.stderr or ''}", file=sys.stderr)
+                raise
+            time.sleep(2**attempt)
     log_dir = os.path.join(
         os.environ.get("RUNNER_TEMP") or tempfile.gettempdir(), "model-probes"
     )

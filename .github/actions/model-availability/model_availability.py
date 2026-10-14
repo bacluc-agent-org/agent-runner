@@ -236,19 +236,16 @@ def discover_models() -> tuple[list[str], dict[str, list[str]]]:
     """whitelisted_models from `opencode models`; provider_models: {provider: model_ids} per provider."""
     try:
         result = subprocess.run(
-            ["opencode", "models"],
+            ["opencode", "models", "--standalone"],
             check=True,
             capture_output=True,
             text=True,
             timeout=DISCOVERY_TIMEOUT_SECONDS,
             env=opencode_env(),
         )
-        if result.returncode != 0:
-            print(f"stdout: {result.stdout}")
-            print(f"stdout: {result.stdout}")
     except Exception as e:
-        print( f"ERROR: {e}\n")
-        raise e
+        print(f"ERROR: {e}\n{getattr(e, 'stderr', '') or ''}", file=sys.stderr)
+        raise
     log_dir = os.path.join(
         os.environ.get("RUNNER_TEMP") or tempfile.gettempdir(), "model-probes"
     )

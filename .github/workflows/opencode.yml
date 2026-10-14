@@ -27,13 +27,12 @@ on:
         required: false
         type: string
       backend:
-        description: Execution backend (opencode or t3-code)
+        description: Execution backend (opencode)
         required: false
         type: choice
         default: opencode
         options:
           - opencode
-          - t3-code
       model:
         description: "Exact model override (provider/model, for example opencode-go-openai/glm-5.2). Wins over the dropdown; leave empty for automatic discovery."
         required: false
@@ -96,7 +95,7 @@ on:
         required: false
         type: string
       backend:
-        description: Execution backend (opencode or t3-code)
+        description: Execution backend (opencode)
         required: false
         type: string
         default: opencode
@@ -155,7 +154,7 @@ jobs:
         shell: bash
         run: |
           case "$BACKEND" in
-            opencode|t3-code) printf 'Execution backend: %s\n' "$BACKEND" ;;
+            opencode) printf 'Execution backend: %s\n' "$BACKEND" ;;
             *) printf 'Unsupported execution backend: %s\n' "$BACKEND" >&2; exit 1 ;;
           esac
 

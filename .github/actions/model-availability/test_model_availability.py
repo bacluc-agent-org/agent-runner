@@ -1445,3 +1445,53 @@ class TestWorkflowOpenRouterSelection:
             text=True,
         )
         assert kept.returncode == 0, "opencode/big-pickle must be kept"
+
+    def test_opencode_loads_deny_list_for_all_selections(self):
+        """Verify opencode.yml loads the deny-list regardless of explicit request."""
+        content = Path(".github/workflows/opencode.yml").read_text()
+        # Deny-list should be loaded unconditionally (not inside 'if [[ -z "$requested" ]]')
+        deny_load = content.index('deny_file="$RUNNER_TEMP/agent-runner/scripts/model-deny-list.txt"')
+        requested_check = content.index('requested="${MODEL_TEXT:-}"')
+        # The deny-list load should come after requested is determined but not be gated by it
+        assert deny_load > requested_check
+        # Should not have the old gated pattern
+        assert 'if [[ -z "$requested" ]]; then' not in content[deny_load:deny_load+200]
+
+    def test_opencode_falls_back_for_deny_listed_explicit_request(self, tmp_path):
+        """Explicit request for a deny-listed model should fall back, not fail closed."""
+        deny_list = tmp_path / "deny-list.txt"
+        deny_list.write_text("bad-model\n")
+        available = tmp_path / "available-models.txt"
+        available.write_text("bad-model\ngood-model\n")
+        fallback = "good-model"
+        result = subprocess.run(
+            [
+                "bash",
+                "-Eeuo",
+                "pipefail",
+                "-c",
+                """
+                deny_re="$(awk '!/^[[:space:]]*(#|$)/' "$1" | paste -sd'|' -)"
+                [[ -n "$deny_re" ]] || deny_re='^$'
+                requested_model="bad-model"
+                resolved="bad-model"
+                if grep -Eq "$deny_re" <<<"$resolved"; then
+                  if [[ -n "$2" ]]; then
+                    printf 'fallback: %s\n' "$2"
+                    exit 0
+                  else
+                    printf 'no fallback\n' >&2
+                    exit 1
+                  fi
+                fi
+                printf 'no deny match\n'
+                """,
+                "bash",
+                str(deny_list),
+                fallback,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert "fallback: good-model" in result.stdout

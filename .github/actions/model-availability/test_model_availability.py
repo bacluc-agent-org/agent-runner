@@ -1251,6 +1251,28 @@ class TestModelAvailabilityAction:
 
 
 class TestMainProbeSummary:
+    def test_uses_fresh_cache_when_cli_discovery_is_unavailable(self, monkeypatch):
+        checked = datetime.now(timezone.utc).isoformat()
+        cache = {"opencode/a-free": {"ok": True, "checked": checked}}
+        monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: "49")
+        monkeypatch.setattr(model_availability, "read_cache", lambda _: cache)
+        monkeypatch.setattr(
+            model_availability,
+            "discover_models",
+            lambda: (_ for _ in ()).throw(
+                subprocess.CalledProcessError(
+                    1, ["opencode", "models"], stderr="Location plugins did not finish activating"
+                )
+            ),
+        )
+        monkeypatch.setattr(model_availability, "probe_candidates", lambda *args: pytest.fail())
+        monkeypatch.setattr(model_availability, "write_cache", lambda *args: None)
+        outputs = []
+        monkeypatch.setattr(model_availability, "write_outputs", lambda *args: outputs.append(args))
+
+        assert model_availability.main() == 0
+        assert outputs[0][2] == ["opencode/a-free"]
+
     def test_prints_fresh_cache_summary_without_probing(self, monkeypatch, capsys):
         monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: None)
         monkeypatch.setattr(

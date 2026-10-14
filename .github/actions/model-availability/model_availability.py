@@ -461,9 +461,25 @@ def main() -> int:
     cache = {}
     if cache_issue is not None:
         cache = read_cache(cache_issue)
-    whitelisted_models, provider_models = discover_models()
-    candidates = build_candidates(whitelisted_models, provider_models, os.environ)
     now = datetime.now(timezone.utc)
+    try:
+        whitelisted_models, provider_models = discover_models()
+    except subprocess.CalledProcessError as e:
+        if "Location plugins did not finish activating" not in (e.stderr or "") or not cache:
+            raise
+        whitelisted_models = [
+            model
+            for model, entry in cache.items()
+            if isinstance(entry, dict) and entry.get("ok") is True and is_cache_fresh(entry, now)
+        ]
+        if not whitelisted_models:
+            raise
+        print(
+            f"warning: model discovery unavailable; reusing {len(whitelisted_models)} fresh cached models",
+            file=sys.stderr,
+        )
+        provider_models = {}
+    candidates = build_candidates(whitelisted_models, provider_models, os.environ)
     pending, skipped = select_pending(candidates, cache, now)
     if skipped:
         print(

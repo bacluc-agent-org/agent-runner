@@ -209,10 +209,28 @@ jobs:
           # Exclude known-weak free models per scripts/model-deny-list.txt (shared with
           # hourly-issue.yml and refine-issues.yml); they pass the trivial OK probe but
           # fail as coordinator/selector in 10+ runs (e.g. 34029380869, 34042660858).
-          # The diagnostics checkout resolves to the event ref/SHA, so branch runs read this
-          # branch's list; a missing file degrades deny_re to inert ^$ (fail-open, per bacluc-agent/agent-runner#124).
-          deny_re="$(grep -vE '^[[:space:]]*(#|$)' "$RUNNER_TEMP/agent-runner/scripts/model-deny-list.txt" 2>/dev/null | paste -sd'|' - || true)"
-          [[ -n "$deny_re" ]] || deny_re='^$'
+          deny_re=''
+          if [[ -z "$requested" ]]; then
+            deny_file="$RUNNER_TEMP/agent-runner/scripts/model-deny-list.txt"
+            if [[ ! -r "$deny_file" ]]; then
+              printf 'Model deny-list is missing or unreadable; refusing automatic selection.\n' >&2
+              exit 1
+            fi
+            deny_re="$(awk '!/^[[:space:]]*(#|$)/' "$deny_file" | paste -sd'|' -)"
+            if [[ -z "$deny_re" ]]; then
+              printf 'Model deny-list has no usable patterns; refusing automatic selection.\n' >&2
+              exit 1
+            fi
+            if grep -Eq "$deny_re" /dev/null 2>/dev/null; then
+              :
+            else
+              grep_status=$?
+              if ((grep_status != 1)); then
+                printf 'Model deny-list contains invalid patterns; refusing automatic selection.\n' >&2
+                exit 1
+              fi
+            fi
+          fi
 
           mapfile -t free_models < <(grep -E '^(opencode|openrouter)/[^[:space:]]+(-free|:free)$' "$available_models_file" | grep -Ev "$deny_re" | awk '!seen[$0]++')
           for candidate in \

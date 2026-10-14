@@ -28,7 +28,7 @@ def _provider_api_keys(monkeypatch):
 
 
 def fake_run(args, *a, **kw):
-    if args == ["opencode", "models"]:
+    if args == ["opencode", "models", "--standalone"]:
         return types.SimpleNamespace(stdout="opencode/a-free\n")
     if args == ["opencode", "debug", "config"]:
         kw["stdout"].write(json.dumps(CONFIG))
@@ -37,6 +37,62 @@ def fake_run(args, *a, **kw):
 
 
 class TestDiscoverModels:
+    def test_retries_transient_cli_initialization_failure(self, monkeypatch):
+        calls = 0
+
+        def fail_once(args, *a, **kw):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise subprocess.CalledProcessError(
+                    1, args, stderr="ServiceUnavailableError: Location plugins did not finish activating"
+                )
+            return fake_run(args, *a, **kw)
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fail_once)
+        monkeypatch.setattr(model_availability.time, "sleep", lambda _: None)
+        assert model_availability.discover_models()[0] == ["opencode/a-free"]
+        assert calls == 3
+
+    def test_discovery_uses_plugin_safe_environment_and_keeps_nonzero_error(self, monkeypatch):
+        captured = {}
+
+        def fail(args, *a, **kw):
+            captured["args"] = args
+            captured["env"] = kw["env"]
+            raise subprocess.CalledProcessError(
+                17, args, output="", stderr="Location plugins did not finish activating"
+            )
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fail)
+        with pytest.raises(subprocess.CalledProcessError) as error:
+            model_availability.discover_models()
+
+        assert error.value.returncode == 17
+        assert captured["args"] == ["opencode", "models", "--standalone"]
+        assert captured["env"]["OPENCODE_DISABLE_DEFAULT_PLUGINS"] == "true"
+        assert captured["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugin":[]}'
+
+    def test_debug_config_uses_plugin_safe_environment(self, monkeypatch):
+        captured = {}
+
+        def fake_config(args, *a, **kw):
+            captured["env"] = kw["env"]
+            kw["stdout"].write(json.dumps(CONFIG))
+            return types.SimpleNamespace(stdout="")
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_config)
+        assert model_availability.load_provider_config() == {
+            "opencode-go-openai": {"baseURL": "https://opencode.ai/zen/go/v1", "apiKey": None},
+            "opencode-go-anthropic": {
+                "baseURL": "https://opencode.ai/zen/go/v1/messages",
+                "apiKey": None,
+            },
+            "openrouter": {"baseURL": "https://openrouter.ai/api/v1", "apiKey": None},
+        }
+        assert captured["env"]["OPENCODE_DISABLE_DEFAULT_PLUGINS"] == "true"
+        assert captured["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugin":[]}'
+
     def test_discovers_models_per_provider(self, monkeypatch):
         captured = {}
 
@@ -101,7 +157,7 @@ class TestDiscoverModels:
                 return b'{"data": [{"id": "glm-5.2"}]}'
 
         def fake_run_missing(args, *a, **kw):
-            if args == ["opencode", "models"]:
+            if args == ["opencode", "models", "--standalone"]:
                 return types.SimpleNamespace(stdout="opencode/a-free\n")
             if args == ["opencode", "debug", "config"]:
                 kw["stdout"].write(json.dumps(config))
@@ -118,7 +174,7 @@ class TestDiscoverModels:
 
     def test_config_read_failure(self, monkeypatch):
         def fail_config(args, *a, **kw):
-            if args == ["opencode", "models"]:
+            if args == ["opencode", "models", "--standalone"]:
                 return types.SimpleNamespace(stdout="opencode/a-free\n")
             raise RuntimeError("opencode failed")
 
@@ -202,7 +258,7 @@ class TestDiscoverModels:
         }
 
         def fake_run_invalid(args, *a, **kw):
-            if args == ["opencode", "models"]:
+            if args == ["opencode", "models", "--standalone"]:
                 return types.SimpleNamespace(stdout="opencode/a-free\n")
             if args == ["opencode", "debug", "config"]:
                 kw["stdout"].write(json.dumps(config))
@@ -230,7 +286,7 @@ class TestDiscoverModels:
         }
 
         def fake_run_non_string(args, *a, **kw):
-            if args == ["opencode", "models"]:
+            if args == ["opencode", "models", "--standalone"]:
                 return types.SimpleNamespace(stdout="opencode/a-free\n")
             if args == ["opencode", "debug", "config"]:
                 kw["stdout"].write(json.dumps(config))
@@ -278,7 +334,7 @@ class TestDiscoverModels:
         )
 
         def fake_run_filter(args, *a, **kw):
-            if args == ["opencode", "models"]:
+            if args == ["opencode", "models", "--standalone"]:
                 return types.SimpleNamespace(stdout=models_output)
             if args == ["opencode", "debug", "config"]:
                 kw["stdout"].write(json.dumps(config))
@@ -320,7 +376,7 @@ class TestDiscoverModels:
         models_output = "opencode/a-free\nopencode-go-openai/glm-5.2\ncortecs2/glm-5.1\n"
 
         def fake_run_resolved(args, *a, **kw):
-            if args == ["opencode", "models"]:
+            if args == ["opencode", "models", "--standalone"]:
                 return types.SimpleNamespace(stdout=models_output)
             if args == ["opencode", "debug", "config"]:
                 kw["stdout"].write(json.dumps(config))
@@ -962,6 +1018,23 @@ class TestLoadProviderBaseUrls:
 
 
 class TestProbeModelLogging:
+    def test_probe_uses_plugin_safe_environment(self, tmp_path, monkeypatch):
+        captured = {}
+
+        class FakeResult:
+            returncode = 0
+            stdout = "OK\n"
+            stderr = ""
+
+        def fake_run(*args, **kwargs):
+            captured["env"] = kwargs["env"]
+            return FakeResult()
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+        assert model_availability.probe_model("opencode/a-free", str(tmp_path))
+        assert captured["env"]["OPENCODE_DISABLE_DEFAULT_PLUGINS"] == "true"
+        assert captured["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugin":[]}'
+
     def test_writes_probe_log_with_stdout_and_stderr(self, tmp_path, monkeypatch):
         class FakeResult:
             returncode = 0
@@ -1012,7 +1085,7 @@ class TestDiscoverModelsLogging:
                 return b'{"data": []}'
 
         def fake_run_logging(args, *a, **kw):
-            if args == ["opencode", "models"]:
+            if args == ["opencode", "models", "--standalone"]:
                 return types.SimpleNamespace(stdout=FakeResult.stdout, stderr=FakeResult.stderr)
             if args == ["opencode", "debug", "config"]:
                 kw["stdout"].write(json.dumps(CONFIG))
@@ -1170,8 +1243,36 @@ class TestModelAvailabilityAction:
         assert "auth.json" not in action
         assert "python3" in action
 
+    def test_standalone_opencode_workflow_exports_plugin_safe_environment(self):
+        workflow = (Path(__file__).parents[3] / ".github/workflows/refresh-chatgpt-auth.yml").read_text()
+        validation = workflow[workflow.index("- name: Validate refreshed token with opencode") :]
+        assert "OPENCODE_DISABLE_DEFAULT_PLUGINS: true" in validation
+        assert "OPENCODE_CONFIG_CONTENT: '{\"plugin\":[]}'" in validation
+
 
 class TestMainProbeSummary:
+    def test_uses_fresh_cache_when_cli_discovery_is_unavailable(self, monkeypatch):
+        checked = datetime.now(timezone.utc).isoformat()
+        cache = {"opencode/a-free": {"ok": True, "checked": checked}}
+        monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: "49")
+        monkeypatch.setattr(model_availability, "read_cache", lambda _: cache)
+        monkeypatch.setattr(
+            model_availability,
+            "discover_models",
+            lambda: (_ for _ in ()).throw(
+                subprocess.CalledProcessError(
+                    1, ["opencode", "models"], stderr="Location plugins did not finish activating"
+                )
+            ),
+        )
+        monkeypatch.setattr(model_availability, "probe_candidates", lambda *args: pytest.fail())
+        monkeypatch.setattr(model_availability, "write_cache", lambda *args: None)
+        outputs = []
+        monkeypatch.setattr(model_availability, "write_outputs", lambda *args: outputs.append(args))
+
+        assert model_availability.main() == 0
+        assert outputs[0][2] == ["opencode/a-free"]
+
     def test_prints_fresh_cache_summary_without_probing(self, monkeypatch, capsys):
         monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: None)
         monkeypatch.setattr(

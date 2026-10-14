@@ -454,6 +454,7 @@ jobs:
         id: coordinator
         shell: bash
         env:
+          AVAILABLE_MODELS: ${{ steps.model-availability.outputs.available-models }}
           MODEL: ${{ steps.select-model.outputs.model }}
           COORDINATOR_TIMEOUT: ${{ inputs.timeout_minutes || 120 }}
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}

@@ -42,6 +42,13 @@ def run_gh(*args: str) -> str:
     return subprocess.run(["gh", *args], check=True, capture_output=True, text=True).stdout
 
 
+def opencode_env() -> dict[str, str]:
+    env = dict(os.environ)
+    env["OPENCODE_DISABLE_DEFAULT_PLUGINS"] = "true"
+    env["OPENCODE_CONFIG_CONTENT"] = '{"plugin":[]}'
+    return env
+
+
 def issue_repo() -> str:
     return os.environ.get("ISSUE_REPOSITORY", "")
 
@@ -134,7 +141,12 @@ def load_provider_config() -> dict[str, dict[str, str | None]]:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as tmp:
             tmp_path = tmp.name
             subprocess.run(
-                ["opencode", "debug", "config"], check=True, stdout=tmp, text=True, timeout=60
+                ["opencode", "debug", "config"],
+                check=True,
+                stdout=tmp,
+                text=True,
+                timeout=60,
+                env=opencode_env(),
             )
         with open(tmp_path, encoding="utf-8") as fh:
             config = json.load(fh)
@@ -222,9 +234,21 @@ def fetch_model_ids(endpoint: str, api_key: str | None = None) -> list[str]:
 
 def discover_models() -> tuple[list[str], dict[str, list[str]]]:
     """whitelisted_models from `opencode models`; provider_models: {provider: model_ids} per provider."""
-    result = subprocess.run(
-        ["opencode", "models"], check=True, capture_output=True, text=True, timeout=DISCOVERY_TIMEOUT_SECONDS
-    )
+    try:
+        result = subprocess.run(
+            ["opencode", "models"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=DISCOVERY_TIMEOUT_SECONDS,
+            env=opencode_env(),
+        )
+        if result.returncode != 0:
+            print(f"stdout: {result.stdout}")
+            print(f"stdout: {result.stdout}")
+    except Exception as e:
+        print( f"ERROR: {e}\n")
+        raise e
     log_dir = os.path.join(
         os.environ.get("RUNNER_TEMP") or tempfile.gettempdir(), "model-probes"
     )
@@ -347,23 +371,24 @@ def probe_model(
     probe_dir = os.path.join(work_dir, "probe-" + candidate.replace("/", "-"))
     os.makedirs(probe_dir, exist_ok=True)
     log_path = os.path.join(work_dir, "model-probes", "probe-" + candidate.replace("/", "-") + ".log")
+    # noinspection broad-exception
     try:
         result = subprocess.run(
             [
                 "opencode",
-                "--pure",
                 "run",
-                "--dir",
-                probe_dir,
                 "--model",
                 candidate,
                 PROBE_PROMPT,
             ],
+            cwd=probe_dir,
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=opencode_env(),
         )
-    except subprocess.TimeoutExpired:
+    except Exception as e:
+        _write_probe_log(log_path, f"ERROR: {e}\n")
         _write_probe_log(log_path, f"TIMEOUT after {timeout}s\n")
         return False
     _write_probe_log(log_path, result.stdout + result.stderr)

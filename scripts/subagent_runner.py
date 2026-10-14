@@ -17,12 +17,16 @@ def command(backend, model, prompt, name="coordinator", title=None):
             *( ["--title", title] if title else [] ), prompt,
         ]
     if backend == "t3-code":
-        return ["t3", "exec", "--model", model, prompt]
+        raise ValueError("unsupported backend: t3-code")
     raise ValueError(f"unsupported backend: {backend}")
 
 
 def run_agent(agent, backend):
-    executable = "opencode" if backend == "opencode" else "t3"
+    args = command(
+        backend, agent["model"], agent["prompt"],
+        agent.get("name", "coordinator"), agent.get("title"),
+    )
+    executable = args[0]
     if not shutil.which(executable):
         raise RuntimeError(f"{executable} CLI not found")
     env = os.environ.copy()
@@ -32,13 +36,10 @@ def run_agent(agent, backend):
         else:
             env["T3_CONFIG"] = agent["config"]
     return subprocess.run(
-        command(
-            backend, agent["model"], agent["prompt"],
-            agent.get("name", "coordinator"), agent.get("title"),
-        ),
+        args,
         check=True,
         text=True,
-        capture_output=True,
+        stdout=subprocess.PIPE,
         env=env,
     ).stdout
 
@@ -60,7 +61,10 @@ def execute(config):
     if config.get("judge"):
         judge = dict(config["judge"])
         judge["prompt"] = judge["prompt"].format(outputs="\n\n".join(results))
-        run_agent(judge, backend)
+        try:
+            run_agent(judge, backend)
+        except (subprocess.CalledProcessError, RuntimeError) as error:
+            print(f"subagent runner: optional judge failed: {error}", file=sys.stderr)
     return results
 
 

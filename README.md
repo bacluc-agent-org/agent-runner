@@ -89,6 +89,13 @@ idea (issue in agent-todo)
 Selectors apply the shared `scripts/model-deny-list.txt` and stop instead of
 dispatching when no allowed model is available.
 
+This repository's `.opencode/opencode.json` overlay enables OpenCode subagent
+nesting to depth 2. The `opencode` workflow backend is the default; `t3-code`
+is an explicit deferred option and exits with an error until headless execution
+and model switching are verified. OpenCode 1.18.32's Task tool does not expose
+a per-dispatch model override, so model assignment per child task and dynamic
+child-model selection are not supported by this runner yet.
+
 ### Agents (the AI personas)
 
 - `issue-selector` — reads the candidate issues and picks one from the best

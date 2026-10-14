@@ -26,6 +26,14 @@ on:
         description: Optional bacluc/provision-machines branch for the shared config (empty = latest release tag)
         required: false
         type: string
+      backend:
+        description: Execution backend (t3-code is deferred until headless execution and model switching are verified)
+        required: false
+        type: choice
+        default: opencode
+        options:
+          - opencode
+          - t3-code
       model:
         description: "Exact model override (provider/model, for example opencode-go-openai/glm-5.2). Wins over the dropdown; leave empty for automatic discovery."
         required: false
@@ -87,6 +95,11 @@ on:
         description: "Exact model override (provider/model, for example opencode-go-openai/glm-5.2). Wins over the dropdown; leave empty for automatic discovery."
         required: false
         type: string
+      backend:
+        description: Execution backend (t3-code is deferred until headless execution and model switching are verified)
+        required: false
+        type: string
+        default: opencode
       timeout_minutes:
         description: Job timeout in minutes
         required: false
@@ -116,6 +129,7 @@ jobs:
       DIAGNOSTICS_CHECKOUT: .agent-runner-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
       SOURCE_BRANCH: ${{ inputs.source_branch || '' }}
       PROMPT: "${{ inputs.prompt || 'Push-triggered validation: review the changed files in this push and verify the workflows are correct and complete. Report the result; do not modify files, create issues, or open pull requests.' }}"
+      BACKEND: ${{ inputs.backend || 'opencode' }}
 
     steps:
       - name: Print inputs
@@ -135,6 +149,18 @@ jobs:
           MODEL_CHOICE: ${{ inputs.model_choice }}
           TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
           DISCOVERY_TIMEOUT_MINUTES: ${{ inputs.discovery_timeout_minutes }}
+
+      - name: Validate execution backend
+        shell: bash
+        run: |
+          case "$BACKEND" in
+            opencode) printf 'Execution backend: opencode\n' ;;
+            t3-code)
+              printf '%s\n' 'Deferred: t3-code headless execution and model switching have not been verified; use the opencode backend.' >&2
+              exit 1
+              ;;
+            *) printf 'Unsupported execution backend: %s\n' "$BACKEND" >&2; exit 1 ;;
+          esac
 
       - name: Check out target repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

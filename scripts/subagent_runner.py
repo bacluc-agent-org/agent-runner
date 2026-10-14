@@ -31,10 +31,7 @@ def run_agent(agent, backend):
         raise RuntimeError(f"{executable} CLI not found")
     env = os.environ.copy()
     if agent.get("config"):
-        if backend == "opencode":
-            env["OPENCODE_CONFIG"] = agent["config"]
-        else:
-            env["T3_CONFIG"] = agent["config"]
+        env["OPENCODE_CONFIG"] = agent["config"]
     return subprocess.run(
         args,
         check=True,
@@ -60,9 +57,11 @@ def execute(config):
         return [run_agent(config["fallback"], backend)]
     if config.get("judge"):
         judge = dict(config["judge"])
-        judge["prompt"] = judge["prompt"].format(outputs="\n\n".join(results))
+        judge["prompt"] = judge["prompt"].replace("{outputs}", "\n\n".join(results))
         try:
-            run_agent(judge, backend)
+            verdict = run_agent(judge, backend)
+            if verdict:
+                print(f"subagent runner: judge verdict:\n{verdict}", file=sys.stderr)
         except (subprocess.CalledProcessError, RuntimeError) as error:
             print(f"subagent runner: optional judge failed: {error}", file=sys.stderr)
     return results

@@ -94,8 +94,11 @@ Its JSON config accepts the verified `opencode` backend, parallel `agents`
 with a required explicit `model` and prompt, and optional `judge` and `fallback`
 agent objects. Each agent may set a `config` path; it is passed only to that
 process (`OPENCODE_CONFIG`), keeping nested coordinators isolated.
-The runner uses `opencode run --agent ... --model ...`. T3 Code remains
-unavailable until its supported headless execution route is verified.
+The runner uses `opencode run --agent ... --model ...`. The optional `judge`
+receives the agents' outputs in `{outputs}` and its verdict is logged to
+stderr. `.opencode/opencode.json` sets `subagent_depth: 2`, allowing one
+nested coordinator level. T3 Code remains unavailable until its supported
+headless execution route is verified.
 
 The shared AI configuration is pulled from `bacluc/provision-machines` by
 `setup-opencode`; `.opencode/opencode.json` in this repository is only a local

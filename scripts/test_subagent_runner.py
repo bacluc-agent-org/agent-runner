@@ -1,4 +1,6 @@
+import json
 import subprocess
+import sys
 import threading
 
 import pytest
@@ -101,3 +103,41 @@ def test_run_agent_isolates_config_and_streams_stderr(monkeypatch):
     assert calls[1][1]["env"]["OPENCODE_CONFIG"] == "parent.json"
     assert "capture_output" not in calls[0][1]
     assert calls[0][1]["stdout"] == subprocess.PIPE
+
+
+def test_command_includes_title_when_given():
+    assert subagent_runner.command("opencode", "m", "p", title="t") == [
+        "opencode", "run", "--agent", "coordinator", "--model", "m", "--title", "t", "p"
+    ]
+
+
+def test_judge_verdict_is_reported(monkeypatch, capsys):
+    def run(agent, backend):
+        return "winner: agent" if agent["name"] == "judge" else "agent result"
+
+    monkeypatch.setattr(subagent_runner, "run_agent", run)
+    result = subagent_runner.execute({
+        "backend": "opencode",
+        "agents": [{"name": "agent", "model": "m", "prompt": "task"}],
+        "judge": {"name": "judge", "model": "j", "prompt": "Pick:\n{outputs}"},
+    })
+    assert result == ["agent result"]
+    assert "winner: agent" in capsys.readouterr().err
+
+
+def test_main_prints_agent_outputs(monkeypatch, tmp_path, capsys):
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({
+        "backend": "opencode",
+        "agents": [{"name": "agent", "model": "m", "prompt": "task"}],
+    }))
+    monkeypatch.setattr(subagent_runner, "run_agent", lambda agent, backend: "result")
+    monkeypatch.setattr(sys, "argv", ["subagent_runner.py", "--config", str(config)])
+    assert subagent_runner.main() == 0
+    assert "result" in capsys.readouterr().out
+
+
+def test_main_reports_config_errors(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(sys, "argv", ["subagent_runner.py", "--config", str(tmp_path / "missing.json")])
+    assert subagent_runner.main() == 1
+    assert "subagent runner:" in capsys.readouterr().err

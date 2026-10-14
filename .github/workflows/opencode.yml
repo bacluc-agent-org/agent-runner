@@ -262,7 +262,13 @@ jobs:
           : "${stop_token:?stop-commands fence token generation failed}"
           printf '::stop-commands::%s\n' "$stop_token"
           if [[ -z "$fallback_model" && -z "${requested:-}" ]]; then
-            fallback_model="$(grep -Ev -f "$RUNNER_TEMP/agent-runner/scripts/model-deny-list.txt" "$available_models_file" | head -n1 || true)"
+            grep_status=0
+            filtered_models="$(grep -Ev "$deny_re" "$available_models_file")" || grep_status=$?
+            if ((grep_status > 1)); then
+              printf 'Failed to apply model deny-list; refusing automatic selection.\n' >&2
+              exit 1
+            fi
+            fallback_model="${filtered_models%%$'\n'*}"
             model_source='fallback: last resort (deny-list filtered)'
             if [[ -z "$fallback_model" ]]; then
               printf '%s\n' 'No coordinator fallback model is available; not dispatching.' >&2

@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import types
 from datetime import datetime, timezone
@@ -1322,23 +1323,56 @@ class TestWorkflowOpenRouterSelection:
             content = Path(path).read_text()
             mapfile = content.index("mapfile -t free_models")
             give_up = content.rindex("not dispatching.' >&2")
-            filtered = min(
-                index
-                for index in (
-                    content.find(
-                        'grep -Ev -f scripts/model-deny-list.txt "$available_models_file"',
-                        mapfile,
-                    ),
-                    content.find(
-                        'grep -Ev -f "$RUNNER_TEMP/agent-runner/scripts/model-deny-list.txt" "$available_models_file"',
-                        mapfile,
-                    ),
+            if path.endswith("opencode.yml"):
+                filtered = content.index('filtered_models="$(grep -Ev "$deny_re" "$available_models_file")"')
+                assert 'if ((grep_status > 1)); then' in content[filtered:give_up]
+                assert "exit 1" in content[filtered:give_up]
+                assert "${filtered_models%%$'\\n'*}" in content[filtered:give_up]
+            else:
+                filtered = min(
+                    index
+                    for index in (
+                        content.find(
+                            'grep -Ev -f scripts/model-deny-list.txt "$available_models_file"',
+                            mapfile,
+                        ),
+                        content.find(
+                            'grep -Ev -f "$RUNNER_TEMP/agent-runner/scripts/model-deny-list.txt" "$available_models_file"',
+                            mapfile,
+                        ),
+                    )
+                    if index >= 0
                 )
-                if index >= 0
-            )
             assert mapfile < filtered < give_up
             assert 'head -n1 "$available_models_file"' not in content
             assert "last resort (deny-listed)" not in content
+
+    def test_grep_error_fails_closed(self, tmp_path):
+        available = tmp_path / "available-models.txt"
+        available.write_text("opencode/big-pickle\n")
+        result = subprocess.run(
+            [
+                "bash",
+                "-Eeuo",
+                "pipefail",
+                "-c",
+                """
+                grep_status=0
+                filtered_models="$(grep -Ev "$deny_re" "$available_models_file")" || grep_status=$?
+                if ((grep_status > 1)); then
+                  printf 'Failed to apply model deny-list; refusing automatic selection.\\n' >&2
+                  exit 1
+                fi
+                fallback_model="${filtered_models%%$'\\n'*}"
+                """,
+                "bash",
+            ],
+            env={**os.environ, "deny_re": "[", "available_models_file": str(available)},
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 1
+        assert "Failed to apply model deny-list" in result.stderr
 
     def test_empty_filtered_candidates_exit_before_dispatch(self, tmp_path):
         deny_list = tmp_path / "deny-list.txt"

@@ -235,10 +235,10 @@ def fetch_model_ids(endpoint: str, api_key: str | None = None) -> list[str]:
 
 def discover_models() -> tuple[list[str], dict[str, list[str]]]:
     """whitelisted_models from `opencode models`; provider_models: {provider: model_ids} per provider."""
-    for attempt in range(3):
+    for attempt in range(5):
         try:
             result = subprocess.run(
-                ["opencode", "models", "--standalone"],
+                ["opencode", "models"],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -247,7 +247,7 @@ def discover_models() -> tuple[list[str], dict[str, list[str]]]:
             )
             break
         except subprocess.CalledProcessError as e:
-            if "Location plugins did not finish activating" not in (e.stderr or "") or attempt == 2:
+            if "Location plugins did not finish activating" not in (e.stderr or "") or attempt == 4:
                 print(f"ERROR: {e}\n{e.stderr or ''}", file=sys.stderr)
                 raise
             time.sleep(2**attempt)

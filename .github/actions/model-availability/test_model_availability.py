@@ -28,7 +28,7 @@ def _provider_api_keys(monkeypatch):
 
 
 def fake_run(args, *a, **kw):
-    if args == ["opencode", "models", "--standalone"]:
+    if args == ["opencode", "models"]:
         return types.SimpleNamespace(stdout="opencode/a-free\n")
     if args == ["opencode", "debug", "config"]:
         kw["stdout"].write(json.dumps(CONFIG))
@@ -69,7 +69,7 @@ class TestDiscoverModels:
             model_availability.discover_models()
 
         assert error.value.returncode == 17
-        assert captured["args"] == ["opencode", "models", "--standalone"]
+        assert captured["args"] == ["opencode", "models"]
         assert captured["env"]["OPENCODE_DISABLE_DEFAULT_PLUGINS"] == "true"
         assert captured["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugin":[]}'
 
@@ -157,7 +157,7 @@ class TestDiscoverModels:
                 return b'{"data": [{"id": "glm-5.2"}]}'
 
         def fake_run_missing(args, *a, **kw):
-            if args == ["opencode", "models", "--standalone"]:
+            if args == ["opencode", "models"]:
                 return types.SimpleNamespace(stdout="opencode/a-free\n")
             if args == ["opencode", "debug", "config"]:
                 kw["stdout"].write(json.dumps(config))
@@ -174,7 +174,7 @@ class TestDiscoverModels:
 
     def test_config_read_failure(self, monkeypatch):
         def fail_config(args, *a, **kw):
-            if args == ["opencode", "models", "--standalone"]:
+            if args == ["opencode", "models"]:
                 return types.SimpleNamespace(stdout="opencode/a-free\n")
             raise RuntimeError("opencode failed")
 
@@ -258,7 +258,7 @@ class TestDiscoverModels:
         }
 
         def fake_run_invalid(args, *a, **kw):
-            if args == ["opencode", "models", "--standalone"]:
+            if args == ["opencode", "models"]:
                 return types.SimpleNamespace(stdout="opencode/a-free\n")
             if args == ["opencode", "debug", "config"]:
                 kw["stdout"].write(json.dumps(config))
@@ -286,7 +286,7 @@ class TestDiscoverModels:
         }
 
         def fake_run_non_string(args, *a, **kw):
-            if args == ["opencode", "models", "--standalone"]:
+            if args == ["opencode", "models"]:
                 return types.SimpleNamespace(stdout="opencode/a-free\n")
             if args == ["opencode", "debug", "config"]:
                 kw["stdout"].write(json.dumps(config))
@@ -334,7 +334,7 @@ class TestDiscoverModels:
         )
 
         def fake_run_filter(args, *a, **kw):
-            if args == ["opencode", "models", "--standalone"]:
+            if args == ["opencode", "models"]:
                 return types.SimpleNamespace(stdout=models_output)
             if args == ["opencode", "debug", "config"]:
                 kw["stdout"].write(json.dumps(config))
@@ -376,7 +376,7 @@ class TestDiscoverModels:
         models_output = "opencode/a-free\nopencode-go-openai/glm-5.2\ncortecs2/glm-5.1\n"
 
         def fake_run_resolved(args, *a, **kw):
-            if args == ["opencode", "models", "--standalone"]:
+            if args == ["opencode", "models"]:
                 return types.SimpleNamespace(stdout=models_output)
             if args == ["opencode", "debug", "config"]:
                 kw["stdout"].write(json.dumps(config))
@@ -1085,7 +1085,7 @@ class TestDiscoverModelsLogging:
                 return b'{"data": []}'
 
         def fake_run_logging(args, *a, **kw):
-            if args == ["opencode", "models", "--standalone"]:
+            if args == ["opencode", "models"]:
                 return types.SimpleNamespace(stdout=FakeResult.stdout, stderr=FakeResult.stderr)
             if args == ["opencode", "debug", "config"]:
                 kw["stdout"].write(json.dumps(CONFIG))

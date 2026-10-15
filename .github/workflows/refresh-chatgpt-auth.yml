@@ -31,11 +31,15 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras
 
+      - name: Unit tests (chatgpt-login fallback)
+        run: uv run --group dev pytest -q scripts/test_chatgpt_login.py
+
       - name: Install playwright browsers
         run: uv run playwright install --with-deps chrome
 
       - name: Try token refresh (no browser)
         id: refresh
+        continue-on-error: true
         env:
           OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON }}
         run: |
@@ -61,6 +65,7 @@ jobs:
 
       - name: Validate refreshed token with opencode
         id: validate
+        continue-on-error: true
         if: steps.refresh.outputs.refreshed == 'true'
         env:
           OPENCODE_CONFIG_CONTENT: '{"plugin":[]}'
@@ -87,16 +92,19 @@ jobs:
           fi
 
       - name: Set secret (refreshed token)
+        continue-on-error: true
         if: steps.refresh.outputs.refreshed == 'true' && steps.validate.outcome == 'success'
         run: |
           set -Eeuo pipefail
           auth_json=$(cat "$RUNNER_TEMP/auth.json")
           [[ -n "${auth_json:-}" ]] && printf '::add-mask::%s\n' "$auth_json"
           GH_TOKEN="$BACLUC_AGENT_GITHUB_TOKEN" gh secret set OPENCODE_AUTH_JSON --repo "$GITHUB_REPOSITORY" --body "$auth_json"
+          touch "$RUNNER_TEMP/refresh-chatgpt-auth.ok"
           printf 'Auth refreshed via refresh token\n'
 
       - name: Browser login (fallback)
         id: browser-login
+        continue-on-error: true
         if: steps.refresh.outputs.refreshed != 'true' || steps.validate.outcome != 'success'
         env:
           OPENAI_USERNAME: ${{ secrets.OPENAI_USERNAME }}
@@ -123,28 +131,81 @@ jobs:
           [[ -n "${auth_json:-}" ]] && printf '::add-mask::%s\n' "$auth_json"
           printf '%s\n' "$auth_json" | jq -e '.openai.type == "oauth" and .openai.access != "" and .openai.refresh != "" and (.openai.expires | type == "number")' >/dev/null
           GH_TOKEN="$BACLUC_AGENT_GITHUB_TOKEN" gh secret set OPENCODE_AUTH_JSON --repo "$GITHUB_REPOSITORY" --body "$auth_json"
+          touch "$RUNNER_TEMP/refresh-chatgpt-auth.ok"
           printf 'Auth refreshed via browser login\n'
 
       - name: Agent-usable primitives fallback (start/status/step)
-        if: steps.browser-login.outcome == 'failure'
+        id: primitives
+        continue-on-error: true
+        timeout-minutes: 6
+        if: ${{ !cancelled() && steps.browser-login.outcome == 'failure' }}
         env:
-          CHATGPT_EMAIL: ${{ secrets.CHATGPT_EMAIL || secrets.OPENAI_USERNAME }}
-          CHATGPT_PASSWORD: ${{ secrets.CHATGPT_PASSWORD || secrets.OPENAI_PASSWORD }}
-          CHATGPT_2FA_KEY: ${{ secrets.CHATGPT_2FA_KEY || secrets.OPENAI_2FA_KEY }}
           OPENAI_USERNAME: ${{ secrets.OPENAI_USERNAME }}
           OPENAI_PASSWORD: ${{ secrets.OPENAI_PASSWORD }}
           OPENAI_2FA_KEY: ${{ secrets.OPENAI_2FA_KEY }}
-          CHATGPT_TOTP_KEY: ${{ secrets.CHATGPT_TOTP_KEY }}
         run: |
           set -Eeuo pipefail
-          # Fallback: use agent-usable primitives to try login manually
-          # start launches Chrome with CDP, status reports step, step performs one action
           echo "Agent fallback: attempting login via primitives..."
           stop_token="$(openssl rand -hex 32)"
           : "${stop_token:?stop-commands fence token generation failed}"
           printf '::stop-commands::%s\n' "$stop_token"
-          uv run scripts/chatgpt-login.py start || true
-          uv run scripts/chatgpt-login.py status || true
-          uv run scripts/chatgpt-login.py step || true
+          start_log="$RUNNER_TEMP/primitives-start.log"
+          rm -f "$start_log"
+          # start must run under a display (headful Chrome); it stays alive until
+          # the OAuth callback fires, so background it with its own xvfb display.
+          xvfb-run -a uv run scripts/chatgpt-login.py start > "$start_log" 2>&1 &
+          start_pid=$!
+          boot_deadline=$((SECONDS + 60))
+          budget_deadline=$((SECONDS + 180))
+          while kill -0 "$start_pid" 2>/dev/null; do
+            if ((SECONDS >= budget_deadline)); then
+              printf 'primitives: budget exhausted, aborting start\n'
+              kill "$start_pid" 2>/dev/null || true
+              break
+            fi
+            if ((SECONDS < boot_deadline)); then
+              sleep 5
+              continue
+            fi
+            status_json="$(uv run scripts/chatgpt-login.py status 2>/dev/null || true)"
+            printf 'primitives status: %s\n' "$status_json"
+            blocking="$(jq -r '.blocking // empty' <<<"$status_json" 2>/dev/null || true)"
+            if [[ -n "$blocking" ]]; then
+              printf 'primitives: blocked: %s\n' "$blocking"
+            fi
+            step_json="$(uv run scripts/chatgpt-login.py step 2>/dev/null || true)"
+            printf 'primitives step: %s\n' "$step_json"
+            if [[ "$(jq -r '.code_ready // false' <<<"$step_json" 2>/dev/null || true)" == "true" ]]; then
+              break
+            fi
+            sleep 3
+          done
+          set +e
+          wait "$start_pid"
+          start_status=$?
+          set -e
+          printf 'primitives: start exited %s\n' "$start_status"
+          # Dump the (untrusted) start log while the stop-commands fence is open.
+          tail -n 40 "$start_log" >&2 || true
           printf '::%s::\n' "$stop_token"
-          printf 'Agent primitives fallback attempted\n'
+          if (( start_status != 0 )); then
+            printf '::error::primitives login did not complete\n'
+            exit 1
+          fi
+          auth_json="$(cat "$HOME/.local/share/opencode/auth.json")"
+          [[ -n "${auth_json:-}" ]] && printf '::add-mask::%s\n' "$auth_json"
+          printf '%s\n' "$auth_json" | jq -e '.openai.type == "oauth" and .openai.access != "" and .openai.refresh != "" and (.openai.expires | type == "number")' >/dev/null
+          GH_TOKEN="$BACLUC_AGENT_GITHUB_TOKEN" gh secret set OPENCODE_AUTH_JSON --repo "$GITHUB_REPOSITORY" --body "$auth_json"
+          touch "$RUNNER_TEMP/refresh-chatgpt-auth.ok"
+          printf 'Auth refreshed via agent primitives\n'
+
+      - name: Fail unless a path set the secret
+        if: ${{ always() }}
+        run: |
+          set -Eeuo pipefail
+          if [[ -f "$RUNNER_TEMP/refresh-chatgpt-auth.ok" ]]; then
+            printf 'A credential path set OPENCODE_AUTH_JSON\n'
+          else
+            printf '::error::No path produced a usable OPENCODE_AUTH_JSON\n'
+            exit 1
+          fi

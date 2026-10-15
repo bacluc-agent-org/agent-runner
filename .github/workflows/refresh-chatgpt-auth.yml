@@ -120,7 +120,7 @@ jobs:
             stop_token="$(openssl rand -hex 32)"
             : "${stop_token:?stop-commands fence token generation failed}"
             printf '::stop-commands::%s\n' "$stop_token"
-            cat "$RUNNER_TEMP/auth.json" >&2
+            grep -vE '"openai"|rt\.1\.' "$RUNNER_TEMP/auth.json" >&2 || true
             cat "$RUNNER_TEMP/chatgpt-login.stderr" >&2
             printf '::%s::\n' "$stop_token"
             exit "$status"

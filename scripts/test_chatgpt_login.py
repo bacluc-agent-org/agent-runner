@@ -137,3 +137,22 @@ def test_fill_first_visible_without_delay_uses_plain_fill():
     assert chatgpt_login._fill_first_visible(page, ['input[type="email"]'], "user@example.com")
     assert page.locator_instance.fills == ["user@example.com"]
     assert page.locator_instance.typed == []
+
+
+def test_primitives_step_dumps_the_start_log_only_on_failure_and_without_auth_json():
+    workflow = (
+        Path(__file__).parents[1] / ".github/workflows/refresh-chatgpt-auth.yml"
+    ).read_text(encoding="utf-8")
+    primitives = workflow[
+        workflow.index("- name: Agent-usable primitives fallback") : workflow.index(
+            "- name: Fail unless a path set the secret"
+        )
+    ]
+    lines = [line.strip() for line in primitives.splitlines() if line.strip()]
+    dump = [i for i, line in enumerate(lines) if "tail -n 40" in line]
+    assert len(dump) == 1
+    assert lines[dump[0] - 1 : dump[0] + 2] == [
+        "if (( start_status != 0 )); then",
+        'grep -v \'"openai"\' "$start_log" | tail -n 40 >&2 || true',
+        "fi",
+    ]

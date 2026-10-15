@@ -58,6 +58,10 @@ jobs:
       - name: Set up OpenCode
         uses: ./.github/actions/setup-opencode
 
+      - name: Warm up OpenCode CLI
+        shell: bash
+        run: scripts/wait_for_opencode.sh
+
       - name: Check model availability
         id: model-availability
         uses: ./.github/actions/model-availability

@@ -186,7 +186,11 @@ jobs:
           set -e
           printf 'primitives: start exited %s\n' "$start_status"
           # Dump the (untrusted) start log while the stop-commands fence is open.
-          tail -n 40 "$start_log" >&2 || true
+          # Only a failed start can log it: a successful start prints the auth
+          # JSON, so drop that line too.
+          if (( start_status != 0 )); then
+            grep -v '"openai"' "$start_log" | tail -n 40 >&2 || true
+          fi
           printf '::%s::\n' "$stop_token"
           if (( start_status != 0 )); then
             printf '::error::primitives login did not complete\n'

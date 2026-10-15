@@ -139,7 +139,7 @@ def test_fill_first_visible_without_delay_uses_plain_fill():
     assert page.locator_instance.typed == []
 
 
-def test_primitives_step_dumps_the_start_log_only_on_failure_and_without_auth_json():
+def test_credential_steps_dump_untrusted_logs_only_on_failure_and_without_credentials():
     workflow = (
         Path(__file__).parents[1] / ".github/workflows/refresh-chatgpt-auth.yml"
     ).read_text(encoding="utf-8")
@@ -156,3 +156,16 @@ def test_primitives_step_dumps_the_start_log_only_on_failure_and_without_auth_js
         'grep -v \'"openai"\' "$start_log" | tail -n 40 >&2 || true',
         "fi",
     ]
+
+    assert 'cat "$RUNNER_TEMP/auth.json" >&2' not in workflow
+    browser = workflow[
+        workflow.index("- name: Browser login (fallback)") : workflow.index(
+            "- name: Agent-usable primitives fallback"
+        )
+    ]
+    browser_lines = [line.strip() for line in browser.splitlines() if line.strip()]
+    browser_dump = [i for i, line in enumerate(browser_lines) if "$RUNNER_TEMP/auth.json" in line and ">&2" in line]
+    assert len(browser_dump) == 1
+    assert browser_lines[browser_dump[0]] == (
+        "grep -vE '\"openai\"|rt\\.1\\.' \"$RUNNER_TEMP/auth.json\" >&2 || true"
+    )

@@ -126,8 +126,17 @@ def _has_blocking_screen(page) -> str | None:
         ("device verification", 'text="device verification"'),
     ]
     content = page.content().lower()
-    if "captcha" in content or "human verification" in content or "device verification" in content:
-        return "captcha/device verification detected"
+    for marker in ("captcha", "human verification", "device verification"):
+        if marker in content:
+            return "captcha/device verification detected"
+    for marker in (
+        "just a moment",
+        "performing security verification",
+        "verifies you are not a bot",
+        "ray id",
+    ):
+        if marker in content:
+            return f"cloudflare challenge detected: {marker}"
     for label, sel in checks:
         try:
             if page.locator(sel).first.is_visible(timeout=1000):
@@ -163,12 +172,16 @@ def _click_first_visible(page, selectors: list[str]) -> bool:
     return False
 
 
-def _fill_first_visible(page, selectors: list[str], value: str) -> bool:
+def _fill_first_visible(page, selectors: list[str], value: str, delay_ms: int | None = None) -> bool:
     for sel in selectors:
         try:
             loc = page.locator(sel).first
             if loc.is_visible(timeout=2000):
-                loc.fill(value)
+                if delay_ms is None:
+                    loc.fill(value)
+                else:
+                    loc.fill("")
+                    loc.press_sequentially(value, delay=delay_ms)
                 return True
         except Exception:
             continue
@@ -325,14 +338,16 @@ def _exchange_code(code: str, verifier: str) -> dict:
 
 
 def _do_email_step(page, email: str) -> bool:
-    if not _fill_first_visible(page, ['input[type="email"]', 'input[name="email"]', 'input[id="email"]'], email):
+    if not _fill_first_visible(page, ['input[type="email"]', 'input[name="email"]', 'input[id="email"]'], email, delay_ms=50):
         return False
+    time.sleep(0.5)
     return _click_first_visible(page, ['button[type="submit"]', 'button:has-text("Continue")'])
 
 
 def _do_password_step(page, password: str) -> bool:
-    if not _fill_first_visible(page, ['input[type="password"]'], password):
+    if not _fill_first_visible(page, ['input[type="password"]'], password, delay_ms=50):
         return False
+    time.sleep(0.5)
     return _click_first_visible(page, ['button[type="submit"]', 'button:has-text("Continue")'])
 
 
@@ -633,6 +648,17 @@ def _full_login() -> int:
                 _log_step(page, step)
                 last_step = step
                 attempts[step] = 0
+            # A bot challenge can appear mid-flow (Cloudflare interstitial after
+            # the password submit). Wait for it to clear before counting another
+            # attempt, otherwise blocked time burns the attempt budget and the
+            # flow exits with a misleading "Stuck at step".
+            blocking = _wait_for_blocking_clear(page, timeout_s=90)
+            if blocking:
+                print(f"Login blocked: {blocking} — cannot automate with credentials alone", file=sys.stderr)
+                _dump_page_state(page)
+                browser.close()
+                callback.close()
+                return 2
             if step:
                 attempts[step] = attempts.get(step, 0) + 1
                 if attempts[step] > 5:
@@ -649,7 +675,7 @@ def _full_login() -> int:
                     _do_password_step(page, password)
                     # The SPA may show an error page; retry a couple of times.
                     for attempt in range(2):
-                        blocking = _wait_for_blocking_clear(page, timeout_s=30)
+                        blocking = _wait_for_blocking_clear(page, timeout_s=90)
                         if blocking:
                             print(f"Login blocked after password: {blocking}", file=sys.stderr)
                             browser.close()

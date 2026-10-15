@@ -23,7 +23,7 @@ on:
         type: string
         default: ""
       source_branch:
-        description: Optional bacluc-agent/provision-machines branch for the shared config (empty = latest release tag)
+        description: Optional bacluc/provision-machines branch for the shared config (empty = latest release tag)
         required: false
         type: string
       model:

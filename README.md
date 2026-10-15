@@ -80,7 +80,7 @@ idea (issue in agent-todo)
 ### Actions (reusable building blocks)
 
 - `setup-opencode` — installs the OpenCode CLI and copies the shared agent
-  configuration from the `bacluc-agent/provision-machines` repository (pinned to
+  configuration from the `bacluc/provision-machines` repository (pinned to
   the latest release tag). The AI configuration lives there, not here.
 - `model-availability` — probes which AI models currently work and stores the
   result in a cache issue in the todo repository. Probing every model on
@@ -100,7 +100,7 @@ dispatching when no allowed model is available.
   `<details><summary>Extra context</summary>` fold inside the
   implementation section.
 - `coordinator` and `model-discovery` — the main implementer and the model
-  picker. They live in `bacluc-agent/provision-machines` and are installed by the
+  picker. They live in `bacluc/provision-machines` and are installed by the
   `setup-opencode` action.
 
 ### Scripts
@@ -368,7 +368,7 @@ Tracked in bacluc-agent/agent-todo#152.
   but that is not enough). The issues (the "what") are separated from the
   machinery (the "how") so the todo repository stays readable and the runner
   can be reused.
-- **Where does the AI configuration live?** In `bacluc-agent/provision-machines`;
+- **Where does the AI configuration live?** In `bacluc/provision-machines`;
   the `setup-opencode` action installs it from the latest release tag.
 - **How do I add an idea?** You don't — only `@BacLuc` does for this repository.
   You are free to fork this repository and point it to another issue repo.

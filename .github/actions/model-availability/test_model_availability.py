@@ -1158,7 +1158,7 @@ class TestModelAvailabilityAction:
     def test_auth_materialized_by_setup_opencode_not_here(self):
         root = Path(__file__).parents[3]
         setup = (root / ".github/actions/setup-opencode/action.yml").read_text()
-        assert "SOURCE_REPOSITORY: https://github.com/bacluc-agent/provision-machines.git" in setup
+        assert "SOURCE_REPOSITORY: https://github.com/bacluc/provision-machines.git" in setup
         assert "umask 077" in setup
         assert (
             "printf '%s' \"$OPENCODE_AUTH_CONTENT\" > ~/.local/share/opencode/auth.json"

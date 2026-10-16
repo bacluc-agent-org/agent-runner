@@ -237,3 +237,17 @@ def test_credential_steps_dump_untrusted_logs_only_on_failure_and_without_creden
     )
 
 
+def test_primitives_loop_sleeps_and_continues_when_blocked():
+    workflow = (
+        Path(__file__).parents[1] / ".github/workflows/refresh-chatgpt-auth.yml"
+    ).read_text(encoding="utf-8")
+    primitives = workflow[
+        workflow.index("- name: Agent-usable primitives fallback") : workflow.index(
+            "- name: Fail unless a path set the secret"
+        )
+    ]
+    lines = [line.strip() for line in primitives.splitlines() if line.strip()]
+    blocking = [i for i, line in enumerate(lines) if line == "printf 'primitives: blocked: %s\\n' \"$blocking\""]
+    assert len(blocking) == 1
+    i = blocking[0]
+    assert lines[i + 1 : i + 3] == ["sleep 10", "continue"]

@@ -146,7 +146,7 @@ def _has_blocking_screen(page) -> str | None:
     return None
 
 
-def _wait_for_blocking_clear(page, timeout_s=60) -> str | None:
+def _wait_for_blocking_clear(page, timeout_s=90) -> str | None:
     deadline = time.monotonic() + timeout_s
     while True:
         try:
@@ -338,17 +338,22 @@ def _exchange_code(code: str, verifier: str) -> dict:
 
 
 def _do_email_step(page, email: str) -> bool:
-    if not _fill_first_visible(page, ['input[type="email"]', 'input[name="email"]', 'input[id="email"]'], email, delay_ms=50):
+    if not _fill_first_visible(page, ['input[type="email"]', 'input[name="email"]', 'input[id="email"]'], email, delay_ms=100):
         return False
-    time.sleep(0.5)
+    time.sleep(1)
     return _click_first_visible(page, ['button[type="submit"]', 'button:has-text("Continue")'])
 
 
 def _do_password_step(page, password: str) -> bool:
-    if not _fill_first_visible(page, ['input[type="password"]'], password, delay_ms=50):
+    if not _fill_first_visible(page, ['input[type="password"]'], password, delay_ms=100):
         return False
-    time.sleep(0.5)
-    return _click_first_visible(page, ['button[type="submit"]', 'button:has-text("Continue")'])
+    time.sleep(2)
+    clicked = _click_first_visible(page, ['button[type="submit"]', 'button:has-text("Continue")'])
+    if clicked:
+        # Password submit triggers a SPA navigation; give it time to land
+        # before callers inspect the page again.
+        time.sleep(2)
+    return clicked
 
 
 def _do_2fa_step(page, totp_key: str) -> bool:
@@ -441,6 +446,12 @@ def cmd_start() -> int:
             return 1
 
         _log_step(page, "authorize")
+        blocking = _wait_for_blocking_clear(page, timeout_s=120)
+        if blocking:
+            print(f"Login blocked: {blocking}", file=sys.stderr)
+            browser.close()
+            callback.close()
+            return 2
         print(
             f"[chatgpt-login] attach: playwright-cli attach --cdp=http://localhost:{cdp_port}; "
             f"drive: scripts/chatgpt-login.py status|step",
@@ -560,6 +571,16 @@ def cmd_step() -> int:
             print("OPENAI_USERNAME and OPENAI_PASSWORD must be set", file=sys.stderr)
             return 1
 
+        blocking = _wait_for_blocking_clear(page, timeout_s=15)
+        if blocking:
+            print(f"Login blocked: {blocking}", file=sys.stderr)
+            try:
+                step = STEP_BY_PATH.get(_page_path(page), "")
+                json.dump({"step": step, "url": page.url.split("?", 1)[0].split("#", 1)[0], "title": page.title(), "blocking": blocking, "code_ready": state.get("code") is not None}, sys.stdout)
+            except Exception:
+                json.dump({"error": "status failed while blocked", "blocking": blocking}, sys.stdout)
+            return 2
+
         ok = _do_current_step(page, email, password, totp_key)
         if not ok:
             step_name = STEP_BY_PATH.get(_page_path(page), "unknown")
@@ -624,7 +645,7 @@ def _full_login() -> int:
 
         _log_step(page, "authorize")
 
-        blocking = _has_blocking_screen(page)
+        blocking = _wait_for_blocking_clear(page, timeout_s=120)
         if blocking:
             print(f"Login blocked: {blocking} — cannot automate with credentials alone", file=sys.stderr)
             browser.close()

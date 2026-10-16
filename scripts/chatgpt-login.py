@@ -98,14 +98,14 @@ def _launch_browser(p, headless: bool, cdp_port: int | None = None):
 
 def _log_step(page, name: str) -> None:
     try:
-        print(f"[chatgpt-login] step={name} url={page.url} title={page.title()}", file=sys.stderr)
+        print(f"[chatgpt-login] step={name} url={page.url.split('?', 1)[0].split('#', 1)[0]} title={page.title()}", file=sys.stderr)
     except Exception:
         print(f"[chatgpt-login] step={name} url=<unknown> title=<unknown>", file=sys.stderr)
 
 
 def _dump_page_state(page) -> None:
     try:
-        print(f"[chatgpt-login] failure url={page.url} title={page.title()}", file=sys.stderr)
+        print(f"[chatgpt-login] failure url={page.url.split('?', 1)[0].split('#', 1)[0]} title={page.title()}", file=sys.stderr)
     except Exception:
         print("[chatgpt-login] failure url=<unknown> title=<unknown>", file=sys.stderr)
     try:
@@ -519,7 +519,7 @@ def cmd_status() -> int:
             step = STEP_BY_PATH.get(_page_path(page), "")
             blocking = _has_blocking_screen(page)
             code_ready = state.get("code") is not None
-            json.dump({"step": step, "url": page.url, "title": page.title(), "blocking": blocking, "code_ready": code_ready}, sys.stdout)
+            json.dump({"step": step, "url": page.url.split("?", 1)[0].split("#", 1)[0], "title": page.title(), "blocking": blocking, "code_ready": code_ready}, sys.stdout)
         except Exception as e:
             json.dump({"error": str(e)}, sys.stdout)
             return 1
@@ -572,7 +572,7 @@ def cmd_step() -> int:
             step = STEP_BY_PATH.get(_page_path(page), "")
             blocking = _has_blocking_screen(page)
             code_ready = state.get("code") is not None
-            json.dump({"step": step, "url": page.url, "title": page.title(), "blocking": blocking, "code_ready": code_ready}, sys.stdout)
+            json.dump({"step": step, "url": page.url.split("?", 1)[0].split("#", 1)[0], "title": page.title(), "blocking": blocking, "code_ready": code_ready}, sys.stdout)
         except Exception as e:
             json.dump({"error": str(e)}, sys.stdout)
             return 1

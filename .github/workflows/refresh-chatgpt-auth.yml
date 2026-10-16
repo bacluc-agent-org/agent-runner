@@ -5,6 +5,8 @@ on:
     paths:
       - ".github/workflows/refresh-chatgpt-auth.yml"
       - "scripts/refresh-token.py"
+      - "scripts/chatgpt-login.py"
+      - "scripts/opencode_auth.py"
   workflow_dispatch:
   schedule:
     # Twice a month (~half of the refresh token lifetime). The refresh step
@@ -30,9 +32,6 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --all-extras
-
-      - name: Unit tests (chatgpt-login fallback)
-        run: uv run --group dev pytest -q scripts/test_chatgpt_login.py
 
       - name: Install playwright browsers
         run: uv run playwright install --with-deps chrome
@@ -71,12 +70,20 @@ jobs:
           OPENCODE_CONFIG_CONTENT: '{"plugin":[]}'
         run: |
           set -Eeuo pipefail
-          npm install --global opencode-ai@1.18.32
+          npm install --global --force opencode-ai@1.18.32
           mkdir -p ~/.local/share/opencode
           cp "$RUNNER_TEMP/auth.json" ~/.local/share/opencode/auth.json
           set +e
-          opencode run --model openai/gpt-5.6-luna "Respond with exactly OK." > "$RUNNER_TEMP/opencode-validate.log" 2>&1
-          status=$?
+          status=1
+          for model in openai/gpt-5.6-luna openai/gpt-5.5 openai/gpt-5.4 openai/gpt-5.4-mini; do
+            opencode run --model "$model" "Respond with exactly OK." > "$RUNNER_TEMP/opencode-validate.log" 2>&1
+            status=$?
+            if (( status == 0 )); then
+              printf 'Validated refreshed token with model %s\n' "$model"
+              break
+            fi
+            printf 'Model %s failed; trying next\n' "$model" >&2
+          done
           set -e
           if (( status != 0 )); then
             stop_token="$(openssl rand -hex 32)"

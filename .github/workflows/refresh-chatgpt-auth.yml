@@ -179,6 +179,8 @@ jobs:
             blocking="$(jq -r '.blocking // empty' <<<"$status_json" 2>/dev/null || true)"
             if [[ -n "$blocking" ]]; then
               printf 'primitives: blocked: %s\n' "$blocking"
+              sleep 10
+              continue
             fi
             step_json="$(uv run scripts/chatgpt-login.py step 2>/dev/null || true)"
             printf 'primitives step: %s\n' "$step_json"

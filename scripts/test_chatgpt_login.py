@@ -1,4 +1,5 @@
 import importlib.util
+import inspect
 import json
 from pathlib import Path
 
@@ -96,10 +97,72 @@ def test_has_blocking_screen_returns_none_for_normal_page():
     assert chatgpt_login._has_blocking_screen(page) is None
 
 
+class _FakeTime:
+    def __init__(self, start=0.0):
+        self._now = start
+        self.sleeps = []
+
+    def monotonic(self):
+        return self._now
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self._now += seconds
+
+
+def test_email_step_types_slowly_and_pauses_before_submit(monkeypatch):
+    fake_time = _FakeTime()
+    monkeypatch.setattr(chatgpt_login, "time", fake_time)
+    page = _FillPage()
+    assert chatgpt_login._do_email_step(page, "user@example.com")
+    assert page.locator_instance.typed == [("user@example.com", 100)]
+    assert fake_time.sleeps == [1.0]
+
+
+def test_password_step_pauses_after_fill_and_after_submit(monkeypatch):
+    fake_time = _FakeTime()
+    monkeypatch.setattr(chatgpt_login, "time", fake_time)
+    page = _FillPage()
+    assert chatgpt_login._do_password_step(page, "hunter2")
+    assert page.locator_instance.typed == [("hunter2", 100)]
+    assert fake_time.sleeps == [2.0, 2.0]
+
+
+def test_password_step_skips_post_submit_pause_when_click_fails(monkeypatch):
+    fake_time = _FakeTime()
+    monkeypatch.setattr(chatgpt_login, "time", fake_time)
+    monkeypatch.setattr(chatgpt_login, "_click_first_visible", lambda *args, **kwargs: False)
+    page = _FillPage()
+    assert not chatgpt_login._do_password_step(page, "hunter2")
+    assert fake_time.sleeps == [2.0]
+
+
+def test_wait_for_blocking_clear_defaults_to_90s():
+    signature = inspect.signature(chatgpt_login._wait_for_blocking_clear)
+    assert signature.parameters["timeout_s"].default == 90
+
+
+def test_wait_for_blocking_clear_polls_blocked_page_with_5s_sleeps(monkeypatch):
+    fake_time = _FakeTime()
+    monkeypatch.setattr(chatgpt_login, "time", fake_time)
+    blocked = chatgpt_login._wait_for_blocking_clear(_FakePage(_CLOUDFLARE_BODY))
+    assert blocked == "cloudflare challenge detected: just a moment"
+    assert fake_time.sleeps == [5.0] * 18
+
+
+def test_wait_for_blocking_clear_returns_none_immediately_for_clean_page(monkeypatch):
+    fake_time = _FakeTime()
+    monkeypatch.setattr(chatgpt_login, "time", fake_time)
+    page = _FakePage("<html><body><h1>Sign in</h1></body></html>")
+    assert chatgpt_login._wait_for_blocking_clear(page) is None
+    assert fake_time.sleeps == []
+
+
 class _RecordingLocator:
     def __init__(self):
         self.fills = []
         self.typed = []
+        self.clicks = []
 
     @property
     def first(self):
@@ -113,6 +176,9 @@ class _RecordingLocator:
 
     def press_sequentially(self, value, delay=None):
         self.typed.append((value, delay))
+
+    def click(self):
+        self.clicks.append(True)
 
 
 class _FillPage:
@@ -169,3 +235,5 @@ def test_credential_steps_dump_untrusted_logs_only_on_failure_and_without_creden
     assert browser_lines[browser_dump[0]] == (
         "grep -vE '\"openai\"|rt\\.1\\.' \"$RUNNER_TEMP/auth.json\" >&2 || true"
     )
+
+

@@ -116,6 +116,13 @@ def _dump_page_state(page) -> None:
 
 
 def _has_blocking_screen(page) -> str | None:
+    # The OpenAI SPA error page ("Oops, an error occurred!") is terminal for
+    # automation: report it through the same blocking channel as the bot
+    # challenges, so status/step and the workflow loop handle it the same way.
+    # ponytail: terminal, no reload-recovery; add a page.reload() retry at the
+    # email step if the error page turns out to be transient in practice.
+    if _is_error_page(page):
+        return "openai error page detected"
     checks = [
         ("Verify you are human", 'text="Verify you are human"'),
         ("captcha iframe", 'iframe[src*="captcha"]'),
@@ -588,7 +595,6 @@ def cmd_step() -> int:
                 f"[chatgpt-login] no progress at step {step_name} — attach with playwright-cli attach --cdp=http://localhost:{state.get('cdp_port', 9222)}",
                 file=sys.stderr,
             )
-            return 1
         try:
             step = STEP_BY_PATH.get(_page_path(page), "")
             blocking = _has_blocking_screen(page)
@@ -597,7 +603,7 @@ def cmd_step() -> int:
         except Exception as e:
             json.dump({"error": str(e)}, sys.stdout)
             return 1
-        return 0
+        return 0 if ok else 1
 
 
 def _full_login() -> int:
@@ -694,14 +700,9 @@ def _full_login() -> int:
                     _do_email_step(page, email)
                 elif path == "/log-in/password":
                     _do_password_step(page, password)
-                    # The SPA may show an error page; retry a couple of times.
+                    # The SPA may show an error page; retry a couple of times
+                    # before a persistent one counts as blocking (below).
                     for attempt in range(2):
-                        blocking = _wait_for_blocking_clear(page, timeout_s=90)
-                        if blocking:
-                            print(f"Login blocked after password: {blocking}", file=sys.stderr)
-                            browser.close()
-                            callback.close()
-                            return 2
                         if not _is_error_page(page):
                             break
                         print(f"[chatgpt-login] OpenAI error page after password submit, retry {attempt + 1}/2", file=sys.stderr)
@@ -709,6 +710,12 @@ def _full_login() -> int:
                         _click_first_visible(page, ['a:has-text("Try again")', 'button:has-text("Try again")'])
                         time.sleep(1)
                         _do_password_step(page, password)
+                    blocking = _wait_for_blocking_clear(page, timeout_s=90)
+                    if blocking:
+                        print(f"Login blocked after password: {blocking}", file=sys.stderr)
+                        browser.close()
+                        callback.close()
+                        return 2
                 elif path.startswith("/mfa-challenge"):
                     if not totp_key:
                         print("2FA required but no TOTP key (OPENAI_2FA_KEY) set", file=sys.stderr)

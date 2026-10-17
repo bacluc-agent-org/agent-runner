@@ -75,7 +75,7 @@ jobs:
           candidates="$RUNNER_TEMP/candidate-numbers.txt"
           unrefined_json="$RUNNER_TEMP/unrefined-candidates.json"
           refined_json="$RUNNER_TEMP/refined-candidates.json"
-          gh api "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+-label:agent-refined+-label:ready-for-implementation+-label:agent-ignore+sort:created-asc&per_page=5" \
+          gh api "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+-label:agent-refined+-label:agent-ignore+sort:created-asc&per_page=5" \
             --jq '.items' > "$unrefined_json"
           gh api "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:agent-refined+-label:ready-for-implementation+-label:agent-ignore+sort:updated-desc&per_page=10" \
             --jq '.items' > "$refined_json"

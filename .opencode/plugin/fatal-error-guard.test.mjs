@@ -225,13 +225,31 @@ test("hook calls process.exit(1) and writes marker", async () => {
   try {
     const { mkdirSync } = await import("node:fs");
     mkdirSync(tmp, { recursive: true });
-    const hooks = await plugin({});
-    await hooks.event({
-      event: {
-        type: "session.error",
-        properties: { error: apiErr(402, "Insufficient balance") },
+    let handler;
+    const context = {
+      event: (h) => {
+        handler = h;
       },
-    });
+    };
+    if (typeof plugin === "function") {
+      const hooks = await plugin({});
+      await hooks.event({
+        event: {
+          type: "session.error",
+          properties: { error: apiErr(402, "Insufficient balance") },
+        },
+      });
+    } else if (plugin.setup) {
+      await plugin.setup({ context });
+      await handler({
+        event: {
+          type: "session.error",
+          properties: { error: apiErr(402, "Insufficient balance") },
+        },
+      });
+    } else {
+      throw new Error("unexpected plugin shape");
+    }
   } catch {}
   process.exit = origExit;
   assert.equal(exitCode, 1);

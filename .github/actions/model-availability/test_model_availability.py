@@ -1246,9 +1246,15 @@ class TestModelAvailabilityAction:
         assert "python3" in action
 
     def test_standalone_opencode_workflow_keeps_the_openai_catalog_available(self):
+        # The validate step talks to the openai (ChatGPT OAuth) provider, whose
+        # model catalog comes from opencode's default plugins. Disabling them
+        # there makes every probe fail with "Provider not found: openai".
         workflow = (Path(__file__).parents[3] / ".github/workflows/refresh-chatgpt-auth.yml").read_text()
-        validation = workflow[workflow.index("- name: Validate refreshed token with opencode") :]
-        # Keep OpenAI catalog available: do not disable default plugins; inject empty plugin list
+        validation = workflow[
+            workflow.index("- name: Validate refreshed token with opencode") : workflow.index(
+                "- name: Set secret (refreshed token)"
+            )
+        ]
         assert "OPENCODE_DISABLE_DEFAULT_PLUGINS" not in validation
         assert "OPENCODE_CONFIG_CONTENT: '{\"plugin\":[]}'" in validation
 

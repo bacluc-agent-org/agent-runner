@@ -1,0 +1,23 @@
+name: wait_for_opencode tests
+
+on:
+  push:
+    paths:
+      - scripts/wait_for_opencode.sh
+      - scripts/test_wait_for_opencode.py
+      - .github/workflows/test-wait-for-opencode.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run wait_for_opencode script tests
+        run: python3 -m unittest -v scripts/test_wait_for_opencode.py

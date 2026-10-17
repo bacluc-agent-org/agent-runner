@@ -213,8 +213,8 @@ jobs:
           mkdir -p "$pr_lookup_dir"
           for repo in "${repo_list[@]}"; do
             key="$(echo "$repo" | tr '/' '_')"
-            gh pr list -R "$repo" --state all --limit 200 --json number,createdAt,updatedAt,headRefName,state,title \
-              --jq '.[] | "\(.headRefName)|#\(.number)|\(.createdAt)|\(.updatedAt)|\(.state)|\(.title)"' 2>/dev/null \
+            gh pr list -R "$repo" --state all --limit 200 --json number,createdAt,updatedAt,headRefName,state,title,body \
+              --jq '.[] | "\(.headRefName)|#\(.number)|\(.createdAt)|\(.updatedAt)|\(.state)|\(.title)|\(.body // "" | gsub("[\r\n|]"; " "))"' 2>/dev/null \
               | sort -t'|' -k4 -r > "$pr_lookup_dir/$key.lookup" || true
           done
 
@@ -225,7 +225,7 @@ jobs:
             pr_number=""
             for repo in "${repo_list[@]}"; do
               key="$(echo "$repo" | tr '/' '_')"
-              match="$(grep -m1 -E "issue-${num}([-_]|[^0-9A-Za-z_-]|$)|${ISSUE_REPOSITORY}#${num}([^0-9]|$)" "$pr_lookup_dir/$key.lookup" 2>/dev/null || true)"
+              match="$(grep -m1 -E "issue-${num}([-_]|[^0-9A-Za-z_-]|$)|${ISSUE_REPOSITORY}#${num}([^0-9]|$)|${ISSUE_REPOSITORY}/issues/${num}([^0-9]|$)" "$pr_lookup_dir/$key.lookup" 2>/dev/null || true)"
               if [[ -n "$match" ]]; then
                 pr_repo="$repo"
                 pr_number="$(echo "$match" | cut -d'|' -f2 | tr -d '#')"

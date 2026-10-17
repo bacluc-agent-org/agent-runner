@@ -2,6 +2,8 @@ Choose ONE issue for one automated agent run.
 Each candidate line is "number: title [labels] [created] [PR: none|open|merged|closed #<n> last-commit:<ts>] [last-human-feedback:<ts|none>] | body-excerpt [attempts: N] [tier: T]"; use its details to assess the chosen task.
 Candidate order is random and carries no priority.
 The supplied list is already filtered to one tier; do not rerank, extend, or de-prioritize it. Choose the strongest argument regardless of difficulty. A task needing no code change is delivered as a comment on the target issue with no branch and no PR.
+Research budget: read each candidate at most once (never re-read the same issue or re-run the same lookup); after about 10 tool calls of research in total, stop investigating, even if undecided.
+If anything stays unresolved, resolve it by choosing the best-so-far candidate and noting the doubt in 1-2 sentences — never by continuing to deliberate. An imperfect pick delivered on time beats a perfect pick that never arrives.
 Reply with ONLY the final implementation prompt for the chosen issue.
 End with the exact final line: SELECTED_ISSUE: <number>
 Use digits only for the issue number. No text may follow that line.

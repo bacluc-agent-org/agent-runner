@@ -128,3 +128,12 @@ def test_workflow_uses_latest_commit_and_created_at_when_pr_has_no_commits():
     assert '([.[][] | .commit.committer.date] | max) // $fallback' in content
     assert 'pr_last_commit_at:(' in content
     assert 'map(select(test("^[0-9]")))|max // null' in content
+
+
+def test_selection_tail_keeps_contract_and_research_budget():
+    tail = (Path(__file__).parents[1] / "scripts/issue-selection-tail.txt").read_text()
+    assert "End with the exact final line: SELECTED_ISSUE: <number>" in tail
+    assert "No text may follow that line." in tail
+    assert "read each candidate at most once" in tail
+    assert "stop investigating, even if undecided" in tail
+    assert "choosing the best-so-far candidate" in tail

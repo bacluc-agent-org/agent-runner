@@ -55,10 +55,6 @@ export function classifyEvent(
         return { fatal: true, reason: "model_unavailable", error: err };
       }
     }
-    // Message-based matching for any error carrying a message: APIError without a
-    // fatal statusCode, UnknownError ("Model not found: ..."), AI_APICallError
-    // balance messages, etc. MessageOutputLengthError has no message field;
-    // MessageAbortedError messages do not match the fatal patterns.
     const data = (err as { data?: { message?: string; responseBody?: string } })
       .data;
     const text =
@@ -71,9 +67,6 @@ export function classifyEvent(
   if (event.type === "session.status") {
     const status = event.properties.status;
     if (status.type === "retry") {
-      // Runtime-only field (absent from the SDK type): opencode-go surfaces its
-      // balance/usage-limit condition as a retry with action.reason
-      // "account_rate_limit" and a retry scheduled days in the future.
       const action = (status as { action?: { reason?: string } }).action;
       if (action?.reason === "account_rate_limit") {
         return { fatal: true, reason: "balance", error: status.message };
@@ -84,6 +77,58 @@ export function classifyEvent(
         return { fatal: true, reason: "retry_limit", error: status.message };
       }
     }
+  }
+
+  // OpenCode v2 events
+  if (event.type === "session.execution.failed") {
+    const properties = event.properties as any;
+    if (!properties) return null;
+    const error = properties.error;
+    if (error) {
+      if (error.name === "ProviderAuthError") {
+        return {
+          fatal: true,
+          reason: "auth",
+          provider: error.data?.providerID,
+          error: error,
+        };
+      }
+      if (error.name === "APIError") {
+        const data = error.data;
+        if (data?.statusCode === 401 || data?.statusCode === 403) {
+          return { fatal: true, reason: "auth", error: error };
+        }
+        if (data?.statusCode === 402) {
+          return { fatal: true, reason: "balance", error: error };
+        }
+        if (data?.statusCode === 404) {
+          return { fatal: true, reason: "model_unavailable", error: error };
+        }
+      }
+      const data = (error as { data?: { message?: string; responseBody?: string } })
+        .data;
+      const text =
+        `${data?.message ?? ""} ${data?.responseBody ?? ""}`.toLowerCase();
+      const reason = matchMessage(text);
+      if (reason) return { fatal: true, reason, error: error };
+    }
+    if (properties.reason || properties.message) {
+      const text = `${properties.reason ?? ""} ${properties.message ?? ""}`.toLowerCase();
+      const reason = matchMessage(text);
+      if (reason) return { fatal: true, reason, error: properties };
+    }
+    return null;
+  }
+
+  if (event.type === "session.step.failed") {
+    const properties = event.properties as any;
+    if (!properties) return null;
+    if (properties.reason || properties.message) {
+      const text = `${properties.reason ?? ""} ${properties.message ?? ""}`.toLowerCase();
+      const reason = matchMessage(text);
+      if (reason) return { fatal: true, reason, error: properties };
+    }
+    return null;
   }
 
   return null;

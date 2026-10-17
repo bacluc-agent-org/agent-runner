@@ -98,14 +98,14 @@ def _launch_browser(p, headless: bool, cdp_port: int | None = None):
 
 def _log_step(page, name: str) -> None:
     try:
-        print(f"[chatgpt-login] step={name} url={page.url} title={page.title()}", file=sys.stderr)
+        print(f"[chatgpt-login] step={name} url={page.url.split('?', 1)[0].split('#', 1)[0]} title={page.title()}", file=sys.stderr)
     except Exception:
         print(f"[chatgpt-login] step={name} url=<unknown> title=<unknown>", file=sys.stderr)
 
 
 def _dump_page_state(page) -> None:
     try:
-        print(f"[chatgpt-login] failure url={page.url} title={page.title()}", file=sys.stderr)
+        print(f"[chatgpt-login] failure url={page.url.split('?', 1)[0].split('#', 1)[0]} title={page.title()}", file=sys.stderr)
     except Exception:
         print("[chatgpt-login] failure url=<unknown> title=<unknown>", file=sys.stderr)
     try:
@@ -116,6 +116,13 @@ def _dump_page_state(page) -> None:
 
 
 def _has_blocking_screen(page) -> str | None:
+    # The OpenAI SPA error page ("Oops, an error occurred!") is terminal for
+    # automation: report it through the same blocking channel as the bot
+    # challenges, so status/step and the workflow loop handle it the same way.
+    # ponytail: terminal, no reload-recovery; add a page.reload() retry at the
+    # email step if the error page turns out to be transient in practice.
+    if _is_error_page(page):
+        return "openai error page detected"
     checks = [
         ("Verify you are human", 'text="Verify you are human"'),
         ("captcha iframe", 'iframe[src*="captcha"]'),
@@ -126,8 +133,17 @@ def _has_blocking_screen(page) -> str | None:
         ("device verification", 'text="device verification"'),
     ]
     content = page.content().lower()
-    if "captcha" in content or "human verification" in content or "device verification" in content:
-        return "captcha/device verification detected"
+    for marker in ("captcha", "human verification", "device verification"):
+        if marker in content:
+            return "captcha/device verification detected"
+    for marker in (
+        "just a moment",
+        "performing security verification",
+        "verifies you are not a bot",
+        "ray id",
+    ):
+        if marker in content:
+            return f"cloudflare challenge detected: {marker}"
     for label, sel in checks:
         try:
             if page.locator(sel).first.is_visible(timeout=1000):
@@ -137,7 +153,7 @@ def _has_blocking_screen(page) -> str | None:
     return None
 
 
-def _wait_for_blocking_clear(page, timeout_s=60) -> str | None:
+def _wait_for_blocking_clear(page, timeout_s=90) -> str | None:
     deadline = time.monotonic() + timeout_s
     while True:
         try:
@@ -163,12 +179,16 @@ def _click_first_visible(page, selectors: list[str]) -> bool:
     return False
 
 
-def _fill_first_visible(page, selectors: list[str], value: str) -> bool:
+def _fill_first_visible(page, selectors: list[str], value: str, delay_ms: int | None = None) -> bool:
     for sel in selectors:
         try:
             loc = page.locator(sel).first
             if loc.is_visible(timeout=2000):
-                loc.fill(value)
+                if delay_ms is None:
+                    loc.fill(value)
+                else:
+                    loc.fill("")
+                    loc.press_sequentially(value, delay=delay_ms)
                 return True
         except Exception:
             continue
@@ -325,15 +345,22 @@ def _exchange_code(code: str, verifier: str) -> dict:
 
 
 def _do_email_step(page, email: str) -> bool:
-    if not _fill_first_visible(page, ['input[type="email"]', 'input[name="email"]', 'input[id="email"]'], email):
+    if not _fill_first_visible(page, ['input[type="email"]', 'input[name="email"]', 'input[id="email"]'], email, delay_ms=100):
         return False
+    time.sleep(1)
     return _click_first_visible(page, ['button[type="submit"]', 'button:has-text("Continue")'])
 
 
 def _do_password_step(page, password: str) -> bool:
-    if not _fill_first_visible(page, ['input[type="password"]'], password):
+    if not _fill_first_visible(page, ['input[type="password"]'], password, delay_ms=100):
         return False
-    return _click_first_visible(page, ['button[type="submit"]', 'button:has-text("Continue")'])
+    time.sleep(2)
+    clicked = _click_first_visible(page, ['button[type="submit"]', 'button:has-text("Continue")'])
+    if clicked:
+        # Password submit triggers a SPA navigation; give it time to land
+        # before callers inspect the page again.
+        time.sleep(2)
+    return clicked
 
 
 def _do_2fa_step(page, totp_key: str) -> bool:
@@ -426,6 +453,12 @@ def cmd_start() -> int:
             return 1
 
         _log_step(page, "authorize")
+        blocking = _wait_for_blocking_clear(page, timeout_s=120)
+        if blocking:
+            print(f"Login blocked: {blocking}", file=sys.stderr)
+            browser.close()
+            callback.close()
+            return 2
         print(
             f"[chatgpt-login] attach: playwright-cli attach --cdp=http://localhost:{cdp_port}; "
             f"drive: scripts/chatgpt-login.py status|step",
@@ -504,7 +537,7 @@ def cmd_status() -> int:
             step = STEP_BY_PATH.get(_page_path(page), "")
             blocking = _has_blocking_screen(page)
             code_ready = state.get("code") is not None
-            json.dump({"step": step, "url": page.url, "title": page.title(), "blocking": blocking, "code_ready": code_ready}, sys.stdout)
+            json.dump({"step": step, "url": page.url.split("?", 1)[0].split("#", 1)[0], "title": page.title(), "blocking": blocking, "code_ready": code_ready}, sys.stdout)
         except Exception as e:
             json.dump({"error": str(e)}, sys.stdout)
             return 1
@@ -545,6 +578,16 @@ def cmd_step() -> int:
             print("OPENAI_USERNAME and OPENAI_PASSWORD must be set", file=sys.stderr)
             return 1
 
+        blocking = _wait_for_blocking_clear(page, timeout_s=15)
+        if blocking:
+            print(f"Login blocked: {blocking}", file=sys.stderr)
+            try:
+                step = STEP_BY_PATH.get(_page_path(page), "")
+                json.dump({"step": step, "url": page.url.split("?", 1)[0].split("#", 1)[0], "title": page.title(), "blocking": blocking, "code_ready": state.get("code") is not None}, sys.stdout)
+            except Exception:
+                json.dump({"error": "status failed while blocked", "blocking": blocking}, sys.stdout)
+            return 2
+
         ok = _do_current_step(page, email, password, totp_key)
         if not ok:
             step_name = STEP_BY_PATH.get(_page_path(page), "unknown")
@@ -552,16 +595,15 @@ def cmd_step() -> int:
                 f"[chatgpt-login] no progress at step {step_name} — attach with playwright-cli attach --cdp=http://localhost:{state.get('cdp_port', 9222)}",
                 file=sys.stderr,
             )
-            return 1
         try:
             step = STEP_BY_PATH.get(_page_path(page), "")
             blocking = _has_blocking_screen(page)
             code_ready = state.get("code") is not None
-            json.dump({"step": step, "url": page.url, "title": page.title(), "blocking": blocking, "code_ready": code_ready}, sys.stdout)
+            json.dump({"step": step, "url": page.url.split("?", 1)[0].split("#", 1)[0], "title": page.title(), "blocking": blocking, "code_ready": code_ready}, sys.stdout)
         except Exception as e:
             json.dump({"error": str(e)}, sys.stdout)
             return 1
-        return 0
+        return 0 if ok else 1
 
 
 def _full_login() -> int:
@@ -609,7 +651,7 @@ def _full_login() -> int:
 
         _log_step(page, "authorize")
 
-        blocking = _has_blocking_screen(page)
+        blocking = _wait_for_blocking_clear(page, timeout_s=120)
         if blocking:
             print(f"Login blocked: {blocking} — cannot automate with credentials alone", file=sys.stderr)
             browser.close()
@@ -633,6 +675,17 @@ def _full_login() -> int:
                 _log_step(page, step)
                 last_step = step
                 attempts[step] = 0
+            # A bot challenge can appear mid-flow (Cloudflare interstitial after
+            # the password submit). Wait for it to clear before counting another
+            # attempt, otherwise blocked time burns the attempt budget and the
+            # flow exits with a misleading "Stuck at step".
+            blocking = _wait_for_blocking_clear(page, timeout_s=90)
+            if blocking:
+                print(f"Login blocked: {blocking} — cannot automate with credentials alone", file=sys.stderr)
+                _dump_page_state(page)
+                browser.close()
+                callback.close()
+                return 2
             if step:
                 attempts[step] = attempts.get(step, 0) + 1
                 if attempts[step] > 5:
@@ -647,14 +700,9 @@ def _full_login() -> int:
                     _do_email_step(page, email)
                 elif path == "/log-in/password":
                     _do_password_step(page, password)
-                    # The SPA may show an error page; retry a couple of times.
+                    # The SPA may show an error page; retry a couple of times
+                    # before a persistent one counts as blocking (below).
                     for attempt in range(2):
-                        blocking = _wait_for_blocking_clear(page, timeout_s=30)
-                        if blocking:
-                            print(f"Login blocked after password: {blocking}", file=sys.stderr)
-                            browser.close()
-                            callback.close()
-                            return 2
                         if not _is_error_page(page):
                             break
                         print(f"[chatgpt-login] OpenAI error page after password submit, retry {attempt + 1}/2", file=sys.stderr)
@@ -662,6 +710,12 @@ def _full_login() -> int:
                         _click_first_visible(page, ['a:has-text("Try again")', 'button:has-text("Try again")'])
                         time.sleep(1)
                         _do_password_step(page, password)
+                    blocking = _wait_for_blocking_clear(page, timeout_s=90)
+                    if blocking:
+                        print(f"Login blocked after password: {blocking}", file=sys.stderr)
+                        browser.close()
+                        callback.close()
+                        return 2
                 elif path.startswith("/mfa-challenge"):
                     if not totp_key:
                         print("2FA required but no TOTP key (OPENAI_2FA_KEY) set", file=sys.stderr)

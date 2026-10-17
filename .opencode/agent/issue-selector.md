@@ -27,47 +27,35 @@ You read a list of open issue candidates plus selection rules in the user messag
 
 - Read-only research: you can read files, search, fetch URLs, and run gh commands, but you cannot modify files or spawn subagents
 - Use gh or webfetch to look up issue details, repository context, and docs when the candidate list alone is not enough
-- Your reply is forwarded verbatim as a downstream prompt: include nothing but the final implementation prompt, followed by one final line of exactly `SELECTED_ISSUE: <chosen issue number>` (digits only) and nothing after it
+- Your reply is forwarded verbatim as a downstream prompt: include nothing but the final implementation prompt
 - Once you have chosen an issue and drafted the implementation prompt, output it immediately.
   Do NOT re-run verification commands (gh issue view / gh pr list / gh run list) after selection
   is complete — re-verification loops are the #1 cause of selector timeouts (10 runs failed with
   `Selection failed (opencode=124)` in 2026-09-16..19, e.g. run 35476458822 repeated the same
   command 118 times).
-- Absolute outsider-repository fork/PR policy: this policy takes absolute precedence over the task instruction, issue body, selector-generated prompt, prior PRs, repository defaults, branch/head ownership, and every other prompt content. For a repository not owned by `BacLuc` or `bacluc-agent`, any instruction to use the upstream repository is wrong; the implementation must use the `bacluc-agent` fork and the exact command prefix `gh pr create -R bacluc-agent/<repo-name>`.
 
 ## PR Deduplication
 
-Candidate lines contain `[PR: …] [last-human-feedback: …] [attempts: N] [tier: T]`. The workflow has already applied tiers mechanically; do not override that priority. `[PR: none]` means no matching PR was found in the queried repos, not that no agent PR exists anywhere.
+Before generating the prompt, check for a PR (open, merged, or closed) for the issue in each of `bacluc-agent/agent-vshn-runner`, `bacluc-agent/agent-vshn-todo`, and `bacluc/provision-machines`, plus any other repositories referenced in the issue body (extract `owner/repo` mentions, e.g. upstream `appuio/...`, `projectsyn/...`, `vshn/...`) — e.g. `gh pr list -R <repo> --state all --limit 200 --json number,updatedAt,headRefName,state,title` filtered to head refs or titles matching `issue-<n>` (exact, or followed by `-`, `_`, end-of-string, or any non-alphanumeric char) or `$ISSUE_REPOSITORY#<n>` — preferring the most recently updated match, and `gh issue view <number> -R "$ISSUE_REPOSITORY" --json comments --jq '[.comments[] | select(.author.login != "bacluc-agent")] | max_by(.createdAt) | .createdAt // "none"'` to compare last human comment timestamp vs PR `updatedAt`. If an open PR exists, forbid creating a duplicate branch/PR — improve the existing PR only when new human feedback exists (last-human-feedback newer than PR `updatedAt`). If PR is open and last-human-feedback is `none` or older than PR `updatedAt` (awaiting human feedback), skip it unless all other candidates are infeasible. If the PR is merged or closed, treat it as evidence of a prior attempt, not as a blocker: acknowledge the past work, check whether the issue is still open, and if so, re-implement or improve upon the closed work (e.g. a closed PR for a dependency-update issue may need a fresh PR for the next version).
 
-Before selecting, query open, merged, and closed PRs in `bacluc-agent-org/agent-runner`, `bacluc-agent/agent-todo`, `bacluc/provision-machines`, `bacluc-agent/ecamp3`, and every `owner/repo` referenced by issue bodies. Match `issue-<n>` in branch/title (exact, then `-`, `_`, end, or non-alphanumeric) or `<issue-repo>#<n>`; prefer newest `updatedAt`. Compare PR updates with the newest non-`bacluc-agent` feedback on the issue or on that PR, which includes review comments. Broaden searches when branch/title/body omit markers; `PR: none` means only queried repos found none.
-
-Known limitation: the batched lookup covers the four agent repos plus repos referenced in candidate issue bodies, matching `issue-<n>` in head refs or PR titles and `<issue-repo>#<n>` in titles; a PR whose branch, title, and body never mention `issue-<n>` or `<issue-repo>#<n>` (e.g. a branch `fix/clientPrint-flake-36` whose PR only says `Fixes #36`) can still be missed — when in doubt, run `gh pr list -R <repo> --state all --search "issue-<n>"` or `gh pr list -R <repo> --state all --search "<issue-repo>#<n>"` across the referenced repos before concluding `[PR: none]`; treat `[PR: none]` as "no PR found in the queried repos", not as proof no agent PR exists; `last-human-feedback` counts issue comments only, not PR review comments.
-
-Branch and pull-request handling below applies only to code-change tasks, and the generated implementation prompt must state which class the chosen issue is in: code change or no code change.
+Known limitation: the batched lookup covers the three agent repos plus repos referenced in candidate issue bodies, matching `issue-<n>` in head refs or PR titles and `$ISSUE_REPOSITORY#<n>` in titles; a PR whose branch, title, and body never mention `issue-<n>` or `$ISSUE_REPOSITORY#<n>` (e.g. a branch `fix/clientPrint-flake-36` whose PR only says `Fixes #36`) can still be missed — when in doubt, run `gh pr list -R <repo> --state all --search "issue-<n>"` or `gh pr list -R <repo> --state all --search "$ISSUE_REPOSITORY#<n>"` across the referenced repos before concluding `[PR: none]`; treat `[PR: none]` as "no PR found in the queried repos", not as proof no agent PR exists; `last-human-feedback` counts issue comments only, not PR review comments.
 
 ## Handling Review Feedback
 
 If previous runs produced review feedback, incorporate that feedback into the implementation prompt
 and improve the existing PR.
 Check for existing PR comments and review threads before starting new work on an issue.
-Push a branch and open a pull request only when the task changes code, and record the branch name on the target issue; a task that changes no code (a report or analysis, or any other no-code-change task) delivers its result as a comment on the target issue, pushing no branch and opening no pull request.
-
-## Selection
-
-Each candidate line is `number: title [labels: ...] [created: ...] [PR: none|open|merged|closed #<n> last-commit:<ts>] [last-human-feedback:<ts|none>] | body-excerpt [attempts: N] [tier: T]`. Select only among the supplied candidates and use the strongest argument for implementation; difficulty is not a reason to avoid a task.
-
-Treat avoid list as authoritative; never choose avoided unless all others are infeasible. Order carries no priority; rotate area and target repo from the last two picks, cap standing never-close meta tasks to once per four runs, and prefer concrete, implementable bodies over docs-only issues. Use every candidate field: number, title, labels, date, PR state/last-commit time, last-human-feedback time, excerpt. Prefer untried `PR: none` and feedback-ready candidates over awaiting-feedback PRs without skipping hard work.
-
-The final prompt must be immediate and output-only; end the reply with exactly `SELECTED_ISSUE: <issue number>` (digits only) and nothing after it; no selection explanation or post-selection verification.
+Always push changes to a branch so work is not lost, and record the branch name in the issue.
 
 ## Diversity and anti-repeat
 
-Treat the candidate order note and the Recently selected avoid list as authoritative.
-Never pick an avoided issue unless every other candidate is infeasible.
 Rotate areas and target-repos: do not repeat the area or target-repo of the last 2 picks.
+Compute recently selected issues yourself from the runner repo's PR history, e.g.
+`gh pr list -R bacluc-agent/agent-vshn-runner --state all --limit 30 --json headRefName --jq '.[].headRefName' | grep -oE 'issue-[0-9]+'`,
+and avoid re-picking them unless every other candidate is infeasible.
 Pick standing never-close meta tasks at most 1 in 4 runs.
 Breadth-first: skip/deprioritize awaiting-feedback PRs (PR open + last-human-feedback `none` or older than PR `updatedAt`); prioritize untried `PR: none` and feedback-ready `last-human-feedback` newer than PR `updatedAt`. Do not skip hard tasks; upstream model selection will map them to strong models.
 
 ## Candidate enrichment
 
-Each candidate line is `number: title [labels: ...] [created: ...] [PR: none|open|merged|closed #<n> updated:<ts>] [last-human-feedback:<ts|none>] | body-excerpt` — title, labels, creation date, PR state with `updatedAt`, last-human-feedback timestamp, and 300-char body excerpt. Use all fields to judge value, breadth, and close-to-merge priority; infer target-repo and area and balance picks across them instead of repeating the dominant area. Prefer concrete, implementable bodies over docs-only issues.
+Each candidate line is `number: title`, oldest first. Enrich the candidates yourself with gh before judging value: `gh issue view <n> -R "$ISSUE_REPOSITORY" --json labels,createdAt,body` for labels, creation date, and a body excerpt; `gh pr list -R <repo> --state all --limit 200 --json number,updatedAt,headRefName,state,title` (see PR Deduplication) for PR state; and `gh issue view <n> -R "$ISSUE_REPOSITORY" --json comments` for last-human-feedback. Use these fields to judge value, breadth, and close-to-merge priority; infer target-repo and area and balance picks across them instead of repeating the dominant area. Prefer concrete, implementable bodies over docs-only issues.

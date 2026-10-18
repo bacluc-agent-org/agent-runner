@@ -63,6 +63,7 @@ jobs:
         id: validate
         if: steps.refresh.outputs.refreshed == 'true'
         env:
+          OPENCODE_CONFIG_CONTENT: '{"plugin":[]}'
         run: |
           set -Eeuo pipefail
           npm install --global opencode-ai@1.18.32

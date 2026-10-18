@@ -1,10 +1,7 @@
-import type {
-  ApiError,
-  Event,
-  EventSessionError,
-  EventSessionStatus,
-  ProviderAuthError,
-} from "@opencode-ai/sdk";
+import type { Event, ProviderAuthError } from "@opencode-ai/sdk";
+
+// AnyEvent: union to support v1 (properties) vs v2 (data) payload shapes and error variations
+export type AnyEvent = Event | { type: string; properties?: any; data?: any };
 
 export type FatalReason =
   "auth" | "balance" | "model_unavailable" | "retry_limit";
@@ -29,104 +26,89 @@ function matchMessage(text: string): "balance" | "model_unavailable" | null {
 }
 
 export function classifyEvent(
-  event: Event,
+  event: AnyEvent,
   state: { model?: string },
 ): FatalHit | null {
-  if (event.type === "session.error") {
-    const err = event.properties.error;
-    if (!err) return null;
-    if (err.name === "ProviderAuthError") {
-      return {
-        fatal: true,
-        reason: "auth",
-        provider: err.data.providerID,
-        error: err,
-      };
+  const e = event as { type: string; properties?: any; data?: any };
+  const props = e.properties ?? e.data;
+
+  // Message-based matching for runtime errors and provider errors
+  if (e.type === "session.error" || e.type === "session.execution.failed") {
+    const err = props?.error;
+    if (err) {
+      // ProviderAuthError OR provider.auth name
+      if (err.name === "ProviderAuthError" || err.name === "provider.auth") {
+        const provider =
+          err.data?.providerID ?? err.providerID ?? props?.providerID;
+        return {
+          fatal: true,
+          reason: "auth",
+          provider,
+          error: err,
+        };
+      }
+      if (err.name === "APIError" || err.type === "APIError") {
+        const data = err.data;
+        const statusCode = data?.statusCode ?? err.status;
+        if (statusCode === 401 || statusCode === 403) {
+          return { fatal: true, reason: "auth", error: err };
+        }
+        if (statusCode === 402) {
+          return { fatal: true, reason: "balance", error: err };
+        }
+        if (statusCode === 404) {
+          return { fatal: true, reason: "model_unavailable", error: err };
+        }
+      }
+      // Runtime-only field inspection for embedded message/response body
+      const data = err.data ?? err;
+      const text =
+        `${data?.message ?? err.message ?? ""} ${data?.responseBody ?? err.response?.body ?? ""}`.toLowerCase();
+      const reason = matchMessage(text);
+      if (reason) return { fatal: true, reason, error: err };
     }
-    if (err.name === "APIError") {
-      const data = err.data;
-      if (data.statusCode === 401 || data.statusCode === 403) {
-        return { fatal: true, reason: "auth", error: err };
-      }
-      if (data.statusCode === 402) {
-        return { fatal: true, reason: "balance", error: err };
-      }
-      if (data.statusCode === 404) {
-        return { fatal: true, reason: "model_unavailable", error: err };
-      }
+    // Fallback to reason/message on the event properties/data
+    if (props?.reason || props?.message) {
+      const text =
+        `${props?.reason ?? ""} ${props?.message ?? ""}`.toLowerCase();
+      const reason = matchMessage(text);
+      if (reason) return { fatal: true, reason, error: props };
     }
-    const data = (err as { data?: { message?: string; responseBody?: string } })
-      .data;
-    const text =
-      `${data?.message ?? ""} ${data?.responseBody ?? ""}`.toLowerCase();
-    const reason = matchMessage(text);
-    if (reason) return { fatal: true, reason, error: err };
     return null;
   }
 
-  if (event.type === "session.status") {
-    const status = event.properties.status;
-    if (status.type === "retry") {
-      const action = (status as { action?: { reason?: string } }).action;
+  if (e.type === "session.status") {
+    const status = props?.status;
+    if (status?.type === "retry") {
+      const action = status.action;
+      // account_rate_limit maps to balance
       if (action?.reason === "account_rate_limit") {
         return { fatal: true, reason: "balance", error: status.message };
       }
-      const reason = matchMessage(status.message.toLowerCase());
+      // Message-based matching…
+      const reason = matchMessage(String(status.message ?? "").toLowerCase());
       if (reason) return { fatal: true, reason, error: status.message };
       if (status.attempt >= 5) {
         return { fatal: true, reason: "retry_limit", error: status.message };
       }
     }
-  }
-
-  // OpenCode v2 events
-  if (event.type === "session.execution.failed") {
-    const properties = event.properties as any;
-    if (!properties) return null;
-    const error = properties.error;
-    if (error) {
-      if (error.name === "ProviderAuthError") {
-        return {
-          fatal: true,
-          reason: "auth",
-          provider: error.data?.providerID,
-          error: error,
-        };
-      }
-      if (error.name === "APIError") {
-        const data = error.data;
-        if (data?.statusCode === 401 || data?.statusCode === 403) {
-          return { fatal: true, reason: "auth", error: error };
-        }
-        if (data?.statusCode === 402) {
-          return { fatal: true, reason: "balance", error: error };
-        }
-        if (data?.statusCode === 404) {
-          return { fatal: true, reason: "model_unavailable", error: error };
-        }
-      }
-      const data = (error as { data?: { message?: string; responseBody?: string } })
-        .data;
-      const text =
-        `${data?.message ?? ""} ${data?.responseBody ?? ""}`.toLowerCase();
-      const reason = matchMessage(text);
-      if (reason) return { fatal: true, reason, error: error };
-    }
-    if (properties.reason || properties.message) {
-      const text = `${properties.reason ?? ""} ${properties.message ?? ""}`.toLowerCase();
-      const reason = matchMessage(text);
-      if (reason) return { fatal: true, reason, error: properties };
-    }
     return null;
   }
 
-  if (event.type === "session.step.failed") {
-    const properties = event.properties as any;
-    if (!properties) return null;
-    if (properties.reason || properties.message) {
-      const text = `${properties.reason ?? ""} ${properties.message ?? ""}`.toLowerCase();
+  if (e.type === "session.step.failed") {
+    const error = props?.error;
+    if (error) {
+      const data = error.data ?? error;
+      const text =
+        `${data?.message ?? error.message ?? ""} ${data?.responseBody ?? error.response?.body ?? ""}`.toLowerCase();
       const reason = matchMessage(text);
-      if (reason) return { fatal: true, reason, error: properties };
+      if (reason) return { fatal: true, reason, error };
+    }
+    if (props?.reason || props?.message) {
+      const text =
+        `${props?.reason ?? ""} ${props?.message ?? ""}`.toLowerCase();
+      const reason = matchMessage(text);
+      if (reason) return { fatal: true, reason, error: props };
     }
     return null;
   }

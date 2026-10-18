@@ -70,8 +70,7 @@ class TestDiscoverModels:
 
         assert error.value.returncode == 17
         assert captured["args"] == ["opencode", "models"]
-        assert captured["env"]["OPENCODE_DISABLE_DEFAULT_PLUGINS"] == "true"
-        assert "OPENCODE_CONFIG_CONTENT" in captured["env"]
+        assert captured["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugin":[]}'
 
     def test_debug_config_uses_plugin_safe_environment(self, monkeypatch):
         captured = {}
@@ -90,8 +89,7 @@ class TestDiscoverModels:
             },
             "openrouter": {"baseURL": "https://openrouter.ai/api/v1", "apiKey": None},
         }
-        assert captured["env"]["OPENCODE_DISABLE_DEFAULT_PLUGINS"] == "true"
-        assert "OPENCODE_CONFIG_CONTENT" in captured["env"]
+        assert captured["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugin":[]}'
 
     def test_discovers_models_per_provider(self, monkeypatch):
         captured = {}
@@ -111,8 +109,12 @@ class TestDiscoverModels:
             captured["full_url"] = request.full_url
             return FakeResponse()
 
+        def fake_run_env_check(args, *a, **kw):
+            captured["env"] = kw["env"]
+            return fake_run(args, *a, **kw)
+
         monkeypatch.setattr(model_availability.urllib.request, "urlopen", fake_urlopen)
-        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run_env_check)
         free_models, provider_models = model_availability.discover_models()
         assert free_models == ["opencode/a-free"]
         assert provider_models == {
@@ -124,6 +126,7 @@ class TestDiscoverModels:
         assert not any("Python-urllib" in v for v in captured["headers"].values())
         assert any(k.lower() == "x-opencode-session" for k in captured["headers"])
         assert captured["full_url"].endswith("/models")
+        assert captured["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugin":[]}'
 
     def test_endpoint_failure_per_provider(self, monkeypatch):
         def fail(request, timeout=30):
@@ -1032,8 +1035,7 @@ class TestProbeModelLogging:
 
         monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
         assert model_availability.probe_model("opencode/a-free", str(tmp_path))
-        assert captured["env"]["OPENCODE_DISABLE_DEFAULT_PLUGINS"] == "true"
-        assert "OPENCODE_CONFIG_CONTENT" in captured["env"]
+        assert captured["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugin":[]}'
 
     def test_writes_probe_log_with_stdout_and_stderr(self, tmp_path, monkeypatch):
         class FakeResult:
@@ -1243,12 +1245,12 @@ class TestModelAvailabilityAction:
         assert "auth.json" not in action
         assert "python3" in action
 
-    def test_standalone_opencode_workflow_exports_plugin_safe_environment(self):
+    def test_standalone_opencode_workflow_keeps_the_openai_catalog_available(self):
         workflow = (Path(__file__).parents[3] / ".github/workflows/refresh-chatgpt-auth.yml").read_text()
         validation = workflow[workflow.index("- name: Validate refreshed token with opencode") :]
-        # Updated for OpenCode v2 - no longer disable default plugins
+        # Keep OpenAI catalog available: do not disable default plugins; inject empty plugin list
         assert "OPENCODE_DISABLE_DEFAULT_PLUGINS" not in validation
-        assert "OPENCODE_CONFIG_CONTENT" not in validation
+        assert "OPENCODE_CONFIG_CONTENT: '{\"plugin\":[]}'" in validation
 
 
     def test_uses_fresh_cache_when_cli_discovery_is_unavailable(self, monkeypatch):

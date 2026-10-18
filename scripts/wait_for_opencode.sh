@@ -8,7 +8,7 @@ out="$(mktemp "${RUNNER_TEMP:-/tmp}/wait_for_opencode.XXXXXX")"
 trap 'rm -f "$out"' EXIT
 
 for i in $(seq 1 "$attempts"); do
-  if timeout 30 opencode models >"$out" 2>&1; then
+  if timeout 30 opencode models > "$out" 2>&1; then
     echo "OpenCode CLI ready after $i attempt(s)"
     exit 0
   fi

@@ -137,3 +137,5 @@ def test_selection_tail_keeps_contract_and_research_budget():
     assert "read each candidate at most once" in tail
     assert "stop investigating, even if undecided" in tail
     assert "choosing the best-so-far candidate" in tail
+    assert 'must not be cut by this budget' in tail
+    assert 'note the doubt inside the implementation prompt' in tail

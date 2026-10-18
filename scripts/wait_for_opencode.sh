@@ -5,7 +5,6 @@ set -Eeuo pipefail
 
 attempts="${1:-15}"
 out="$(mktemp "${RUNNER_TEMP:-/tmp}/wait_for_opencode.XXXXXX")"
-trap 'rm -f "$out"' EXIT
 
 for i in $(seq 1 "$attempts"); do
   if timeout 30 opencode models > "$out" 2>&1; then
@@ -15,5 +14,5 @@ for i in $(seq 1 "$attempts"); do
   sleep 2
 done
 echo "OpenCode CLI did not become ready after $attempts attempts; last probe output:" >&2
-tail -n 20 "$out" >&2
+cat "$out"
 exit 1

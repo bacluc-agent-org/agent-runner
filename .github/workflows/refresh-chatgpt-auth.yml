@@ -115,8 +115,10 @@ jobs:
           OPENAI_USERNAME: ${{ secrets.OPENAI_USERNAME }}
           OPENAI_PASSWORD: ${{ secrets.OPENAI_PASSWORD }}
           OPENAI_2FA_KEY: ${{ secrets.OPENAI_2FA_KEY }}
+          CHATGPT_DEBUG_DIR: ${{ runner.temp }}/chatgpt-auth-debug
         run: |
           set -Eeuo pipefail
+          uv run scripts/chatgpt-login.py stop
           set +e
           xvfb-run -a uv run scripts/chatgpt-login.py > "$RUNNER_TEMP/auth.json" 2> "$RUNNER_TEMP/chatgpt-login.stderr"
           status=$?
@@ -148,9 +150,11 @@ jobs:
           OPENAI_USERNAME: ${{ secrets.OPENAI_USERNAME }}
           OPENAI_PASSWORD: ${{ secrets.OPENAI_PASSWORD }}
           OPENAI_2FA_KEY: ${{ secrets.OPENAI_2FA_KEY }}
+          CHATGPT_DEBUG_DIR: ${{ runner.temp }}/chatgpt-auth-debug
         run: |
           set -Eeuo pipefail
           echo "Agent fallback: attempting login via primitives..."
+          uv run scripts/chatgpt-login.py stop
           stop_token="$(openssl rand -hex 32)"
           : "${stop_token:?stop-commands fence token generation failed}"
           printf '::stop-commands::%s\n' "$stop_token"
@@ -160,11 +164,18 @@ jobs:
           # the OAuth callback fires, so background it with its own xvfb display.
           xvfb-run -a uv run scripts/chatgpt-login.py start > "$start_log" 2>&1 &
           start_pid=$!
+          cleanup() {
+            uv run scripts/chatgpt-login.py stop || true
+            kill "$start_pid" 2>/dev/null || true
+            wait "$start_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
           boot_deadline=$((SECONDS + 60))
           budget_deadline=$((SECONDS + 180))
           while kill -0 "$start_pid" 2>/dev/null; do
             if ((SECONDS >= budget_deadline)); then
               printf 'primitives: budget exhausted, aborting start\n'
+              uv run scripts/chatgpt-login.py stop || true
               kill "$start_pid" 2>/dev/null || true
               break
             fi
@@ -192,6 +203,10 @@ jobs:
           start_status=$?
           set -e
           printf 'primitives: start exited %s\n' "$start_status"
+          trap - EXIT
+          if (( start_status != 0 )); then
+            uv run scripts/chatgpt-login.py stop || true
+          fi
           # Dump the (untrusted) start log while the stop-commands fence is open.
           # Only a failed start can log it: a successful start prints the auth
           # JSON, so drop that line too.
@@ -209,6 +224,15 @@ jobs:
           GH_TOKEN="$BACLUC_AGENT_GITHUB_TOKEN" gh secret set OPENCODE_AUTH_JSON --repo "$GITHUB_REPOSITORY" --body "$auth_json"
           touch "$RUNNER_TEMP/refresh-chatgpt-auth.ok"
           printf 'Auth refreshed via agent primitives\n'
+
+      - name: Upload ChatGPT auth debug artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: chatgpt-auth-debug-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/chatgpt-auth-debug/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Fail unless a path set the secret
         if: ${{ always() }}

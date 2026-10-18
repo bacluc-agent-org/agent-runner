@@ -1,6 +1,6 @@
 import { classifyEvent } from "../classify.ts";
-import type { Plugin } from "@opencode-ai/plugin";
 import type { Event } from "@opencode-ai/sdk";
+import type { Plugin } from "@opencode/plugin/promise/plugin";
 import { writeFileSync } from "node:fs";
 
 // .ts extension REQUIRED for Node type stripping
@@ -9,17 +9,29 @@ import { writeFileSync } from "node:fs";
 export function messageOf(error: unknown): string {
   if (typeof error === "string") return error;
   if (!error || typeof error !== "object") return "unknown";
-  const data = (
-    error as { data?: { message?: unknown; responseBody?: unknown } }
-  ).data;
-  const message = typeof data?.message === "string" ? data.message.trim() : "";
-  const body =
-    typeof data?.responseBody === "string" ? data.responseBody.trim() : "";
-  if (message && body) return `${message} | ${body}`;
-  if (message) return message;
-  if (body) return body;
   try {
-    return JSON.stringify(error) ?? "unknown";
+    const data = (error as any).data ?? error;
+    const message =
+      typeof data?.message === "string" ? data.message.trim() : "";
+    const body =
+      typeof data?.responseBody === "string" ? data.responseBody.trim() : "";
+    const body2 =
+      typeof data?.responseBody === "string"
+        ? ""
+        : typeof (error as any).response?.body === "string"
+          ? (error as any).response.body.trim()
+          : typeof data?.response?.body === "string"
+            ? data.response.body.trim()
+            : "";
+    const b = body || body2;
+    if (message && b) return `${message} | ${b}`;
+    if (message) return message;
+    if (b) return b;
+    try {
+      return JSON.stringify(error) ?? "unknown";
+    } catch {
+      return "unknown";
+    }
   } catch {
     return "unknown";
   }
@@ -27,34 +39,47 @@ export function messageOf(error: unknown): string {
 
 const plugin: Plugin = {
   id: "fatal-error-guard",
-  async setup({ context }) {
-    context.event(async ({ event }: { event: Event }) => {
-      const hit = classifyEvent(event, { model: process.env.MODEL });
-      if (!hit) return;
+  setup(context) {
+    const controller = new AbortController();
+    void (async () => {
+      for await (const event of context.event.subscribe({
+        signal: controller.signal,
+      })) {
+        const hit = classifyEvent(event as Event, {
+          model: process.env.MODEL,
+        });
+        if (!hit) continue;
 
-      const message = messageOf(hit.error);
-      console.error(`fatal provider error (${hit.reason}): ${message}`);
+        const message = messageOf(hit.error);
+        console.error(`fatal provider error (${hit.reason}): ${message}`);
 
-      const marker = {
-        reason: hit.reason,
-        model: process.env.MODEL ?? "unknown",
-        provider: hit.provider ?? "unknown",
-        sessionID:
-          (event as { properties?: { sessionID?: string } }).properties
-            ?.sessionID ?? "unknown",
-        error: hit.error ?? null,
-        message,
-        stage: process.env.OPENCODE_FATAL_STAGE ?? "unknown",
-        at: new Date().toISOString(),
-      };
+        const e = event as any;
+        const props = e.properties ?? e.data;
+        const sessionID =
+          props?.sessionID ?? e?.properties?.sessionID ?? "unknown";
 
-      const path = `${process.env.RUNNER_TEMP ?? "/tmp"}/opencode-fatal.json`;
-      try {
-        writeFileSync(path, JSON.stringify(marker));
-      } finally {
-        process.exit(1); // abort always happens even if the write throws
+        const marker = {
+          reason: hit.reason,
+          model: process.env.MODEL ?? "unknown",
+          provider: hit.provider ?? "unknown",
+          sessionID,
+          error: hit.error ?? null,
+          message,
+          stage: process.env.OPENCODE_FATAL_STAGE ?? "unknown",
+          at: new Date().toISOString(),
+        };
+
+        const path = `${process.env.RUNNER_TEMP ?? "/tmp"}/opencode-fatal.json`;
+        try {
+          writeFileSync(path, JSON.stringify(marker));
+        } finally {
+          process.exit(1);
+        }
       }
-    });
+    })().catch((e) =>
+      console.error("fatal-error-guard: event stream failed:", String(e)),
+    );
+    return () => controller.abort();
   },
 };
 

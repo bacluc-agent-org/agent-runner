@@ -295,10 +295,13 @@ def _capture_debug(page, stage: str, step: str, reason: str, errors=()) -> None:
             metadata["screenshot"] = screenshot.name
         elif page:
             try:
-                page.evaluate(_SCREENSHOT_REDACTION)
-                page.screenshot(path=str(screenshot), full_page=True)
-                screenshot.chmod(0o600)
-                metadata["screenshot"] = screenshot.name
+                if len(page.inner_text("body")) > 1200:
+                    metadata["screenshot_skipped"] = "page text exceeds safe capture limit"
+                else:
+                    page.evaluate(_SCREENSHOT_REDACTION)
+                    page.screenshot(path=str(screenshot))
+                    screenshot.chmod(0o600)
+                    metadata["screenshot"] = screenshot.name
             except Exception as error:
                 metadata["screenshot_error"] = type(error).__name__
         report = debug_dir / f"{label}.json"

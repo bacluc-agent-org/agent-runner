@@ -291,7 +291,9 @@ def _capture_debug(page, stage: str, step: str, reason: str, errors=()) -> None:
         }
         label = re.sub(r"[^a-zA-Z0-9_-]", "_", f"{stage}-{step}")[:80]
         screenshot = debug_dir / f"{label}.png"
-        if page and not screenshot.exists():
+        if screenshot.exists():
+            metadata["screenshot"] = screenshot.name
+        elif page:
             try:
                 page.evaluate(_SCREENSHOT_REDACTION)
                 page.screenshot(path=str(screenshot), full_page=True)

@@ -28,6 +28,9 @@ When you change files under `.github/`, `.opencode/`, or `AGENTS.md`, trigger on
 
 Agent-written PR descriptions must keep at most 4000 visible characters before any `<details>` fold; remaining detail must be moved into `<details>` folds.
 
+ALL TESTS MUST BE EXECUTED BY THE `scripts/completion-check` SCRIPT WHICH IS EXECUTED BY `ci.yaml` WORKLFOW.
+NEVER, NEVER ADD ANOTHER WORKFLOW THAT EXECUTED TESTS OR A WORKFLOW THAT JUST EXECUTES A SINGLE TEST SUITE.
+
 /completion-check-command
 
 ```bash

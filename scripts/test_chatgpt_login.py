@@ -21,6 +21,50 @@ def test_build_auth_json_shape():
     }
 
 
+def test_step_for_nested_consent_route():
+    assert chatgpt_login._step_for_path("/sign-in-with-chatgpt/codex/consent") == "consent"
+
+
+def test_debug_text_redacts_credentials_and_authorization_query(monkeypatch):
+    monkeypatch.setenv("OPENAI_PASSWORD", "private-password")
+    result = chatgpt_login._redact_debug_text(
+        "private-password user@example.com https://auth.openai.com/?code=private-code"
+    )
+    assert "private-password" not in result
+    assert "user@example.com" not in result
+    assert "private-code" not in result
+    assert "[redacted]" in result
+
+
+def test_stop_removes_stale_login_state(tmp_path, monkeypatch, capsys):
+    state_file = tmp_path / "state.json"
+    state_file.write_text("{}")
+    monkeypatch.setattr(chatgpt_login, "STATE_FILE", state_file)
+    assert chatgpt_login.cmd_stop() == 0
+    assert not state_file.exists()
+    assert "No active ChatGPT login session" in capsys.readouterr().out
+
+
+def test_debug_screenshot_skips_unusually_long_page_text(tmp_path, monkeypatch):
+    class Page:
+        url = "https://auth.openai.com/sign-in"
+
+        def title(self):
+            return "Sign in"
+
+        def inner_text(self, selector):
+            return "x" * 1201
+
+        def evaluate(self, script):
+            raise AssertionError("screenshot should be skipped")
+
+    monkeypatch.setenv("CHATGPT_DEBUG_DIR", str(tmp_path))
+    chatgpt_login._capture_debug(Page(), "browser", "authorize", "blocked")
+    report = json.loads((tmp_path / "browser-authorize.json").read_text())
+    assert report["screenshot_skipped"] == "page text exceeds safe capture limit"
+    assert not (tmp_path / "browser-authorize.png").exists()
+
+
 def test_build_auth_json_rejects_empty_access():
     with pytest.raises(ValueError):
         chatgpt_login.build_auth_json("", "ref", 1)

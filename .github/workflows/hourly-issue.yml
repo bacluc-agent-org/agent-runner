@@ -33,7 +33,10 @@ jobs:
     # claim leaks and the issue stays out of selection until a human unlabels it. Upgrade path:
     # timeout-based claims — encode the run id in the claim (agent-running:<run_id>) and treat a
     # claim whose run is no longer in-progress as expired at selection time.
-    runs-on: blacksmith-2vcpu-ubuntu-2404-arm
+    # GitHub-hosted ARM: the Blacksmith ARM runners stopped being assigned around
+    # 2026-10-16, so every scheduled select run sat queued until GitHub auto-cancelled
+    # it after 24h (see runs 39280890076, 39203239519, 39172744399).
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
     outputs:
       prompt: ${{ steps.pick.outputs.prompt }}
@@ -368,7 +371,7 @@ jobs:
     if: always() && needs.select.outputs.issue_number != ''
     permissions:
       issues: write
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04-arm
     env:
       GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
       ISSUE_REPOSITORY: ${{ vars.ISSUE_REPOSITORY || github.repository }}

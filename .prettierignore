@@ -4,7 +4,3 @@ __pycache__/
 .playwright-cli/
 # opencode generates .opencode/.gitignore at runtime (without trailing newline)
 .opencode/.gitignore
-.venv/
-.pytest_cache/
-scripts/chatgpt-login.py
-scripts/test_chatgpt_login.py

@@ -124,10 +124,20 @@ def test_workflow_uses_latest_commit_and_created_at_when_pr_has_no_commits():
     content = WORKFLOW.read_text()
     assert "--json number,createdAt,updatedAt,headRefName,state,title" in content
     assert "sort -t'|' -k4 -r" in content
-    assert 'gh api --paginate --slurp "repos/$pr_repo/pulls/$pr_number/commits" | jq -er --arg fallback "$pr_created"' in content
+    assert 'gh api --paginate --slurp "repos/$pr_repo/pulls/$pr_number/commits" 2>/dev/null' in content
+    assert 'pr_last_commit="${pr_last_commit:-$pr_created}"' in content
     assert '([.[][] | .commit.committer.date] | max) // $fallback' in content
     assert 'pr_last_commit_at:(' in content
     assert 'map(select(test("^[0-9]")))|max // null' in content
+
+
+def test_workflow_validates_selection_output_after_nonzero_opencode_exit():
+    # opencode run can exit nonzero after a complete, valid selection (run
+    # 39433644896); the workflow must validate the output instead of
+    # discarding it on the exit code alone.
+    content = WORKFLOW.read_text()
+    assert "opencode run exited %s; validating its output before dispatch" in content
+    assert "Selection failed (opencode=%s); not dispatching." not in content
 
 
 def test_selection_tail_keeps_contract_and_research_budget():

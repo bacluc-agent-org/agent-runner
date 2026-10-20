@@ -231,7 +231,12 @@ jobs:
                 pr_number="$(echo "$match" | cut -d'|' -f2 | tr -d '#')"
                 pr_created="$(echo "$match" | cut -d'|' -f3)"
                 pr_state="$(echo "$match" | cut -d'|' -f5)"
-                pr_last_commit="$(gh api --paginate --slurp "repos/$pr_repo/pulls/$pr_number/commits" | jq -er --arg fallback "$pr_created" '([.[][] | .commit.committer.date] | max) // $fallback')"
+                # Guarded: a transient gh failure here (rate limit, network) must
+                # not kill the whole pick step under pipefail; fall back to the
+                # PR creation date.
+                pr_last_commit="$(gh api --paginate --slurp "repos/$pr_repo/pulls/$pr_number/commits" 2>/dev/null \
+                  | jq -er --arg fallback "$pr_created" '([.[][] | .commit.committer.date] | max) // $fallback' 2>/dev/null || true)"
+                pr_last_commit="${pr_last_commit:-$pr_created}"
                 case "$pr_state" in
                   MERGED) pr_info="merged #${pr_number} last-commit:${pr_last_commit}" ;;
                   CLOSED) pr_info="closed #${pr_number} last-commit:${pr_last_commit}" ;;
@@ -274,9 +279,11 @@ jobs:
             exit "$selection_tee_status"
           fi
           if (( selection_status != 0 )); then
-            printf 'Selection failed (opencode=%s); not dispatching.\n' "$selection_status" >&2
-            ((selection_status == 124)) && printf '::error::issue selection exceeded the %sm limit (opencode exit %s)\n' "$SELECTION_TIMEOUT_MINUTES" "$selection_status"
-            exit 1
+            # opencode run can exit nonzero after printing a complete, valid
+            # selection (transient provider errors mid-session, e.g. run
+            # 39433644896: exit 1 with a perfect SELECTED_ISSUE line). Do not
+            # discard the output here; the output-contract validation below decides.
+            printf '::warning::opencode run exited %s; validating its output before dispatch\n' "$selection_status" >&2
           fi
           if ! grep -q '[^[:space:]]' "$selection"; then
             printf '%s\n' 'Selection produced no output; not dispatching.' >&2

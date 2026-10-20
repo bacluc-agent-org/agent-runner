@@ -49,9 +49,13 @@ check() {
 
 check 'formatting (prettier --check .)' docker run --rm "${mount[@]}" "ghcr.io/bacluc/prettier-image/prettier-image:${PRETTIER_VERSION}" --ignore-path "$prettier_ignore" --check .
 check 'actionlint (workflows + used actions)' docker run --rm "${mount[@]}" "rhysd/actionlint:${ACTIONLINT_VERSION}" -color
-if [[ ! -d .opencode/node_modules/@opencode-ai/plugin ]]; then
-  check 'opencode node dependencies (npm install)' npm install --prefix .opencode
+# npm install does not repair a half-finished install whose package version already
+# matches (dist files can still be missing, breaking the tool tests with
+# ERR_MODULE_NOT_FOUND), so remove a tree without the entry file before installing.
+if [[ ! -f .opencode/node_modules/@opencode-ai/plugin/dist/index.js ]]; then
+  rm -rf .opencode/node_modules
 fi
+check 'opencode node dependencies (npm install)' npm install --prefix .opencode
 check 'opencode plugin tests (node --test)' node --test ".opencode/plugin/*.test.mjs"
 check 'opencode tool tests (node --test)' node --test ".opencode/tool/*.test.mjs"
 if command -v uv > /dev/null 2>&1; then

@@ -1,4 +1,6 @@
 .venv/
 .pytest_cache/
+.opencode/node_modules/
+.opencode/package-lock.json
 __pycache__/
 loop-metrics.json

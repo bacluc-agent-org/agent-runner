@@ -92,7 +92,7 @@ class CliWrapperTest(unittest.TestCase):
         self.call(["pr", "create", "-R", "ecamp/ecamp3", "--base", "devel", "--head",
                    "bacluc-agent:issue-221-move-doctrine-validate-to-required-ci"], False)
         for command in ("create", "new"):
-            for repo in ("BacLuc/r", "BaClUc-AgEnT/r", "github.com/BacLuc/r", "https://github.com/BacLuc/r"):
+            for repo in ("BacLuc/r", "BaClUc-AgEnT/r", "bacluc-agent-org/r", "github.com/BacLuc/r", "https://github.com/BacLuc/r"):
                 for flags in (["-R", repo], ["-R" + repo], ["-R=" + repo], ["--repo", repo], ["--repo=" + repo]):
                     self.call(["pr", command, *flags, "--title", "--repo=outsider/r", "--body", "-Rbad/r"])
             for flags in ([], ["-R", "outsider/r"], ["-R", "BacLuc-evil/r"],

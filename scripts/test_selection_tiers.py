@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from subprocess import run
 from tempfile import TemporaryDirectory
@@ -137,5 +138,136 @@ def test_selection_tail_keeps_contract_and_research_budget():
     assert "read each candidate at most once" in tail
     assert "stop investigating, even if undecided" in tail
     assert "choosing the best-so-far candidate" in tail
-    assert 'must not be cut by this budget' in tail
+    assert "fields are precomputed" in tail
+    assert "at most one extra gh lookup for the finalized candidate" in tail
+    assert "no cloning" in tail
+    assert "no state-changing git" in tail
+    assert "research via gh and webfetch only" in tail
     assert 'note the doubt inside the implementation prompt' in tail
+
+
+def test_issue_selector_prompt_pins_precomputed_dedup_and_tool_budget():
+    selector = (Path(__file__).parents[1] / ".opencode/agent/issue-selector.md").read_text()
+    assert "stamped the result into every candidate line" in selector
+    assert "do not repeat the batched lookups" in selector
+    assert "ONE targeted lookup" in selector
+    assert "never clone repositories" in selector
+    assert "state-changing git commands" in selector
+    assert "12 tool calls" in selector
+
+
+def _pick_decision_block():
+    text = WORKFLOW.read_text()
+    return text[text.index("# pick-decision-start") : text.index("# pick-decision-end")]
+
+
+def _run_pick_decision(tmp_path, selection_text, candidates_text="42\n", status=0, tee_status=0, fatal=False):
+    (tmp_path / "selection.out").write_text(selection_text)
+    (tmp_path / "candidate-numbers.txt").write_text(candidates_text)
+    if fatal:
+        (tmp_path / "opencode-fatal.json").write_text('{"reason": "balance", "model": "opencode/big-pickle"}')
+    script = (
+        'selection="$RUNNER_TEMP/selection.out"\n'
+        'candidates="$RUNNER_TEMP/candidate-numbers.txt"\n'
+        'stop_token="pick-decision-test-token"\n'
+        f"selection_status={status}\n"
+        f"selection_tee_status={tee_status}\n"
+        "SELECTION_TIMEOUT_MINUTES=10\n"
+        f"{_pick_decision_block()}\n"
+        "printf 'REACHED issue=%s' \"$issue_number\"\n"
+    )
+    return run(["bash", "-Eeuo", "pipefail", "-c", script], env={**os.environ, "RUNNER_TEMP": str(tmp_path)}, capture_output=True, text=True)
+
+
+class TestPickDecisionBlock:
+    VALID = "Implementation prompt body\nSELECTED_ISSUE: 42\n"
+    PROSE = "I meant to pick an issue but forgot the marker line\nrandom prose\n"
+
+    def test_valid_pick_dispatches_despite_nonzero_opencode_status(self, tmp_path):
+        result = _run_pick_decision(tmp_path, self.VALID, status=1)
+        assert result.returncode == 0, result.stderr
+        assert "REACHED issue=42" in result.stdout
+        assert "::warning::opencode run exited 1; validating its output before dispatch" in result.stdout + result.stderr
+
+    def test_fatal_marker_rejects_a_valid_pick(self, tmp_path):
+        result = _run_pick_decision(tmp_path, self.VALID, fatal=True)
+        assert result.returncode == 1
+        assert "Fatal provider error recorded during selection; not dispatching." in result.stdout + result.stderr
+        assert "REACHED" not in result.stdout
+
+    def test_empty_output_is_rejected_before_the_fatal_marker(self, tmp_path):
+        result = _run_pick_decision(tmp_path, "\n   \n", fatal=True)
+        assert result.returncode == 1
+        combined = result.stdout + result.stderr
+        assert "Selection produced no output; not dispatching." in combined
+        assert "Fatal provider error recorded" not in combined
+
+    def test_prose_without_selected_issue_prints_output_tail_diagnostics(self, tmp_path):
+        result = _run_pick_decision(tmp_path, self.PROSE)
+        assert result.returncode == 1
+        combined = result.stdout + result.stderr
+        assert "missing or invalid SELECTED_ISSUE" in combined
+        assert "random prose" in combined
+
+    def test_selected_issue_outside_the_candidates_is_rejected(self, tmp_path):
+        result = _run_pick_decision(tmp_path, "picks\nSELECTED_ISSUE: 999\n")
+        assert result.returncode == 1
+        assert "missing or invalid SELECTED_ISSUE" in result.stdout + result.stderr
+
+    def test_timeout_status_with_prose_emits_the_timeout_annotation(self, tmp_path):
+        result = _run_pick_decision(tmp_path, self.PROSE, status=124)
+        assert result.returncode == 1
+        assert "::error::issue selection exceeded the 10m limit (opencode exit 124)" in result.stdout + result.stderr
+
+    def test_tee_failure_exits_with_the_tee_status(self, tmp_path):
+        result = _run_pick_decision(tmp_path, self.VALID, tee_status=3)
+        assert result.returncode == 3
+
+    def test_workflow_warns_instead_of_aborting_on_nonzero_opencode_exit(self):
+        content = WORKFLOW.read_text()
+        assert "::warning::opencode run exited %s; validating its output before dispatch" in content
+        assert "Selection failed (opencode=%s); not dispatching." not in content
+
+
+def _gh_retry_function():
+    content = WORKFLOW.read_text()
+    start = content.index("gh_retry() {")
+    end = content.index("\n          }\n", start) + len("\n          }\n")
+    return content[start:end]
+
+
+def _run_gh_retry(tmp_path, succeed_at):
+    calls = tmp_path / "gh-calls.txt"
+    script = (
+        f"calls_file={str(calls)!r}\n"
+        f"SUCCEED_AT={succeed_at}\n"
+        "gh() {\n"
+        "  printf 'call\\n' >> \"$calls_file\"\n"
+        "  n=$(($(wc -l < \"$calls_file\")))\n"
+        "  if (( n < SUCCEED_AT )); then return 1; fi\n"
+        "  printf 'payload-%s\\n' \"$n\"\n"
+        "}\n"
+        "sleep() { :; }\n"
+        f"{_gh_retry_function()}\n"
+        "gh_retry gh api test\n"
+    )
+    result = run(["bash", "-Eeuo", "pipefail", "-c", script], capture_output=True, text=True)
+    return result, len(calls.read_text().splitlines()) if calls.exists() else 0
+
+
+def test_workflow_retries_the_three_transient_gh_calls():
+    content = WORKFLOW.read_text()
+    assert content.count("gh_retry gh api") >= 3
+
+
+def test_gh_retry_succeeds_on_the_third_attempt(tmp_path):
+    result, calls = _run_gh_retry(tmp_path, succeed_at=3)
+    assert result.returncode == 0, result.stderr
+    assert "payload-3" in result.stdout
+    assert calls == 3
+
+
+def test_gh_retry_gives_up_after_exactly_three_attempts(tmp_path):
+    result, calls = _run_gh_retry(tmp_path, succeed_at=10**9)
+    assert result.returncode != 0
+    assert calls == 3

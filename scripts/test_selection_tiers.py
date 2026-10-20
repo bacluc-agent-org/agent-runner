@@ -136,6 +136,7 @@ def test_selection_tail_keeps_contract_and_research_budget():
     assert "End with the exact final line: SELECTED_ISSUE: <number>" in tail
     assert "No text may follow that line." in tail
     assert "read each candidate at most once" in tail
+    assert "12 tool calls" in tail
     assert "stop investigating, even if undecided" in tail
     assert "choosing the best-so-far candidate" in tail
     assert "fields are precomputed" in tail
@@ -207,7 +208,10 @@ class TestPickDecisionBlock:
         assert result.returncode == 1
         combined = result.stdout + result.stderr
         assert "missing or invalid SELECTED_ISSUE" in combined
-        assert "random prose" in combined
+        open_fence = combined.index("::stop-commands::pick-decision-test-token")
+        tail_at = combined.index("random prose")
+        close_fence = combined.index("::pick-decision-test-token::")
+        assert open_fence < tail_at < close_fence
 
     def test_selected_issue_outside_the_candidates_is_rejected(self, tmp_path):
         result = _run_pick_decision(tmp_path, "picks\nSELECTED_ISSUE: 999\n")

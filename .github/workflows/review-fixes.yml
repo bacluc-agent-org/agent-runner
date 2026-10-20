@@ -95,10 +95,6 @@ jobs:
             exit 0
           fi
 
-          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
-            unique_prs=("${unique_prs[0]}")
-          fi
-
           printf 'Found %d open PR(s) with review comments: %s\n' \
             "${#unique_prs[@]}" "${unique_prs[*]}"
 
@@ -111,12 +107,17 @@ jobs:
               printf 'Skipping PR %s: gh pr view failed\n' "$pr_key" >&2
               continue
             }
+            head_ref=$(jq -r '.headRefName' <<<"$pr_info")
+            if [[ "$GITHUB_EVENT_NAME" == push && "$head_ref" != "$GITHUB_REF_NAME" ]]; then
+              printf 'Skipping PR %s: head branch %s does not match pushed branch %s\n' \
+                "$pr_key" "$head_ref" "$GITHUB_REF_NAME" >&2
+              continue
+            fi
             viewed_prs+=("$pr_key")
             if [[ -n "${OVERRIDE_PROMPT:-}" ]]; then
               prompt="$OVERRIDE_PROMPT"
             else
               title=$(jq -r '.title' <<<"$pr_info")
-              head_ref=$(jq -r '.headRefName' <<<"$pr_info")
               url=$(jq -r '.url' <<<"$pr_info")
               prompt=$(printf '%s\n' \
                 "PR #${pr_number}: ${title}" \

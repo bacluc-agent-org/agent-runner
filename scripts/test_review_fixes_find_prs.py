@@ -10,7 +10,7 @@ set -Eeuo pipefail
 if [[ "$1" == api ]]; then
   printf '%s\\n' "$STUB_PRS"
 elif [[ "$1" == pr && "$2" == view ]]; then
-  jq -r --arg n "$3" 'to_entries[] | select(.value.number == ($n | tonumber)) | .value' "$STUB_METADATA"
+  jq -r --arg key "$5#$3" '.[$key]' "$STUB_METADATA"
 else
   echo "unexpected gh call: $*" >&2
   exit 1
@@ -49,6 +49,8 @@ def run_find_prs(tmp_path, event, ref, metadata):
         "GITHUB_OUTPUT": str(output),
         "GITHUB_EVENT_NAME": event,
         "GITHUB_REF_NAME": ref,
+        "GITHUB_REF": f"refs/heads/{ref}",
+        "GITHUB_REPOSITORY": "example/repo",
         "SEARCH_OWNER": "bacluc-agent",
         "OVERRIDE_PROMPT": "",
         "RUNNER_TEMP": str(tmp_path),
@@ -70,12 +72,12 @@ def run_find_prs(tmp_path, event, ref, metadata):
     return result, prs, count, text
 
 
-def pr(number, head):
+def pr(number, head, repo="example/repo"):
     return {
         "number": number,
         "title": f"PR {number}",
         "headRefName": head,
-        "url": f"https://github.com/example/repo/pull/{number}",
+        "url": f"https://github.com/{repo}/pull/{number}",
     }
 
 
@@ -90,6 +92,21 @@ def test_push_dispatches_only_matching_branch(tmp_path):
     assert count == 1
     assert "example/repo#2" in text
     assert "Skipping PR example/repo#1: head branch unrelated-branch" in result.stderr
+
+
+def test_push_skips_same_branch_in_other_repository(tmp_path):
+    metadata = {
+        "example/repo#2": TARGET,
+        "other/repo#3": pr(3, "feature-branch", repo="other/repo"),
+    }
+    result, prs, count, text = run_find_prs(tmp_path, "push", "feature-branch", metadata)
+    assert prs == ["example/repo#2"]
+    assert count == 1
+    assert "Skipping PR other/repo#3: repository other/repo" in result.stderr
+    metadata_out = json.loads(
+        re.search(r"pr_metadata<<META_EOF\n(.*?)\nMETA_EOF", text, re.S).group(1)
+    )
+    assert sorted(metadata_out) == prs
 
 
 def test_push_without_matching_branch_dispatches_nothing(tmp_path):

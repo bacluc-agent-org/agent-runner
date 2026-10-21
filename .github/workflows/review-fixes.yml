@@ -107,6 +107,11 @@ jobs:
               printf 'Skipping PR %s: gh pr view failed\n' "$pr_key" >&2
               continue
             }
+            if [[ "$GITHUB_EVENT_NAME" == push && "$repo" != "$GITHUB_REPOSITORY" ]]; then
+              printf 'Skipping PR %s: repository %s does not match pushed repository %s\n' \
+                "$pr_key" "$repo" "$GITHUB_REPOSITORY" >&2
+              continue
+            fi
             head_ref=$(jq -r '.headRefName' <<<"$pr_info")
             if [[ "$GITHUB_EVENT_NAME" == push && "$head_ref" != "$GITHUB_REF_NAME" ]]; then
               printf 'Skipping PR %s: head branch %s does not match pushed branch %s\n' \

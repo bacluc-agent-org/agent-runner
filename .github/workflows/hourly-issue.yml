@@ -1,3 +1,4 @@
+# issue-16-pass-2026-10-21: 2-run cancellation/timeout gate observed 2026-10-19..20 (see evidence/pass-2026-10-21-runs.md)
 name: Hourly issue runner
 
 on:

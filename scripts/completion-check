@@ -49,7 +49,22 @@ check() {
 
 check 'formatting (prettier --check .)' docker run --rm "${mount[@]}" "ghcr.io/bacluc/prettier-image/prettier-image:${PRETTIER_VERSION}" --ignore-path "$prettier_ignore" --check .
 check 'actionlint (workflows + used actions)' docker run --rm "${mount[@]}" "rhysd/actionlint:${ACTIONLINT_VERSION}" -color
-if [[ ! -d .opencode/node_modules/@opencode-ai/plugin ]]; then
+# OpenCode installs .opencode/node_modules when it starts, so the directory can
+# already exist while npm is still extracting the packages. Skip the install
+# only when the plugin package really loads; otherwise wait for the running
+# install to finish and repair the tree when it is still broken.
+plugin_loads() {
+  (cd .opencode && node --input-type=module -e "await import('@opencode-ai/plugin')" > /dev/null 2>&1)
+}
+if [[ -d .opencode/node_modules/@opencode-ai/plugin ]] && ! plugin_loads; then
+  for _ in $(seq 1 30); do
+    if plugin_loads; then break; fi
+    sleep 2
+  done
+fi
+if ! plugin_loads; then
+  # npm keeps a package that is already present, so remove it to get a clean extraction
+  rm -rf .opencode/node_modules/@opencode-ai/plugin
   check 'opencode node dependencies (npm install)' npm install --prefix .opencode
 fi
 check 'opencode plugin tests (node --test)' node --test ".opencode/plugin/*.test.mjs"

@@ -135,8 +135,12 @@ def parse_go_model_ids(models_json: str) -> list[str]:
         return []
 
 
-def load_provider_options() -> dict[str, dict[str, str | None]]:
-    """{provider: {"baseURL": str, "apiKey": str | None}} from `opencode debug config`."""
+def opencode_config_sources() -> list:
+    """Raw sources list from `opencode debug config`; [] with a warning on failure.
+
+    The debug output masks provider apiKey values (\"***\") and its info shape
+    varies between versions, so it is only used to discover config file paths.
+    """
     tmp_path = None
     try:
         # `opencode debug config` truncates stdout at 65536 bytes when stdout is a
@@ -152,41 +156,112 @@ def load_provider_options() -> dict[str, dict[str, str | None]]:
                 env=opencode_env(),
             )
         with open(tmp_path, encoding="utf-8") as fh:
-            config = json.load(fh)
+            sources = json.load(fh)
     except Exception as e:
-        print(f"warning: failed to read opencode config: {e}", file=sys.stderr)
-        return {}
+        print(f"warning: failed to read opencode config sources: {e}", file=sys.stderr)
+        return []
     finally:
         if tmp_path is not None:
             try:
                 os.unlink(tmp_path)
             except OSError:
                 pass
-    providers = config.get("provider", {}) if isinstance(config, dict) else {}
-    if not isinstance(providers, dict):
+    if not isinstance(sources, list):
+        print("warning: unexpected opencode config sources shape", file=sys.stderr)
+        return []
+    return sources
+
+
+def strip_jsonc_comments(text: str) -> str:
+    """Remove // and /* */ comments outside strings; preserves URL // inside string values."""
+    out = []
+    index = 0
+    length = len(text)
+    in_string = False
+    while index < length:
+        char = text[index]
+        if in_string:
+            out.append(char)
+            if char == "\\" and index + 1 < length:
+                out.append(text[index + 1])
+                index += 2
+                continue
+            if char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            out.append(char)
+            index += 1
+            continue
+        if char == "/" and index + 1 < length and text[index + 1] == "/":
+            while index < length and text[index] != "\n":
+                index += 1
+            continue
+        if char == "/" and index + 1 < length and text[index + 1] == "*":
+            index += 2
+            while index + 1 < length and not (text[index] == "*" and text[index + 1] == "/"):
+                index += 1
+            index += 2
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def parse_jsonc(text: str) -> dict | None:
+    """Lenient JSONC parsing: comments stripped + trailing commas removed."""
+    body = re.sub(r",\s*([}\]])", r"\1", strip_jsonc_comments(text))
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def load_provider_options(config_sources=None) -> dict[str, dict[str, str | None]]:
+    """{provider: {"baseURL": str, "apiKey": str | None}} parsed from the raw config
+    files listed by `opencode debug config`; later sources override earlier ones.
+
+    shortcut: precedence direction (later source wins) is assumed from source list
+    order (global → untracked → project); unverified against opencode's merger.
+    """
+    if config_sources is None:
+        config_sources = [
+            item.get("path")
+            for item in opencode_config_sources()
+            if isinstance(item, dict)
+            and isinstance(item.get("path"), str)
+            and item["path"].endswith((".json", ".jsonc"))
+            and os.path.isfile(item["path"])
+        ]
+    if not config_sources:
+        print("warning: no readable opencode config files found", file=sys.stderr)
         return {}
     result = {}
-    for name, provider in providers.items():
-        if not isinstance(provider, dict):
+    for path in config_sources:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                text = handle.read()
+        except OSError as e:
+            print(f"warning: failed to read opencode config file {path}: {e}", file=sys.stderr)
             continue
-        options = provider.get("options", {})
-        if not isinstance(options, dict):
+        parsed = parse_jsonc(text)
+        if parsed is None:
+            print(f"warning: failed to parse opencode config file {path}", file=sys.stderr)
             continue
-        result[name] = {"baseURL": options.get("baseURL"), "apiKey": options.get("apiKey")}
+        providers = parsed.get("provider")
+        if not isinstance(providers, dict):
+            continue
+        for name, provider in providers.items():
+            if not isinstance(provider, dict):
+                continue
+            options = provider.get("options")
+            if not isinstance(options, dict):
+                continue
+            result[name] = {"baseURL": options.get("baseURL"), "apiKey": options.get("apiKey")}
     return result
-
-
-def provider_auth_path() -> str:
-    return os.path.expanduser(AUTH_FILE)
-
-
-def load_provider_base_urls() -> dict[str, str]:
-    """Run `opencode debug config`, return {provider_id: baseURL} for providers with a baseURL."""
-    return {
-        name: info["baseURL"]
-        for name, info in load_provider_options().items()
-        if info["baseURL"]
-    }
 
 
 def resolve_provider_api_key(api_key_field, env: dict) -> str | None:

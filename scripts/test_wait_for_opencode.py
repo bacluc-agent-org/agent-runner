@@ -90,6 +90,7 @@ def test_surfaces_plugin_install_errors_but_not_the_rest_of_the_log(tmp_path):
         'timestamp=x level=WARN message="failed to load plugin" '
         'target=opencode-auto-resume@1.1.21 cause="Cause([Fail(PluginModule.LoadError: bad default export)])"\n'
         'timestamp=x level=INFO message="spawning process" args="SECRET-AGENT-PROMPT"\n'
+        'timestamp=x level=INFO message="spawning process" args="grep failed to load plugin.*NpmInstallFailedError SECRET-ARGS-MARKER"\n'
         'timestamp=x level=WARN message="failed to load plugin" '
         'target=@dietrichgebert/ponytail@5.3.2 cause="Cause([Fail(NpmInstallFailedError '
         '(cause: TypeError [ERR_INVALID_PROTOCOL]))])"\n'
@@ -99,4 +100,5 @@ def test_surfaces_plugin_install_errors_but_not_the_rest_of_the_log(tmp_path):
     assert "NpmInstallFailedError" in result.stderr
     assert "ERR_INVALID_PROTOCOL" in result.stderr
     assert "SECRET-AGENT-PROMPT" not in result.stderr
+    assert "SECRET-ARGS-MARKER" not in result.stderr
     assert "PluginModule.LoadError" not in result.stderr

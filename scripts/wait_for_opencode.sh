@@ -34,7 +34,7 @@ echo "OpenCode CLI did not become ready within ${deadline_seconds}s after $attem
 cat "$out"
 # Only npm-install failures: the service log also contains agent prompts and commands.
 if [[ -f $plugin_log ]]; then
-  install_errors="$(tail -n 2000 "$plugin_log" | grep -a -E 'failed to load plugin.*NpmInstallFailedError' | tail -n 3 | cut -c1-400 || true)"
+  install_errors="$(tail -n 2000 "$plugin_log" | grep -a -E 'message="failed to load plugin".*NpmInstallFailedError' | tail -n 3 | cut -b1-400 || true)"
   if [[ -n $install_errors ]]; then
     echo "OpenCode plugin install errors from ${plugin_log}:" >&2
     printf '%s\n' "$install_errors" >&2

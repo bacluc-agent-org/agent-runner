@@ -429,6 +429,14 @@ def merge_results(cache: dict, results: dict[str, bool], checked: str) -> dict:
     return merged
 
 
+def purge_disallowed_entries(cache: dict) -> dict:
+    return {
+        key: entry
+        for key, entry in cache.items()
+        if key.partition("/")[0] in ALLOWED_PROVIDER_PREFIXES
+    }
+
+
 def available_models(
     cache: dict, whitelisted_models: list[str], provider_models: dict[str, list[str]]
 ) -> list[str]:
@@ -477,7 +485,7 @@ def main() -> int:
             raise
         whitelisted_models = [
             model
-            for model, entry in cache.items()
+            for model, entry in purge_disallowed_entries(cache).items()
             if isinstance(entry, dict) and entry.get("ok") is True and is_cache_fresh(entry, now)
         ]
         if not whitelisted_models:
@@ -507,6 +515,7 @@ def main() -> int:
     if cache_issue is not None:
         cache = read_cache(cache_issue) or cache
     cache = merge_results(cache, results, checked)
+    cache = purge_disallowed_entries(cache)
     if cache_issue is not None:
         write_cache(cache_issue, cache)
     available = available_models(cache, whitelisted_models, provider_models)

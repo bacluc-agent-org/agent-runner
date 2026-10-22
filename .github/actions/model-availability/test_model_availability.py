@@ -836,6 +836,27 @@ class TestMergeResults:
         }
 
 
+class TestPurgeDisallowedEntries:
+    def test_keeps_allowed_prefixes_and_drops_disallowed(self):
+        checked = "2026-09-06T10:00:00Z"
+        cache = {
+            "opencode/big-pickle": {"ok": True, "checked": checked},
+            "openrouter/z-ai/glm-5.3": {"ok": False, "checked": checked},
+            "openai/gpt-x": {"ok": True, "checked": checked},
+            "opencode-go-openai/qwen3.8-flash": {"ok": True, "checked": checked},
+            "vshn-us-ai/subscription.glm-5.3-flash": {"ok": True, "checked": checked},
+            "requesty2/free-model": {"ok": True, "checked": checked},
+            "cortecs2/glm-5.1": {"ok": False, "checked": checked},
+            "no-slash-model": {"ok": True, "checked": checked},
+        }
+        assert model_availability.purge_disallowed_entries(cache) == {
+            "opencode/big-pickle": {"ok": True, "checked": checked},
+            "openrouter/z-ai/glm-5.3": {"ok": False, "checked": checked},
+            "openai/gpt-x": {"ok": True, "checked": checked},
+            "opencode-go-openai/qwen3.8-flash": {"ok": True, "checked": checked},
+        }
+
+
 class TestAvailableModels:
     def test_free_first_then_paid(self):
         cache = {
@@ -1279,7 +1300,10 @@ class TestModelAvailabilityAction:
 
     def test_uses_fresh_cache_when_cli_discovery_is_unavailable(self, monkeypatch):
         checked = datetime.now(timezone.utc).isoformat()
-        cache = {"opencode/a-free": {"ok": True, "checked": checked}}
+        cache = {
+            "opencode/a-free": {"ok": True, "checked": checked},
+            "vshn-us-ai/subscription.glm-5.3-flash": {"ok": True, "checked": checked},
+        }
         monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: "49")
         monkeypatch.setattr(model_availability, "read_cache", lambda _: cache)
         monkeypatch.setattr(
@@ -1292,12 +1316,17 @@ class TestModelAvailabilityAction:
             ),
         )
         monkeypatch.setattr(model_availability, "probe_candidates", lambda *args: pytest.fail())
-        monkeypatch.setattr(model_availability, "write_cache", lambda *args: None)
+        written = []
+        monkeypatch.setattr(
+            model_availability, "write_cache", lambda *args: written.append(args)
+        )
         outputs = []
         monkeypatch.setattr(model_availability, "write_outputs", lambda *args: outputs.append(args))
 
         assert model_availability.main() == 0
         assert outputs[0][2] == ["opencode/a-free"]
+        assert "vshn-us-ai/subscription.glm-5.3-flash" not in outputs[0][1]
+        assert "vshn-us-ai/subscription.glm-5.3-flash" not in written[0][1]
 
     def test_prints_fresh_cache_summary_without_probing(self, monkeypatch, capsys):
         monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: None)

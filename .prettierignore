@@ -4,3 +4,4 @@ __pycache__/
 .playwright-cli/
 # opencode generates .opencode/.gitignore at runtime (without trailing newline)
 .opencode/.gitignore
+.opencode/node_modules/zod

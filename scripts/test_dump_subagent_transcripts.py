@@ -144,7 +144,7 @@ class TestMain:
         }
 
         def fake_run_opencode(*args):
-            if args[0] == "session":
+            if args[:2] == ("session", "list"):
                 return sessions
             return json.dumps(root_export)
 
@@ -222,9 +222,9 @@ class TestMain:
         exports = {"ses_root": root_export, "ses_child1": child_export}
 
         def fake_run_opencode(*args):
-            if args[0] == "session":
+            if args[:2] == ("session", "list"):
                 return sessions
-            return json.dumps(exports[args[1]])
+            return json.dumps(exports[args[2]])
 
         def fake_run_opencode_to_file(*args, path: str):
             with open(path, "w") as f:
@@ -258,7 +258,7 @@ class TestMain:
         sessions = json.dumps([{"id": "ses_root", "title": "coordinator-run"}])
 
         def fake_run_opencode(*args):
-            if args[0] == "session":
+            if args[:2] == ("session", "list"):
                 return sessions
             raise subprocess.CalledProcessError(1, args)
 
@@ -287,10 +287,10 @@ class TestRunOpencode:
             return SimpleNamespace(stdout="out")
 
         monkeypatch.setattr(dump_subagent_transcripts.subprocess, "run", fake_run)
-        assert dump_subagent_transcripts.run_opencode("export", "ses_x") == "out"
+        assert dump_subagent_transcripts.run_opencode("session", "export", "ses_x") == "out"
         assert len(calls) == 1
         command, kwargs = calls[0]
-        assert command == ["opencode", "export", "ses_x"]
+        assert command == ["opencode", "session", "export", "ses_x"]
         assert kwargs["check"] is True
         assert kwargs["capture_output"] is True
         assert kwargs["text"] is True
@@ -305,6 +305,27 @@ class TestRunOpencode:
 
 
 class TestRegression189:
+    def test_main_exports_root_session_with_v2_syntax(self, monkeypatch, capsys):
+        monkeypatch.setenv("COORDINATOR_SESSION_TITLE", "coordinator-run")
+        monkeypatch.setattr(
+            dump_subagent_transcripts,
+            "run_opencode",
+            lambda *args: json.dumps([{"id": "ses_root", "title": "coordinator-run"}]),
+        )
+        export_calls = []
+
+        def fake_run_opencode_to_file(*args, path: str):
+            export_calls.append(args)
+            with open(path, "w") as f:
+                f.write('{"info": {}, "messages": []}')
+
+        monkeypatch.setattr(
+            dump_subagent_transcripts, "run_opencode_to_file", fake_run_opencode_to_file
+        )
+        assert dump_subagent_transcripts.main() == 0
+        assert export_calls == [("session", "export", "ses_root")]
+
+
     def test_run_opencode_to_file_writes_non_empty_output(self, monkeypatch, tmp_path):
         # Regression check for PR #17 / issue #189: run_opencode_to_file must write output
         def fake_run(command, **kwargs):
@@ -315,7 +336,7 @@ class TestRegression189:
 
         monkeypatch.setattr(dump_subagent_transcripts.subprocess, "run", fake_run)
         path = str(tmp_path / "mock.json")
-        dump_subagent_transcripts.run_opencode_to_file("export", "ses_mock", path=path)
+        dump_subagent_transcripts.run_opencode_to_file("session", "export", "ses_mock", path=path)
         with open(path) as f:
             content = f.read()
         assert len(content) > 0
@@ -350,9 +371,9 @@ class TestRegression189:
         exports = {"ses_root": root_export, "ses_child1": child_export}
 
         def fake_run_opencode(*args):
-            if args[0] == "session":
+            if args[:2] == ("session", "list"):
                 return sessions
-            return json.dumps(exports.get(args[1], {}))
+            return json.dumps(exports.get(args[2], {}))
 
         def fake_run_opencode_to_file(*args, path: str):
             with open(path, "w") as f:

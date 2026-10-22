@@ -26,7 +26,7 @@ exit 1
 """
 
 
-def _run(tmp_path, stub_body, deadline, instant_sleep=False):
+def _run(tmp_path, stub_body, deadline=None, instant_sleep=False, wall_timeout=None):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     stub = bindir / "opencode"
@@ -40,8 +40,15 @@ def _run(tmp_path, stub_body, deadline, instant_sleep=False):
         **os.environ,
         "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
         "RUNNER_TEMP": str(tmp_path),
+        "HOME": str(tmp_path),
+        "XDG_DATA_HOME": "",
     }
-    return run(["bash", str(SCRIPT), str(deadline)], env=env, capture_output=True, text=True)
+    args = ["bash", str(SCRIPT)]
+    if deadline is not None:
+        args.append(str(deadline))
+    if wall_timeout is not None:
+        args = ["timeout", str(wall_timeout), *args]
+    return run(args, env=env, capture_output=True, text=True)
 
 
 def _attempts(tmp_path):
@@ -68,3 +75,30 @@ def test_deadline_is_a_wall_clock_budget_not_an_attempt_count(tmp_path):
     assert result.returncode == 1
     assert "did not become ready within 3s" in result.stdout + result.stderr
     assert _attempts(tmp_path) > 3
+
+
+def test_default_budget_is_600_seconds(tmp_path):
+    result = _run(tmp_path, FAILING_STUB, wall_timeout=2)
+    assert result.returncode == 124
+    assert "up to 600s" in result.stdout
+
+
+def test_surfaces_plugin_install_errors_but_not_the_rest_of_the_log(tmp_path):
+    log = tmp_path / ".local/share/opencode/log/opencode.log"
+    log.parent.mkdir(parents=True)
+    log.write_text(
+        'timestamp=x level=WARN message="failed to load plugin" '
+        'target=opencode-auto-resume@1.1.21 cause="Cause([Fail(PluginModule.LoadError: bad default export)])"\n'
+        'timestamp=x level=INFO message="spawning process" args="SECRET-AGENT-PROMPT"\n'
+        'timestamp=x level=INFO message="spawning process" args="grep failed to load plugin.*NpmInstallFailedError SECRET-ARGS-MARKER"\n'
+        'timestamp=x level=WARN message="failed to load plugin" '
+        'target=@dietrichgebert/ponytail@5.3.2 cause="Cause([Fail(NpmInstallFailedError '
+        '(cause: TypeError [ERR_INVALID_PROTOCOL]))])"\n'
+    )
+    result = _run(tmp_path, FAILING_STUB, 0)
+    assert result.returncode == 1
+    assert "NpmInstallFailedError" in result.stderr
+    assert "ERR_INVALID_PROTOCOL" in result.stderr
+    assert "SECRET-AGENT-PROMPT" not in result.stderr
+    assert "SECRET-ARGS-MARKER" not in result.stderr
+    assert "PluginModule.LoadError" not in result.stderr

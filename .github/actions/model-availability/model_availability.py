@@ -30,6 +30,9 @@ PROVIDERS = (
     ("opencode-go-anthropic-2", "OPENCODE_GO_2_API_KEY"),
     ("openrouter", "OPENROUTER_API_KEY"),
 )
+ALLOWED_PROVIDER_PREFIXES = frozenset(
+    ("opencode", "openai", *(provider for provider, _ in PROVIDERS))
+)
 MAX_CONCURRENT = 5
 PROBE_TIMEOUT_SECONDS = 30
 PROBE_BUDGET = 30
@@ -110,7 +113,10 @@ def is_whitelisted(model_id: str, patterns: list[str]) -> bool:
     return any(re.search(pattern, model_id, re.IGNORECASE) for pattern in patterns)
 
 
-def parse_whitelisted_models(opencode_models_output: str) -> list[str]:
+def parse_whitelisted_models(
+    opencode_models_output: str,
+    allowed_providers: frozenset[str] = ALLOWED_PROVIDER_PREFIXES,
+) -> list[str]:
     free = []
     rest = []
     for line in opencode_models_output.splitlines():
@@ -118,6 +124,8 @@ def parse_whitelisted_models(opencode_models_output: str) -> list[str]:
         if not line:
             continue
         provider, _, model_id = line.partition("/")
+        if provider not in allowed_providers:
+            continue
         provider_patterns = PROVIDER_WHITELISTS.get(provider, [r".*"])
         if not is_whitelisted(model_id or provider, provider_patterns):
             continue

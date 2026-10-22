@@ -501,21 +501,39 @@ class TestParseWhitelistedModels:
             "openrouter/google/gemma-4-31b-it:free\n"
         )
         assert model_availability.parse_whitelisted_models(output) == [
-            "big-pickle",
-            "custom-provider/big-pickle",
-            "custom-provider/other-free",
             "opencode/big-pickle",
             "opencode/ling-3.0-flash-fin-free",
             "opencode/mimo-v2.5-free",
             "openrouter/cohere/north-mini-code:free",
             "openrouter/google/gemma-4-31b-it:free",
-            "standalone-free",
             "opencode-go-openai/glm-5.3",
             "opencode-go-openai/gpt-5.6-luna",
             "opencode-go-openai/kimi-k3",
             "opencode-go-openai/qwen3.8-flash",
-            "other/paid-model",
         ]
+
+    def test_unknown_providers_excluded_even_when_model_matches_patterns(self):
+        output = (
+            "vshn-us-ai/subscription.glm-5.3-flash\n"
+            "vshn-us-ai/expensive.gemini-3-flash\n"
+            "requesty2/free-model\n"
+            "custom-provider/big-pickle\n"
+            "unknown-provider/glm-5.3\n"
+        )
+        assert model_availability.parse_whitelisted_models(output) == []
+
+    def test_provider_prefix_uses_first_segment_not_model_id(self, monkeypatch):
+        monkeypatch.setitem(
+            model_availability.PROVIDER_WHITELISTS,
+            "openrouter",
+            model_availability.PROVIDER_WHITELISTS["opencode"],
+        )
+        assert model_availability.parse_whitelisted_models(
+            "openrouter/zai/GLM-4.5"
+        ) == ["openrouter/zai/GLM-4.5"]
+
+    def test_no_slash_lines_excluded(self):
+        assert model_availability.parse_whitelisted_models("standalone-free\nbig-pickle\n") == []
 
     def test_deduplicates(self):
         assert model_availability.parse_whitelisted_models(

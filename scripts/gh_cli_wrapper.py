@@ -17,6 +17,9 @@ def owned_repo(repo):
     owner, name = repo.split("/")
     if owner.lower() not in {"bacluc", "bacluc-agent"} or name in {".", ".."}:
         deny("create the PR in the bacluc-agent fork, not the upstream repository")
+    # Outsider-repository fork policy: never create PR against upstream org repo
+    if owner.lower() == "bacluc-agent-org":
+        deny("create the PR in the bacluc-agent fork, not the upstream repository")
 
 
 def options(args, values, switches):

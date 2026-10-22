@@ -30,9 +30,8 @@ PROVIDERS = (
     ("opencode-go-anthropic-2", "OPENCODE_GO_2_API_KEY"),
     ("openrouter", "OPENROUTER_API_KEY"),
 )
-ALLOWED_PROVIDER_PREFIXES = frozenset(
-    ("opencode", "openai", *(provider for provider, _ in PROVIDERS))
-)
+AUTH_FILE = "~/.local/share/opencode/auth.json"
+ENV_REF_PATTERN = re.compile(r"\{env:([A-Za-z_][A-Za-z0-9_]*)\}")
 MAX_CONCURRENT = 5
 PROBE_TIMEOUT_SECONDS = 30
 PROBE_BUDGET = 30
@@ -113,10 +112,7 @@ def is_whitelisted(model_id: str, patterns: list[str]) -> bool:
     return any(re.search(pattern, model_id, re.IGNORECASE) for pattern in patterns)
 
 
-def parse_whitelisted_models(
-    opencode_models_output: str,
-    allowed_providers: frozenset[str] = ALLOWED_PROVIDER_PREFIXES,
-) -> list[str]:
+def parse_whitelisted_models(opencode_models_output: str) -> list[str]:
     free = []
     rest = []
     for line in opencode_models_output.splitlines():
@@ -124,8 +120,6 @@ def parse_whitelisted_models(
         if not line:
             continue
         provider, _, model_id = line.partition("/")
-        if provider not in allowed_providers:
-            continue
         provider_patterns = PROVIDER_WHITELISTS.get(provider, [r".*"])
         if not is_whitelisted(model_id or provider, provider_patterns):
             continue
@@ -141,7 +135,7 @@ def parse_go_model_ids(models_json: str) -> list[str]:
         return []
 
 
-def load_provider_config() -> dict[str, dict[str, str | None]]:
+def load_provider_options() -> dict[str, dict[str, str | None]]:
     """{provider: {"baseURL": str, "apiKey": str | None}} from `opencode debug config`."""
     tmp_path = None
     try:
@@ -182,33 +176,57 @@ def load_provider_config() -> dict[str, dict[str, str | None]]:
     return result
 
 
+def provider_auth_path() -> str:
+    return os.path.expanduser(AUTH_FILE)
+
+
 def load_provider_base_urls() -> dict[str, str]:
     """Run `opencode debug config`, return {provider_id: baseURL} for providers with a baseURL."""
     return {
         name: info["baseURL"]
-        for name, info in load_provider_config().items()
+        for name, info in load_provider_options().items()
         if info["baseURL"]
     }
 
 
-def provider_probeable(model_id: str, provider_config: dict, env: dict) -> bool:
-    """True if the model's provider can be probed. Built-in/unknown providers pass;
-    configured providers need an absolute baseURL and an apiKey (resolved value or {env:NAME})."""
-    provider = model_id.split("/", 1)[0] if "/" in model_id else ""
+def resolve_provider_api_key(api_key_field, env: dict) -> str | None:
+    """Resolve an options.apiKey against env: {env:NAME} refs must all resolve to
+    non-empty values; a literal (non-{env:}) non-empty string is returned as-is."""
+    if not isinstance(api_key_field, str) or not api_key_field:
+        return None
+    if not ENV_REF_PATTERN.search(api_key_field):
+        return api_key_field
+    missing = [name for name in ENV_REF_PATTERN.findall(api_key_field) if not env.get(name)]
+    if missing:
+        return None
+    return ENV_REF_PATTERN.sub(lambda match: env[match.group(1)], api_key_field)
+
+
+def provider_authenticated(provider: str, auth_path: str | None = None) -> bool:
+    """True when provider has an entry in opencode's auth.json (missing/invalid file → False)."""
+    path = auth_path or os.path.expanduser(AUTH_FILE)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            auth = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return False
+    return isinstance(auth, dict) and provider in auth
+
+
+def provider_has_credentials(
+    model_id: str, provider_options: dict, env: dict, auth_path: str | None = None
+) -> bool:
+    """Gate: model may be probed only when its provider prefix has a resolvable
+    apiKey (config + env) or an auth.json entry; unconfigured/unknown providers fail."""
+    provider = model_id.partition("/")[0]
     if not provider:
+        return False
+    if provider_authenticated(provider, auth_path):
         return True
-    if provider not in provider_config:
-        return True
-    info = provider_config[provider]
+    info = provider_options.get(provider)
     if not isinstance(info, dict):
         return False
-    base_url = info.get("baseURL")
-    if not valid_base_url(base_url):
-        return False
-    api_key = info.get("apiKey")
-    if isinstance(api_key, str) and api_key.startswith("{env:") and api_key.endswith("}"):
-        return bool(env.get(api_key[5:-1]))
-    return bool(api_key)
+    return resolve_provider_api_key(info.get("apiKey"), env) is not None
 
 
 def valid_base_url(base_url: object) -> bool:
@@ -270,29 +288,38 @@ def discover_models() -> tuple[list[str], dict[str, list[str]]]:
     except OSError:
         pass
     whitelisted_models = parse_whitelisted_models(result.stdout)
-    provider_config = load_provider_config()
+    provider_options = load_provider_options()
     base_urls = {
         name: info["baseURL"]
-        for name, info in provider_config.items()
+        for name, info in provider_options.items()
         if valid_base_url(info["baseURL"])
     }
     kept, dropped = [], []
     for model in whitelisted_models:
-        (kept if provider_probeable(model, provider_config, os.environ) else dropped).append(model)
+        (
+            kept
+            if provider_has_credentials(model, provider_options, os.environ)
+            else dropped
+        ).append(model)
     if dropped:
-        providers = sorted({m.split("/", 1)[0] for m in dropped})
+        providers = sorted({m.partition("/")[0] for m in dropped})
         print(
-            f"warning: skipping {len(dropped)} models from unprobeable providers: {', '.join(providers)}",
+            f"warning: skipping {len(dropped)} models from providers without a resolvable API key: {', '.join(providers)}",
             file=sys.stderr,
         )
     whitelisted_models = kept
     provider_models = {}
     for provider, key_env in PROVIDERS:
+        api_key = (
+            resolve_provider_api_key(
+                (provider_options.get(provider) or {}).get("apiKey"), os.environ
+            )
+            or os.environ.get(key_env)
+        )
         base_url = base_urls.get(provider)
         if not valid_base_url(base_url):
             print(f"warning: no valid baseURL configured for {provider}", file=sys.stderr)
             continue
-        api_key = os.environ.get(key_env)
         if not api_key:
             print(f"warning: no API key configured for {provider}", file=sys.stderr)
             continue
@@ -304,14 +331,10 @@ def discover_models() -> tuple[list[str], dict[str, list[str]]]:
     return whitelisted_models, provider_models
 
 
-def build_candidates(
-    whitelisted_models: list[str], provider_models: dict[str, list[str]], env: dict
-) -> list[str]:
+def build_candidates(whitelisted_models: list[str], provider_models: dict[str, list[str]], env: dict) -> list[str]:
     candidates = []
-    for provider, key_env in PROVIDERS:
-        if not env.get(key_env):
-            continue
-        for model in provider_models.get(provider, []):
+    for provider, models in provider_models.items():
+        for model in models:
             candidates.append(f"{provider}/{model}")
     candidates.extend(whitelisted_models)
     return list(dict.fromkeys(candidates))
@@ -429,14 +452,6 @@ def merge_results(cache: dict, results: dict[str, bool], checked: str) -> dict:
     return merged
 
 
-def purge_disallowed_entries(cache: dict) -> dict:
-    return {
-        key: entry
-        for key, entry in cache.items()
-        if key.partition("/")[0] in ALLOWED_PROVIDER_PREFIXES
-    }
-
-
 def available_models(
     cache: dict, whitelisted_models: list[str], provider_models: dict[str, list[str]]
 ) -> list[str]:
@@ -485,8 +500,11 @@ def main() -> int:
             raise
         whitelisted_models = [
             model
-            for model, entry in purge_disallowed_entries(cache).items()
-            if isinstance(entry, dict) and entry.get("ok") is True and is_cache_fresh(entry, now)
+            for model, entry in cache.items()
+            if isinstance(entry, dict)
+            and entry.get("ok") is True
+            and is_cache_fresh(entry, now)
+            and provider_has_credentials(model, load_provider_options(), os.environ)
         ]
         if not whitelisted_models:
             raise
@@ -515,7 +533,6 @@ def main() -> int:
     if cache_issue is not None:
         cache = read_cache(cache_issue) or cache
     cache = merge_results(cache, results, checked)
-    cache = purge_disallowed_entries(cache)
     if cache_issue is not None:
         write_cache(cache_issue, cache)
     available = available_models(cache, whitelisted_models, provider_models)

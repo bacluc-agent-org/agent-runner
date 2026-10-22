@@ -18,13 +18,22 @@ CONFIG = {
     }
 }
 
+REAL_PROVIDER_AUTHENTICATED = model_availability.provider_authenticated
+
 
 @pytest.fixture(autouse=True)
 def _provider_api_keys(monkeypatch):
-    """Provider discovery tests exercise the real PROVIDERS loop; provide the keys."""
+    """Provider discovery tests exercise the real PROVIDERS loop; provide the keys
+    and treat the builtin `opencode` provider as authenticated via auth.json."""
     monkeypatch.setenv("OPENCODE_GO_API_KEY", "test-go-key")
     monkeypatch.setenv("OPENCODE_GO_2_API_KEY", "test-go-2-key")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-or-key")
+    monkeypatch.delenv("VSHN_US_AI_API_KEY", raising=False)
+    monkeypatch.setattr(
+        model_availability,
+        "provider_authenticated",
+        lambda provider, auth_path=None: provider == "opencode",
+    )
 
 
 def fake_run(args, *a, **kw):
@@ -81,7 +90,7 @@ class TestDiscoverModels:
             return types.SimpleNamespace(stdout="")
 
         monkeypatch.setattr(model_availability.subprocess, "run", fake_config)
-        assert model_availability.load_provider_config() == {
+        assert model_availability.load_provider_options() == {
             "opencode-go-openai": {"baseURL": "https://opencode.ai/zen/go/v1", "apiKey": None},
             "opencode-go-anthropic": {
                 "baseURL": "https://opencode.ai/zen/go/v1/messages",
@@ -398,54 +407,141 @@ class TestDiscoverModels:
 EXAMPLE_OPENCODE_WHITELIST = [r"(?:-|:)free$", r"big-pickle", r"glm", r"gpt-5\.6-luna", r"qwen", r"kimi"]
 
 class TestProviderProbeable:
-    @pytest.mark.parametrize("config", [{"openrouter": []}, {"openrouter": {"baseURL": []}}])
-    def test_malformed_provider_config_is_not_probeable(self, config):
-        assert not model_availability.provider_probeable("openrouter/foo:free", config, {})
-
     @pytest.mark.parametrize(
-        "provider_config",
+        "provider_options",
         [
             {"provider": {"openrouter": []}},
             {"provider": {"openrouter": {"options": []}}},
         ],
     )
-    def test_malformed_discovered_provider_config_is_ignored(self, monkeypatch, provider_config):
+    def test_malformed_discovered_provider_config_is_ignored(self, monkeypatch, provider_options):
         def fake_run(*args, **kwargs):
-            kwargs["stdout"].write(json.dumps(provider_config))
+            kwargs["stdout"].write(json.dumps(provider_options))
             return types.SimpleNamespace(stdout="")
 
         monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
-        assert model_availability.load_provider_config() == {}
+        assert model_availability.load_provider_options() == {}
 
-    def test_resolved_key(self):
-        config = {"openrouter": {"baseURL": "https://openrouter.ai/api/v1", "apiKey": "sk-or-xxx"}}
-        assert model_availability.provider_probeable("openrouter/foo:free", config, {})
 
-    def test_missing_key(self):
-        config = {"cortecs2": {"baseURL": "https://api.cortecs.ai/v1", "apiKey": None}}
-        assert not model_availability.provider_probeable("cortecs2/glm-5.1", config, {})
+class TestResolveProviderApiKey:
+    def test_env_template_resolves_when_all_refs_set(self):
+        assert model_availability.resolve_provider_api_key(
+            "{env:VSHN_US_AI_API_KEY}", {"VSHN_US_AI_API_KEY": "k"}
+        ) == "k"
 
-    def test_env_template(self):
-        config = {
-            "openrouter": {
-                "baseURL": "https://openrouter.ai/api/v1",
-                "apiKey": "{env:OPENROUTER_API_KEY}",
-            }
-        }
-        assert model_availability.provider_probeable(
-            "openrouter/foo:free", config, {"OPENROUTER_API_KEY": "k"}
+    def test_env_template_none_when_any_ref_missing(self):
+        assert model_availability.resolve_provider_api_key(
+            "{env:VSHN_US_AI_API_KEY}", {}
+        ) is None
+
+    def test_multiple_env_refs_resolved(self):
+        assert model_availability.resolve_provider_api_key(
+            "{env:A}/{env:B}", {"A": "a", "B": "b"}
+        ) == "a/b"
+
+    def test_multiple_env_refs_fail_closed_on_one_missing(self):
+        assert model_availability.resolve_provider_api_key(
+            "{env:A}/{env:B}", {"A": "a"}
+        ) is None
+
+    def test_literal_key_returned_as_is(self):
+        assert model_availability.resolve_provider_api_key(
+            "sk-resolved-key-value", {}
+        ) == "sk-resolved-key-value"
+
+    def test_none_and_empty_fields_have_no_key(self):
+        assert model_availability.resolve_provider_api_key(None, {}) is None
+        assert model_availability.resolve_provider_api_key("", {}) is None
+        assert model_availability.resolve_provider_api_key({"nested": 1}, {}) is None
+
+
+class TestProviderAuthenticated:
+    @pytest.fixture(autouse=True)
+    def _real_provider_authenticated(self, monkeypatch):
+        monkeypatch.setattr(
+            model_availability, "provider_authenticated", REAL_PROVIDER_AUTHENTICATED
         )
-        assert not model_availability.provider_probeable("openrouter/foo:free", config, {})
 
-    def test_unknown_provider_passes(self):
-        assert model_availability.provider_probeable("opencode/a-free", {}, {})
+    def test_provider_in_auth_json(self, tmp_path):
+        auth = tmp_path / "auth.json"
+        auth.write_text(json.dumps({"openai": {}}), encoding="utf-8")
+        assert model_availability.provider_authenticated("openai", str(auth))
 
-    def test_invalid_baseurl(self):
-        config = {"openrouter": {"baseURL": "/chat/completions", "apiKey": "sk-or-xxx"}}
-        assert not model_availability.provider_probeable("openrouter/foo:free", config, {})
+    def test_provider_absent_from_auth_json(self, tmp_path):
+        auth = tmp_path / "auth.json"
+        auth.write_text(json.dumps({"openai": {}}), encoding="utf-8")
+        assert not model_availability.provider_authenticated("vshn-us-ai", str(auth))
 
-    def test_openai_passes_like_builtin_provider(self):
-        assert model_availability.provider_probeable("openai/gpt-5.6-luna", {}, {})
+    def test_missing_file_is_not_authenticated(self, tmp_path):
+        assert not model_availability.provider_authenticated("openai", str(tmp_path / "nope.json"))
+
+    def test_invalid_json_is_not_authenticated(self, tmp_path):
+        auth = tmp_path / "auth.json"
+        auth.write_text("not json", encoding="utf-8")
+        assert not model_availability.provider_authenticated("openai", str(auth))
+
+
+class TestProviderHasCredentials:
+    @pytest.fixture(autouse=True)
+    def _real_provider_authenticated(self, monkeypatch):
+        monkeypatch.setattr(
+            model_availability, "provider_authenticated", REAL_PROVIDER_AUTHENTICATED
+        )
+
+    OPTIONS = {
+        "vshn-us-ai": {"baseURL": "{env:VSHN_US_BASE_URL}", "apiKey": "{env:VSHN_US_AI_API_KEY}"},
+        "openrouter": {"baseURL": "https://openrouter.ai/api/v1", "apiKey": "{env:OPENROUTER_API_KEY}"},
+        "literal-key-provider": {"baseURL": "https://x.example/v1", "apiKey": "sk-literal"},
+        "no-api-key": {"baseURL": "https://x.example/v1"},
+    }
+
+    def test_env_key_unset_drops_model(self):
+        assert not model_availability.provider_has_credentials(
+            "vshn-us-ai/subscription.glm-5.3-flash", self.OPTIONS, {}
+        )
+
+    def test_env_key_set_keeps_model(self):
+        env = {"VSHN_US_AI_API_KEY": "k", "VSHN_US_BASE_URL": "https://vshn"}
+        assert model_availability.provider_has_credentials(
+            "vshn-us-ai/subscription.glm-5.3-flash", self.OPTIONS, env
+        )
+
+    def test_literal_api_key_keeps_model(self):
+        assert model_availability.provider_has_credentials(
+            "literal-key-provider/glm-5.1", self.OPTIONS, {}
+        )
+
+    def test_provider_without_api_key_dropped_when_not_authed(self):
+        assert not model_availability.provider_has_credentials(
+            "no-api-key/glm-5.1", self.OPTIONS, {}
+        )
+
+    def test_unknown_provider_dropped(self):
+        assert not model_availability.provider_has_credentials(
+            "cortecs2/glm-5.1", self.OPTIONS, {}
+        )
+
+    def test_no_slash_model_dropped(self):
+        assert not model_availability.provider_has_credentials(
+            "big-pickle", self.OPTIONS, {}
+        )
+
+    def test_auth_json_entry_keeps_model_without_config_key(self, tmp_path):
+        auth = tmp_path / "auth.json"
+        auth.write_text(json.dumps({"openai": {}}), encoding="utf-8")
+        assert model_availability.provider_has_credentials(
+            "openai/gpt-5.6-luna", self.OPTIONS, {}, auth_path=str(auth)
+        )
+
+    def test_absent_auth_json_falls_back_to_config_key(self, tmp_path):
+        assert not model_availability.provider_has_credentials(
+            "openai/gpt-5.6-luna", self.OPTIONS, {}, auth_path=str(tmp_path / "nope.json")
+        )
+
+    def test_malformed_provider_info_without_key_fails_closed(self):
+        assert not model_availability.provider_has_credentials(
+            "weird/free", {"weird": "not-a-dict"}, {}
+        )
 
 class TestParseWhitelistedModels:
     def test_uses_exact_openai_patterns_without_changing_opencode_matching(self):
@@ -501,26 +597,21 @@ class TestParseWhitelistedModels:
             "openrouter/google/gemma-4-31b-it:free\n"
         )
         assert model_availability.parse_whitelisted_models(output) == [
+            "big-pickle",
+            "custom-provider/big-pickle",
+            "custom-provider/other-free",
             "opencode/big-pickle",
             "opencode/ling-3.0-flash-fin-free",
             "opencode/mimo-v2.5-free",
             "openrouter/cohere/north-mini-code:free",
             "openrouter/google/gemma-4-31b-it:free",
+            "standalone-free",
             "opencode-go-openai/glm-5.3",
             "opencode-go-openai/gpt-5.6-luna",
             "opencode-go-openai/kimi-k3",
             "opencode-go-openai/qwen3.8-flash",
+            "other/paid-model",
         ]
-
-    def test_unknown_providers_excluded_even_when_model_matches_patterns(self):
-        output = (
-            "vshn-us-ai/subscription.glm-5.3-flash\n"
-            "vshn-us-ai/expensive.gemini-3-flash\n"
-            "requesty2/free-model\n"
-            "custom-provider/big-pickle\n"
-            "unknown-provider/glm-5.3\n"
-        )
-        assert model_availability.parse_whitelisted_models(output) == []
 
     def test_provider_prefix_uses_first_segment_not_model_id(self, monkeypatch):
         monkeypatch.setitem(
@@ -531,9 +622,6 @@ class TestParseWhitelistedModels:
         assert model_availability.parse_whitelisted_models(
             "openrouter/zai/GLM-4.5"
         ) == ["openrouter/zai/GLM-4.5"]
-
-    def test_no_slash_lines_excluded(self):
-        assert model_availability.parse_whitelisted_models("standalone-free\nbig-pickle\n") == []
 
     def test_deduplicates(self):
         assert model_availability.parse_whitelisted_models(
@@ -607,12 +695,11 @@ class TestParseGoModelIds:
 
 
 class TestBuildCandidates:
-    def test_skips_providers_without_api_key(self):
-        env = {"OPENCODE_GO_API_KEY": "key1"}
+    def test_builds_from_provider_models_without_env_override(self):
         assert model_availability.build_candidates(
             ["opencode/a-free"],
             {"opencode-go-openai": ["glm-5.2"], "opencode-go-anthropic": ["glm-5.2"]},
-            env,
+            {},
         ) == [
             "opencode-go-openai/glm-5.2",
             "opencode-go-anthropic/glm-5.2",
@@ -620,7 +707,6 @@ class TestBuildCandidates:
         ]
 
     def test_free_models_last(self):
-        env = {"OPENCODE_GO_API_KEY": "key1", "OPENCODE_GO_2_API_KEY": "key2"}
         candidates = model_availability.build_candidates(
             ["opencode/a-free"],
             {
@@ -629,28 +715,26 @@ class TestBuildCandidates:
                 "opencode-go-anthropic": ["glm-5.2"],
                 "opencode-go-anthropic-2": ["glm-5.2"],
             },
-            env,
+            {},
         )
         assert candidates[-1] == "opencode/a-free"
         assert len(candidates) == 5
 
     def test_provider_models_are_not_crossed(self):
-        env = {"OPENCODE_GO_API_KEY": "key1", "OPENCODE_GO_2_API_KEY": "key2"}
         provider_models = {
             "opencode-go-openai": ["x"],
             "opencode-go-openai-2": ["y"],
         }
-        assert model_availability.build_candidates([], provider_models, env) == [
+        assert model_availability.build_candidates([], provider_models, {}) == [
             "opencode-go-openai/x",
             "opencode-go-openai-2/y",
         ]
 
     def test_deduplicates_overlapping_models(self):
-        env = {"OPENCODE_GO_API_KEY": "key1"}
         assert model_availability.build_candidates(
             ["opencode-go-openai/glm-5.2", "opencode/a-free"],
             {"opencode-go-openai": ["glm-5.2"]},
-            env,
+            {},
         ) == ["opencode-go-openai/glm-5.2", "opencode/a-free"]
 
 
@@ -833,27 +917,6 @@ class TestMergeResults:
         assert model_availability.merge_results(cache, results, "2026-09-06T12:00:00Z") == {
             "opencode/a-free": {"ok": False, "checked": "2026-09-06T12:00:00Z"},
             "opencode-go-openai/glm-5.2": {"ok": True, "checked": "2026-09-06T12:00:00Z"},
-        }
-
-
-class TestPurgeDisallowedEntries:
-    def test_keeps_allowed_prefixes_and_drops_disallowed(self):
-        checked = "2026-09-06T10:00:00Z"
-        cache = {
-            "opencode/big-pickle": {"ok": True, "checked": checked},
-            "openrouter/z-ai/glm-5.3": {"ok": False, "checked": checked},
-            "openai/gpt-x": {"ok": True, "checked": checked},
-            "opencode-go-openai/qwen3.8-flash": {"ok": True, "checked": checked},
-            "vshn-us-ai/subscription.glm-5.3-flash": {"ok": True, "checked": checked},
-            "requesty2/free-model": {"ok": True, "checked": checked},
-            "cortecs2/glm-5.1": {"ok": False, "checked": checked},
-            "no-slash-model": {"ok": True, "checked": checked},
-        }
-        assert model_availability.purge_disallowed_entries(cache) == {
-            "opencode/big-pickle": {"ok": True, "checked": checked},
-            "openrouter/z-ai/glm-5.3": {"ok": False, "checked": checked},
-            "openai/gpt-x": {"ok": True, "checked": checked},
-            "opencode-go-openai/qwen3.8-flash": {"ok": True, "checked": checked},
         }
 
 
@@ -1315,6 +1378,9 @@ class TestModelAvailabilityAction:
                 )
             ),
         )
+        monkeypatch.setattr(
+            model_availability.subprocess, "run", fake_run
+        )
         monkeypatch.setattr(model_availability, "probe_candidates", lambda *args: pytest.fail())
         written = []
         monkeypatch.setattr(
@@ -1325,8 +1391,7 @@ class TestModelAvailabilityAction:
 
         assert model_availability.main() == 0
         assert outputs[0][2] == ["opencode/a-free"]
-        assert "vshn-us-ai/subscription.glm-5.3-flash" not in outputs[0][1]
-        assert "vshn-us-ai/subscription.glm-5.3-flash" not in written[0][1]
+        assert "vshn-us-ai/subscription.glm-5.3-flash" not in "\n".join(outputs[0][2])
 
     def test_prints_fresh_cache_summary_without_probing(self, monkeypatch, capsys):
         monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: None)

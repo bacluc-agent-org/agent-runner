@@ -283,16 +283,12 @@ jobs:
             printf '::stop-commands::%s\n' "$stop_token"
             printf 'Model discovery prompt:\n%s\n' "$discovery_prompt"
             set +e
-            timeout "${DISCOVERY_TIMEOUT}m" opencode run --agent model-discovery --model "$fallback_model" --title "model-discovery" "$discovery_prompt" | tee "$discovery_output"
-            discovery_statuses=("${PIPESTATUS[@]}")
+            timeout "${DISCOVERY_TIMEOUT}m" opencode run --agent model-discovery --model "$fallback_model" --title "model-discovery" "$discovery_prompt" > "$discovery_output"
+            discovery_status=$?
+            cat "$discovery_output"
             printf '::%s::\n' "$stop_token"
-            discovery_status=${discovery_statuses[0]}
-            discovery_tee_status=${discovery_statuses[1]}
             set -e
-            printf 'Model detection statuses: opencode=%s tee=%s\n' "$discovery_status" "$discovery_tee_status"
-            if ((discovery_tee_status != 0)); then
-              exit "$discovery_tee_status"
-            fi
+            printf 'Model detection status: opencode=%s\n' "$discovery_status"
             stop_token="$(openssl rand -hex 32)"
             : "${stop_token:?stop-commands fence token generation failed}"
             printf '::stop-commands::%s\n' "$stop_token"
@@ -478,19 +474,15 @@ jobs:
           coordinator_jsonl="$RUNNER_TEMP/coordinator.jsonl"
           coordinator_stderr="$RUNNER_TEMP/coordinator.stderr"
           set +e
-          timeout "${COORDINATOR_TIMEOUT}m" opencode run --format json --agent coordinator --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>"$coordinator_stderr" \
-            | tee "$coordinator_jsonl" \
-            | jq -Rr 'fromjson? | if .type == "text" then .part.text elif .type == "error" then "ERROR: " + ((.error.message // "unknown") | tostring) else empty end'
-          coordinator_statuses=("${PIPESTATUS[@]}")
+          timeout "${COORDINATOR_TIMEOUT}m" opencode run --format json --agent coordinator --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" > "$coordinator_jsonl" 2>"$coordinator_stderr"
+          coordinator_status=$?
+          jq -Rr 'fromjson? | if .type == "text" then .part.text elif .type == "error" then "ERROR: " + ((.error.message // "unknown") | tostring) else empty end' "$coordinator_jsonl"
+          coordinator_render_status=$?
           printf '::%s::\n' "$stop_token"
-          coordinator_status=${coordinator_statuses[0]}
-          coordinator_tee_status=${coordinator_statuses[1]}
-          coordinator_render_status=${coordinator_statuses[2]}
           set -e
-          printf 'Coordinator statuses: opencode=%s tee=%s render=%s\n' "$coordinator_status" "$coordinator_tee_status" "$coordinator_render_status"
+          printf 'Coordinator statuses: opencode=%s render=%s\n' "$coordinator_status" "$coordinator_render_status"
           cat "$coordinator_stderr" 2>/dev/null || true
           echo "coordinator_status=${coordinator_status}" >> "$GITHUB_OUTPUT"
-          echo "coordinator_tee_status=${coordinator_tee_status}" >> "$GITHUB_OUTPUT"
           if (( coordinator_status == 124 )); then
             echo "failure_mode=timeout" >> "$GITHUB_OUTPUT"
           fi
@@ -519,7 +511,6 @@ jobs:
             fi
             exit "$coordinator_status"
           fi
-          if (( coordinator_tee_status != 0 )); then exit "$coordinator_tee_status"; fi
           if (( coordinator_render_status != 0 )); then exit "$coordinator_render_status"; fi
           exit 0
 

@@ -170,7 +170,7 @@ def _pick_decision_block():
     return text[text.index("# pick-decision-start") : text.index("# pick-decision-end")]
 
 
-def _run_pick_decision(tmp_path, selection_text, candidates_text="42\n", status=0, tee_status=0, fatal=False):
+def _run_pick_decision(tmp_path, selection_text, candidates_text="42\n", status=0, fatal=False):
     (tmp_path / "selection.out").write_text(selection_text)
     (tmp_path / "candidate-numbers.txt").write_text(candidates_text)
     if fatal:
@@ -180,7 +180,6 @@ def _run_pick_decision(tmp_path, selection_text, candidates_text="42\n", status=
         'candidates="$RUNNER_TEMP/candidate-numbers.txt"\n'
         'stop_token="pick-decision-test-token"\n'
         f"selection_status={status}\n"
-        f"selection_tee_status={tee_status}\n"
         "SELECTION_TIMEOUT_MINUTES=10\n"
         f"{_pick_decision_block()}\n"
         "printf 'REACHED issue=%s' \"$issue_number\"\n"
@@ -231,9 +230,11 @@ class TestPickDecisionBlock:
         assert result.returncode == 1
         assert "::error::issue selection exceeded the 10m limit (opencode exit 124)" in result.stdout + result.stderr
 
-    def test_tee_failure_exits_with_the_tee_status(self, tmp_path):
-        result = _run_pick_decision(tmp_path, self.VALID, tee_status=3)
-        assert result.returncode == 3
+    def test_workflow_writes_selection_output_via_redirection(self):
+        content = WORKFLOW.read_text()
+        assert '| tee "$selection"' not in content
+        assert '> "$selection"' in content
+        assert 'cat "$selection"' in content
 
     def test_workflow_warns_instead_of_aborting_on_nonzero_opencode_exit(self):
         content = WORKFLOW.read_text()

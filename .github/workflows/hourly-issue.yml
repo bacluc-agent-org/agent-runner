@@ -283,13 +283,12 @@ jobs:
           stop_token="$(openssl rand -hex 32)"
           : "${stop_token:?stop-commands fence token generation failed}"
           printf '::stop-commands::%s\n' "$stop_token"
-          timeout "${SELECTION_TIMEOUT_MINUTES}m" opencode run --agent issue-selector --model "$selection_model" --title "issue-selector" "$(< "$prompt")" | tee "$selection"
-          selection_statuses=("${PIPESTATUS[@]}")
+          timeout "${SELECTION_TIMEOUT_MINUTES}m" opencode run --agent issue-selector --model "$selection_model" --title "issue-selector" "$(< "$prompt")" > "$selection"
+          selection_status=$?
+          cat "$selection"
           printf '::%s::\n' "$stop_token"
-          selection_status=${selection_statuses[0]}
-          selection_tee_status=${selection_statuses[1]}
           set -e
-          printf 'Model selection statuses: opencode=%s tee=%s\n' "$selection_status" "$selection_tee_status"
+          printf 'Model selection status: opencode=%s\n' "$selection_status"
           # pick-decision-start
           pick_reject() {
             printf '::error::%s\n' "$1"
@@ -298,9 +297,6 @@ jobs:
             printf '::%s::\n' "$stop_token"
             exit 1
           }
-          if (( selection_tee_status != 0 )); then
-            exit "$selection_tee_status"
-          fi
           if (( selection_status != 0 )); then
             printf '::warning::opencode run exited %s; validating its output before dispatch\n' "$selection_status"
           fi

@@ -30,6 +30,8 @@ PROVIDERS = (
     ("opencode-go-anthropic-2", "OPENCODE_GO_2_API_KEY"),
     ("openrouter", "OPENROUTER_API_KEY"),
 )
+AUTH_FILE = "~/.local/share/opencode/auth.json"
+ENV_REF_PATTERN = re.compile(r"\{env:([A-Za-z_][A-Za-z0-9_]*)\}")
 MAX_CONCURRENT = 5
 PROBE_TIMEOUT_SECONDS = 30
 PROBE_BUDGET = 30
@@ -133,8 +135,12 @@ def parse_go_model_ids(models_json: str) -> list[str]:
         return []
 
 
-def load_provider_config() -> dict[str, dict[str, str | None]]:
-    """{provider: {"baseURL": str, "apiKey": str | None}} from `opencode debug config`."""
+def opencode_config_sources() -> list:
+    """Raw sources list from `opencode debug config`; [] with a warning on failure.
+
+    The debug output masks provider apiKey values (\"***\") and its info shape
+    varies between versions, so it is only used to discover config file paths.
+    """
     tmp_path = None
     try:
         # `opencode debug config` truncates stdout at 65536 bytes when stdout is a
@@ -150,57 +156,158 @@ def load_provider_config() -> dict[str, dict[str, str | None]]:
                 env=opencode_env(),
             )
         with open(tmp_path, encoding="utf-8") as fh:
-            config = json.load(fh)
+            sources = json.load(fh)
     except Exception as e:
-        print(f"warning: failed to read opencode config: {e}", file=sys.stderr)
-        return {}
+        print(f"warning: failed to read opencode config sources: {e}", file=sys.stderr)
+        return []
     finally:
         if tmp_path is not None:
             try:
                 os.unlink(tmp_path)
             except OSError:
                 pass
-    providers = config.get("provider", {}) if isinstance(config, dict) else {}
-    if not isinstance(providers, dict):
+    if not isinstance(sources, list):
+        print("warning: unexpected opencode config sources shape", file=sys.stderr)
+        return []
+    return sources
+
+
+def strip_jsonc_comments(text: str) -> str:
+    """Remove // and /* */ comments outside strings; preserves URL // inside string values."""
+    out = []
+    index = 0
+    length = len(text)
+    in_string = False
+    while index < length:
+        char = text[index]
+        if in_string:
+            out.append(char)
+            if char == "\\" and index + 1 < length:
+                out.append(text[index + 1])
+                index += 2
+                continue
+            if char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            out.append(char)
+            index += 1
+            continue
+        if char == "/" and index + 1 < length and text[index + 1] == "/":
+            while index < length and text[index] != "\n":
+                index += 1
+            continue
+        if char == "/" and index + 1 < length and text[index + 1] == "*":
+            index += 2
+            while index + 1 < length and not (text[index] == "*" and text[index + 1] == "/"):
+                index += 1
+            index += 2
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def parse_jsonc(text: str) -> dict | None:
+    """Lenient JSONC parsing: comments stripped + trailing commas removed."""
+    body = re.sub(r",\s*([}\]])", r"\1", strip_jsonc_comments(text))
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def load_provider_options(config_sources=None) -> dict[str, dict[str, str | None]]:
+    """{provider: {"baseURL": str, "apiKey": str | None}} parsed from the raw config
+    files listed by `opencode debug config`; later sources override earlier ones.
+
+    shortcut: precedence direction (later source wins) is assumed from source list
+    order (global → untracked → project); unverified against opencode's merger.
+    """
+    if config_sources is None:
+        config_sources = [
+            item.get("path")
+            for item in opencode_config_sources()
+            if isinstance(item, dict)
+            and isinstance(item.get("path"), str)
+            and item["path"].endswith((".json", ".jsonc"))
+            and os.path.isfile(item["path"])
+        ]
+    if not config_sources:
+        print("warning: no readable opencode config files found", file=sys.stderr)
         return {}
     result = {}
-    for name, provider in providers.items():
-        if not isinstance(provider, dict):
+    for path in config_sources:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                text = handle.read()
+        except OSError as e:
+            print(f"warning: failed to read opencode config file {path}: {e}", file=sys.stderr)
             continue
-        options = provider.get("options", {})
-        if not isinstance(options, dict):
+        parsed = parse_jsonc(text)
+        if parsed is None:
+            print(f"warning: failed to parse opencode config file {path}", file=sys.stderr)
             continue
-        result[name] = {"baseURL": options.get("baseURL"), "apiKey": options.get("apiKey")}
+        providers = parsed.get("provider")
+        if not isinstance(providers, dict):
+            continue
+        for name, provider in providers.items():
+            if not isinstance(provider, dict):
+                continue
+            options = provider.get("options")
+            if not isinstance(options, dict):
+                continue
+            result[name] = {"baseURL": options.get("baseURL"), "apiKey": options.get("apiKey")}
     return result
 
 
-def load_provider_base_urls() -> dict[str, str]:
-    """Run `opencode debug config`, return {provider_id: baseURL} for providers with a baseURL."""
-    return {
-        name: info["baseURL"]
-        for name, info in load_provider_config().items()
-        if info["baseURL"]
-    }
+def resolve_provider_api_key(api_key_field, env: dict) -> str | None:
+    """Resolve an options.apiKey against env: {env:NAME} refs must all resolve to
+    non-empty values; a literal (non-{env:}) non-empty string is returned as-is."""
+    if not isinstance(api_key_field, str) or not api_key_field:
+        return None
+    if not ENV_REF_PATTERN.search(api_key_field):
+        return api_key_field
+    missing = [name for name in ENV_REF_PATTERN.findall(api_key_field) if not env.get(name)]
+    if missing:
+        return None
+    return ENV_REF_PATTERN.sub(lambda match: env[match.group(1)], api_key_field)
 
 
-def provider_probeable(model_id: str, provider_config: dict, env: dict) -> bool:
-    """True if the model's provider can be probed. Built-in/unknown providers pass;
-    configured providers need an absolute baseURL and an apiKey (resolved value or {env:NAME})."""
-    provider = model_id.split("/", 1)[0] if "/" in model_id else ""
+def provider_authenticated(provider: str, auth_path: str | None = None) -> bool:
+    """True when provider has an entry in opencode's auth.json (missing/invalid file → False)."""
+    path = auth_path or os.path.expanduser(AUTH_FILE)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            auth = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return False
+    return isinstance(auth, dict) and provider in auth
+
+
+def provider_has_credentials(
+    model_id: str, provider_options: dict, env: dict, auth_path: str | None = None
+) -> bool:
+    """Gate: model may be probed only when its provider prefix has a resolvable
+    apiKey (config + env) or an auth.json entry. A provider absent from the config
+    is built-in, so opencode supplies its catalog and credentials."""
+    if "/" not in model_id:
+        return False
+    provider = model_id.partition("/")[0]
     if not provider:
+        return False
+    if provider_authenticated(provider, auth_path):
         return True
-    if provider not in provider_config:
+    if provider not in provider_options:
+        # Built-in provider (e.g. opencode/openai): opencode supplies its catalog and credentials.
         return True
-    info = provider_config[provider]
+    info = provider_options.get(provider)
     if not isinstance(info, dict):
         return False
-    base_url = info.get("baseURL")
-    if not valid_base_url(base_url):
-        return False
-    api_key = info.get("apiKey")
-    if isinstance(api_key, str) and api_key.startswith("{env:") and api_key.endswith("}"):
-        return bool(env.get(api_key[5:-1]))
-    return bool(api_key)
+    return resolve_provider_api_key(info.get("apiKey"), env) is not None
 
 
 def valid_base_url(base_url: object) -> bool:
@@ -262,29 +369,38 @@ def discover_models() -> tuple[list[str], dict[str, list[str]]]:
     except OSError:
         pass
     whitelisted_models = parse_whitelisted_models(result.stdout)
-    provider_config = load_provider_config()
+    provider_options = load_provider_options()
     base_urls = {
         name: info["baseURL"]
-        for name, info in provider_config.items()
+        for name, info in provider_options.items()
         if valid_base_url(info["baseURL"])
     }
     kept, dropped = [], []
     for model in whitelisted_models:
-        (kept if provider_probeable(model, provider_config, os.environ) else dropped).append(model)
+        (
+            kept
+            if provider_has_credentials(model, provider_options, os.environ)
+            else dropped
+        ).append(model)
     if dropped:
-        providers = sorted({m.split("/", 1)[0] for m in dropped})
+        providers = sorted({m.partition("/")[0] for m in dropped})
         print(
-            f"warning: skipping {len(dropped)} models from unprobeable providers: {', '.join(providers)}",
+            f"warning: skipping {len(dropped)} models from providers without a resolvable API key: {', '.join(providers)}",
             file=sys.stderr,
         )
     whitelisted_models = kept
     provider_models = {}
     for provider, key_env in PROVIDERS:
+        api_key = (
+            resolve_provider_api_key(
+                (provider_options.get(provider) or {}).get("apiKey"), os.environ
+            )
+            or os.environ.get(key_env)
+        )
         base_url = base_urls.get(provider)
         if not valid_base_url(base_url):
             print(f"warning: no valid baseURL configured for {provider}", file=sys.stderr)
             continue
-        api_key = os.environ.get(key_env)
         if not api_key:
             print(f"warning: no API key configured for {provider}", file=sys.stderr)
             continue
@@ -296,14 +412,10 @@ def discover_models() -> tuple[list[str], dict[str, list[str]]]:
     return whitelisted_models, provider_models
 
 
-def build_candidates(
-    whitelisted_models: list[str], provider_models: dict[str, list[str]], env: dict
-) -> list[str]:
+def build_candidates(whitelisted_models: list[str], provider_models: dict[str, list[str]], env: dict) -> list[str]:
     candidates = []
-    for provider, key_env in PROVIDERS:
-        if not env.get(key_env):
-            continue
-        for model in provider_models.get(provider, []):
+    for provider, models in provider_models.items():
+        for model in models:
             candidates.append(f"{provider}/{model}")
     candidates.extend(whitelisted_models)
     return list(dict.fromkeys(candidates))
@@ -470,7 +582,10 @@ def main() -> int:
         whitelisted_models = [
             model
             for model, entry in cache.items()
-            if isinstance(entry, dict) and entry.get("ok") is True and is_cache_fresh(entry, now)
+            if isinstance(entry, dict)
+            and entry.get("ok") is True
+            and is_cache_fresh(entry, now)
+            and provider_has_credentials(model, load_provider_options(), os.environ)
         ]
         if not whitelisted_models:
             raise

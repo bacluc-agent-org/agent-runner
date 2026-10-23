@@ -13,7 +13,7 @@ on:
         description: Issue selector timeout in minutes
         required: false
         type: number
-        default: 10
+        default: 15
   push:
     paths:
       - ".github/workflows/hourly-issue.yml"
@@ -83,7 +83,7 @@ jobs:
           SELECTION_PROMPT: ${{ inputs.selection_prompt }}
           AVAILABLE_MODELS: ${{ steps.model-availability.outputs.available-models }}
           OPENCODE_FATAL_STAGE: selection
-          SELECTION_TIMEOUT_MINUTES: ${{ inputs.selection_timeout_minutes || 10 }}
+          SELECTION_TIMEOUT_MINUTES: ${{ inputs.selection_timeout_minutes || 15 }}
         run: |
           set -Eeuo pipefail
           rm -f "$RUNNER_TEMP/opencode-fatal.json"

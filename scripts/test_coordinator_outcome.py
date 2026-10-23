@@ -79,3 +79,9 @@ def test_fatal_provider_marker_beats_a_final_text(tmp_path):
 
 def test_workflow_runs_the_coordinator_in_json_format():
     assert "--format json" in WORKFLOW.read_text()
+
+
+def test_workflow_redirects_coordinator_output_instead_of_piping_through_tee():
+    content = WORKFLOW.read_text()
+    assert '| tee "$coordinator_jsonl"' not in content
+    assert '> "$coordinator_jsonl"' in content

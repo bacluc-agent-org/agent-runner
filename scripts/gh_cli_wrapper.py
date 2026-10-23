@@ -399,8 +399,7 @@ def emit_doc(doc, recipe):
 
 def run_fallback(backend, args, recipe):
     result = subprocess.run([backend, *args], capture_output=True, text=True)
-    if result.returncode == 0 or not (result.returncode != 0 and "HTTP 403" in result.stderr
-                                      and "api.github.com/graphql" in result.stderr):
+    if result.returncode == 0 or "HTTP 403" not in result.stderr or "api.github.com/graphql" not in result.stderr:
         sys.stdout.write(result.stdout)
         sys.stderr.write(result.stderr)
         return result.returncode

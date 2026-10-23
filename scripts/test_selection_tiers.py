@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from subprocess import run
 from tempfile import TemporaryDirectory
@@ -130,12 +131,260 @@ def test_workflow_uses_latest_commit_and_created_at_when_pr_has_no_commits():
     assert 'map(select(test("^[0-9]")))|max // null' in content
 
 
-def test_selection_tail_keeps_contract_and_research_budget():
+def test_selection_tail_keeps_contract_and_forbids_tools():
     tail = (Path(__file__).parents[1] / "scripts/issue-selection-tail.txt").read_text()
     assert "End with the exact final line: SELECTED_ISSUE: <number>" in tail
     assert "No text may follow that line." in tail
-    assert "read each candidate at most once" in tail
-    assert "stop investigating, even if undecided" in tail
+    assert "no tools, no lookups, no file reads" in tail
+    assert "fields are precomputed" in tail
     assert "choosing the best-so-far candidate" in tail
-    assert 'must not be cut by this budget' in tail
-    assert 'note the doubt inside the implementation prompt' in tail
+    assert "tool calls" not in tail
+    assert "gh lookup" not in tail
+    assert "research" not in tail.lower()
+
+
+def test_issue_selector_denies_every_tool():
+    selector = (Path(__file__).parents[1] / ".opencode/agent/issue-selector.md").read_text()
+    frontmatter = selector.split("---", 2)[1]
+    assert '"*": deny' in frontmatter
+    assert "read: allow" not in frontmatter
+    assert "glob: allow" not in frontmatter
+    assert "grep: allow" not in frontmatter
+    assert "webfetch: allow" not in frontmatter
+    assert "bash:" not in frontmatter
+    assert "opencode debug" not in selector
+    assert "ONE targeted lookup" not in selector
+    assert "12 tool calls" not in selector
+    assert "stamped the result into every candidate line" in selector
+    assert "You have no tools" in selector
+
+
+def test_selection_default_timeout_is_fifteen_minutes():
+    workflow = WORKFLOW.read_text()
+    assert "default: 15" in workflow
+    assert "${{ inputs.selection_timeout_minutes || 15 }}" in workflow
+
+
+def _pick_decision_block():
+    text = WORKFLOW.read_text()
+    return text[text.index("# pick-decision-start") : text.index("# pick-decision-end")]
+
+
+def _selector_attempt_block():
+    text = WORKFLOW.read_text()
+    return text[text.index("# selector-attempt-start") : text.index("# pick-decision-start")]
+
+
+RECORD_MODEL = """
+calls_file="$RUNNER_TEMP/opencode-calls.txt"
+printf 'call\\n' >> "$calls_file"
+model=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model) model="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf '%s\\n' "$model" >> "$RUNNER_TEMP/opencode-models.txt"
+"""
+
+SECOND_CALL_SELECTS = RECORD_MODEL + """
+if (( $(wc -l < "$RUNNER_TEMP/opencode-calls.txt") == 1 )); then
+  echo "OpenCode's free tier can only be used from within OpenCode" >&2
+  exit 1
+fi
+echo "SELECTED_ISSUE: 42"
+exit 0
+"""
+
+FIRST_CALL_SELECTS_WITH_NONZERO_EXIT = RECORD_MODEL + """
+echo "SELECTED_ISSUE: 42"
+exit 1
+"""
+
+ALWAYS_FAILS = RECORD_MODEL + """
+echo "OpenCode's free tier can only be used from within OpenCode" >&2
+exit 1
+"""
+
+
+def _run_selector(tmp_path, stub_body):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    stub = bindir / "opencode"
+    stub.write_text("#!/usr/bin/env bash\n" + stub_body)
+    stub.chmod(0o755)
+    (tmp_path / "selection-prompt.txt").write_text("pick one")
+    (tmp_path / "candidate-numbers.txt").write_text("42\n")
+    (tmp_path / "available-models.txt").write_text(
+        "opencode/big-pickle\nopencode/runner-up-free\n"
+    )
+    script = (
+        f"selection={str(tmp_path / 'selection.out')!r}\n"
+        f"candidates={str(tmp_path / 'candidate-numbers.txt')!r}\n"
+        f"prompt={str(tmp_path / 'selection-prompt.txt')!r}\n"
+        f"available_models_file={str(tmp_path / 'available-models.txt')!r}\n"
+        f"GITHUB_OUTPUT={str(tmp_path / 'github-output.txt')!r}\n"
+        "SELECTION_TIMEOUT_MINUTES=15\n"
+        "selection_model=opencode/big-pickle\n"
+        "selection_source='preferred list'\n"
+        f"{_selector_attempt_block()}\n"
+        f"{_pick_decision_block()}\n"
+        'printf "REACHED issue=%s\\n" "$issue_number"\n'
+    )
+    return run(
+        ["bash", "-Eeuo", "pipefail", "-c", script],
+        cwd=Path(__file__).parents[1],
+        env={
+            **os.environ,
+            "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
+            "RUNNER_TEMP": str(tmp_path),
+        },
+        capture_output=True,
+        text=True,
+    )
+
+
+def _selector_models(tmp_path):
+    return (tmp_path / "opencode-models.txt").read_text().splitlines()
+
+
+def test_selector_retries_with_a_runner_up_model_after_a_free_tier_error(tmp_path):
+    result = _run_selector(tmp_path, SECOND_CALL_SELECTS)
+    assert result.returncode == 0, result.stderr
+    assert "REACHED issue=42" in result.stdout
+    assert _selector_models(tmp_path) == ["opencode/big-pickle", "opencode/runner-up-free"]
+
+
+def test_selector_accepts_a_valid_pick_from_a_nonzero_exit_without_retrying(tmp_path):
+    result = _run_selector(tmp_path, FIRST_CALL_SELECTS_WITH_NONZERO_EXIT)
+    assert result.returncode == 0, result.stderr
+    assert "REACHED issue=42" in result.stdout
+    assert len(_selector_models(tmp_path)) == 1
+
+
+def test_selector_fails_after_two_failed_attempts(tmp_path):
+    result = _run_selector(tmp_path, ALWAYS_FAILS)
+    assert result.returncode == 1
+    assert "REACHED" not in result.stdout
+    assert len(_selector_models(tmp_path)) == 2
+
+
+def test_selector_attempts_are_hard_killed_after_a_grace_period():
+    assert "--kill-after=30s" in _selector_attempt_block()
+
+
+def _run_pick_decision(tmp_path, selection_text, candidates_text="42\n", status=0, fatal=False):
+    (tmp_path / "selection.out").write_text(selection_text)
+    (tmp_path / "candidate-numbers.txt").write_text(candidates_text)
+    if fatal:
+        (tmp_path / "opencode-fatal.json").write_text('{"reason": "balance", "model": "opencode/big-pickle"}')
+    script = (
+        'selection="$RUNNER_TEMP/selection.out"\n'
+        'candidates="$RUNNER_TEMP/candidate-numbers.txt"\n'
+        'stop_token="pick-decision-test-token"\n'
+        f"selection_status={status}\n"
+        "SELECTION_TIMEOUT_MINUTES=10\n"
+        f"{_pick_decision_block()}\n"
+        "printf 'REACHED issue=%s' \"$issue_number\"\n"
+    )
+    return run(["bash", "-Eeuo", "pipefail", "-c", script], env={**os.environ, "RUNNER_TEMP": str(tmp_path)}, capture_output=True, text=True)
+
+
+class TestPickDecisionBlock:
+    VALID = "Implementation prompt body\nSELECTED_ISSUE: 42\n"
+    PROSE = "I meant to pick an issue but forgot the marker line\nrandom prose\n"
+
+    def test_valid_pick_dispatches_despite_nonzero_opencode_status(self, tmp_path):
+        result = _run_pick_decision(tmp_path, self.VALID, status=1)
+        assert result.returncode == 0, result.stderr
+        assert "REACHED issue=42" in result.stdout
+        assert "::warning::opencode run exited 1; validating its output before dispatch" in result.stdout + result.stderr
+
+    def test_fatal_marker_rejects_a_valid_pick(self, tmp_path):
+        result = _run_pick_decision(tmp_path, self.VALID, fatal=True)
+        assert result.returncode == 1
+        assert "Fatal provider error recorded during selection; not dispatching." in result.stdout + result.stderr
+        assert "REACHED" not in result.stdout
+
+    def test_empty_output_is_rejected_before_the_fatal_marker(self, tmp_path):
+        result = _run_pick_decision(tmp_path, "\n   \n", fatal=True)
+        assert result.returncode == 1
+        combined = result.stdout + result.stderr
+        assert "Selection produced no output; not dispatching." in combined
+        assert "Fatal provider error recorded" not in combined
+
+    def test_prose_without_selected_issue_prints_output_tail_diagnostics(self, tmp_path):
+        result = _run_pick_decision(tmp_path, self.PROSE)
+        assert result.returncode == 1
+        combined = result.stdout + result.stderr
+        assert "missing or invalid SELECTED_ISSUE" in combined
+        open_fence = combined.index("::stop-commands::pick-decision-test-token")
+        tail_at = combined.index("random prose")
+        close_fence = combined.index("::pick-decision-test-token::")
+        assert open_fence < tail_at < close_fence
+
+    def test_selected_issue_outside_the_candidates_is_rejected(self, tmp_path):
+        result = _run_pick_decision(tmp_path, "picks\nSELECTED_ISSUE: 999\n")
+        assert result.returncode == 1
+        assert "missing or invalid SELECTED_ISSUE" in result.stdout + result.stderr
+
+    def test_timeout_status_with_prose_emits_the_timeout_annotation(self, tmp_path):
+        result = _run_pick_decision(tmp_path, self.PROSE, status=124)
+        assert result.returncode == 1
+        assert "::error::issue selection exceeded the 10m limit (opencode exit 124)" in result.stdout + result.stderr
+
+    def test_workflow_writes_selection_output_via_redirection(self):
+        content = WORKFLOW.read_text()
+        assert '| tee "$selection"' not in content
+        assert '> "$selection"' in content
+        assert 'cat "$selection"' in content
+
+    def test_workflow_warns_instead_of_aborting_on_nonzero_opencode_exit(self):
+        content = WORKFLOW.read_text()
+        assert "::warning::opencode run exited %s; validating its output before dispatch" in content
+        assert "Selection failed (opencode=%s); not dispatching." not in content
+
+
+def _gh_retry_function():
+    content = WORKFLOW.read_text()
+    start = content.index("gh_retry() {")
+    end = content.index("\n          }\n", start) + len("\n          }\n")
+    return content[start:end]
+
+
+def _run_gh_retry(tmp_path, succeed_at):
+    calls = tmp_path / "gh-calls.txt"
+    script = (
+        f"calls_file={str(calls)!r}\n"
+        f"SUCCEED_AT={succeed_at}\n"
+        "gh() {\n"
+        "  printf 'call\\n' >> \"$calls_file\"\n"
+        "  n=$(($(wc -l < \"$calls_file\")))\n"
+        "  if (( n < SUCCEED_AT )); then return 1; fi\n"
+        "  printf 'payload-%s\\n' \"$n\"\n"
+        "}\n"
+        "sleep() { :; }\n"
+        f"{_gh_retry_function()}\n"
+        "gh_retry gh api test\n"
+    )
+    result = run(["bash", "-Eeuo", "pipefail", "-c", script], capture_output=True, text=True)
+    return result, len(calls.read_text().splitlines()) if calls.exists() else 0
+
+
+def test_workflow_retries_the_three_transient_gh_calls():
+    content = WORKFLOW.read_text()
+    assert content.count("gh_retry gh api") >= 3
+
+
+def test_gh_retry_succeeds_on_the_third_attempt(tmp_path):
+    result, calls = _run_gh_retry(tmp_path, succeed_at=3)
+    assert result.returncode == 0, result.stderr
+    assert "payload-3" in result.stdout
+    assert calls == 3
+
+
+def test_gh_retry_gives_up_after_exactly_three_attempts(tmp_path):
+    result, calls = _run_gh_retry(tmp_path, succeed_at=10**9)
+    assert result.returncode != 0
+    assert calls == 3

@@ -283,16 +283,12 @@ jobs:
             printf '::stop-commands::%s\n' "$stop_token"
             printf 'Model discovery prompt:\n%s\n' "$discovery_prompt"
             set +e
-            timeout "${DISCOVERY_TIMEOUT}m" opencode run --agent model-discovery --model "$fallback_model" --title "model-discovery" "$discovery_prompt" | tee "$discovery_output"
-            discovery_statuses=("${PIPESTATUS[@]}")
+            timeout "${DISCOVERY_TIMEOUT}m" opencode run --agent model-discovery --model "$fallback_model" --title "model-discovery" "$discovery_prompt" > "$discovery_output"
+            discovery_status=$?
+            cat "$discovery_output"
             printf '::%s::\n' "$stop_token"
-            discovery_status=${discovery_statuses[0]}
-            discovery_tee_status=${discovery_statuses[1]}
             set -e
-            printf 'Model detection statuses: opencode=%s tee=%s\n' "$discovery_status" "$discovery_tee_status"
-            if ((discovery_tee_status != 0)); then
-              exit "$discovery_tee_status"
-            fi
+            printf 'Model detection status: opencode=%s\n' "$discovery_status"
             stop_token="$(openssl rand -hex 32)"
             : "${stop_token:?stop-commands fence token generation failed}"
             printf '::stop-commands::%s\n' "$stop_token"
@@ -473,25 +469,52 @@ jobs:
           stop_token="$(openssl rand -hex 32)"
           : "${stop_token:?stop-commands fence token generation failed}"
           printf '::stop-commands::%s\n' "$stop_token"
-          printf 'Final coordinator command: opencode run --agent coordinator --model %q --title %q\n' "$MODEL" "$coordinator_session_title"
+          printf 'Final coordinator command: opencode run --format json --agent coordinator --model %q --title %q\n' "$MODEL" "$coordinator_session_title"
           printf 'Coordinator prompt:\n%s\n' "$PROMPT"
+          coordinator_jsonl="$RUNNER_TEMP/coordinator.jsonl"
+          coordinator_stderr="$RUNNER_TEMP/coordinator.stderr"
           set +e
-          timeout "${COORDINATOR_TIMEOUT}m" opencode run --agent coordinator --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
-          coordinator_statuses=("${PIPESTATUS[@]}")
+          timeout --kill-after=30s "${COORDINATOR_TIMEOUT}m" opencode run --format json --agent coordinator --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" > "$coordinator_jsonl" 2>"$coordinator_stderr"
+          coordinator_status=$?
+          jq -Rr 'fromjson? | if .type == "text" then .part.text elif .type == "error" then "ERROR: " + ((.error.message // "unknown") | tostring) else empty end' "$coordinator_jsonl"
+          coordinator_render_status=$?
           printf '::%s::\n' "$stop_token"
-          coordinator_status=${coordinator_statuses[0]}
-          coordinator_tee_status=${coordinator_statuses[1]}
           set -e
-          printf 'Coordinator statuses: opencode=%s tee=%s\n' "$coordinator_status" "$coordinator_tee_status"
+          printf 'Coordinator statuses: opencode=%s render=%s\n' "$coordinator_status" "$coordinator_render_status"
+          cat "$coordinator_stderr" 2>/dev/null || true
           echo "coordinator_status=${coordinator_status}" >> "$GITHUB_OUTPUT"
-          echo "coordinator_tee_status=${coordinator_tee_status}" >> "$GITHUB_OUTPUT"
-          if ((coordinator_status == 124)); then
-            echo "failure_mode=timeout" >> "$GITHUB_OUTPUT"
+          # coordinator-outcome-start
+          if [[ -f "$RUNNER_TEMP/opencode-fatal.json" ]]; then
+            coordinator_outcome=fail
+            coordinator_failure='fatal provider error'
+          elif [[ "$(jq -Rrs '[split("\n")[] | fromjson? | select(.type == "text" or .type == "error")] | last | if . != null and .type == "text" and ((.part.text // "") | test("\\S")) then "true" else "false" end' "$coordinator_jsonl" 2>/dev/null)" == true ]]; then
+            coordinator_outcome=ok
+            coordinator_failure=''
+            if (( coordinator_status == 124 )); then
+              printf '::warning::coordinator timed out after %sm but produced a final answer\n' "$COORDINATOR_TIMEOUT"
+            fi
+          elif (( coordinator_status == 124 )); then
+            coordinator_outcome=fail
+            coordinator_failure='timeout'
+            printf '::error::coordinator timed out after %sm\n' "$COORDINATOR_TIMEOUT"
+            echo "failure_mode=timeout" >> "${GITHUB_OUTPUT:-/dev/null}"
+          else
+            coordinator_outcome=fail
+            coordinator_failure='no final assistant message'
           fi
-          if ((coordinator_status != 0)); then
+          # coordinator-outcome-end
+          if [[ "$coordinator_outcome" != ok ]]; then
+            if (( coordinator_status == 0 )); then
+              printf '::error::coordinator failed: %s\n' "$coordinator_failure"
+              exit 1
+            fi
+            if (( coordinator_status != 124 )); then
+              printf '::error::coordinator failed: %s (opencode exit %s)\n' "$coordinator_failure" "$coordinator_status"
+            fi
             exit "$coordinator_status"
           fi
-          exit "$coordinator_tee_status"
+          if (( coordinator_render_status != 0 )); then exit "$coordinator_render_status"; fi
+          exit 0
 
       - name: Fatal guard
         id: fatal-guard
@@ -587,7 +610,7 @@ jobs:
             fi
 
             git checkout -B "$BRANCH_NAME" 2>/dev/null || git checkout "$BRANCH_NAME"
-            git add -A
+            git add -A --ignore-errors || printf '::warning::git add -A reported an error in %s; committing what was staged\n' "$repo_dir"
             git commit -m "agent-run: automated commit for issue #${ISSUE_NUMBER} (run ${GITHUB_RUN_ID})" || true
             remote_url=$(git remote get-url origin 2>/dev/null || true)
             git push -u origin "$BRANCH_NAME" 2>/dev/null || {

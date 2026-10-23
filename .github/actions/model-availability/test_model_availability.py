@@ -1073,7 +1073,9 @@ class TestProbeModelLogging:
         monkeypatch.setattr(model_availability.subprocess, "run", timeout)
         assert model_availability.probe_model("opencode/a-free", str(tmp_path)) is False
         log = tmp_path / "model-probes" / "probe-opencode-a-free.log"
-        assert log.read_text() == "TIMEOUT after 30s\n"
+        log_text = log.read_text()
+        assert "ERROR:" in log_text
+        assert "TIMEOUT after 30s" in log_text
 
 
 class TestDiscoverModelsLogging:

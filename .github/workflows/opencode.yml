@@ -474,7 +474,7 @@ jobs:
           coordinator_jsonl="$RUNNER_TEMP/coordinator.jsonl"
           coordinator_stderr="$RUNNER_TEMP/coordinator.stderr"
           set +e
-          timeout "${COORDINATOR_TIMEOUT}m" opencode run --format json --agent coordinator --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" > "$coordinator_jsonl" 2>"$coordinator_stderr"
+          timeout --kill-after=30s "${COORDINATOR_TIMEOUT}m" opencode run --format json --agent coordinator --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" > "$coordinator_jsonl" 2>"$coordinator_stderr"
           coordinator_status=$?
           jq -Rr 'fromjson? | if .type == "text" then .part.text elif .type == "error" then "ERROR: " + ((.error.message // "unknown") | tostring) else empty end' "$coordinator_jsonl"
           coordinator_render_status=$?
@@ -483,19 +483,21 @@ jobs:
           printf 'Coordinator statuses: opencode=%s render=%s\n' "$coordinator_status" "$coordinator_render_status"
           cat "$coordinator_stderr" 2>/dev/null || true
           echo "coordinator_status=${coordinator_status}" >> "$GITHUB_OUTPUT"
-          if (( coordinator_status == 124 )); then
-            echo "failure_mode=timeout" >> "$GITHUB_OUTPUT"
-          fi
           # coordinator-outcome-start
           if [[ -f "$RUNNER_TEMP/opencode-fatal.json" ]]; then
             coordinator_outcome=fail
             coordinator_failure='fatal provider error'
-          elif (( coordinator_status == 124 )); then
-            coordinator_outcome=fail
-            coordinator_failure='timeout'
           elif [[ "$(jq -Rrs '[split("\n")[] | fromjson? | select(.type == "text" or .type == "error")] | last | if . != null and .type == "text" and ((.part.text // "") | test("\\S")) then "true" else "false" end' "$coordinator_jsonl" 2>/dev/null)" == true ]]; then
             coordinator_outcome=ok
             coordinator_failure=''
+            if (( coordinator_status == 124 )); then
+              printf '::warning::coordinator timed out after %sm but produced a final answer\n' "$COORDINATOR_TIMEOUT"
+            fi
+          elif (( coordinator_status == 124 )); then
+            coordinator_outcome=fail
+            coordinator_failure='timeout'
+            printf '::error::coordinator timed out after %sm\n' "$COORDINATOR_TIMEOUT"
+            echo "failure_mode=timeout" >> "${GITHUB_OUTPUT:-/dev/null}"
           else
             coordinator_outcome=fail
             coordinator_failure='no final assistant message'

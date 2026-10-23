@@ -19,7 +19,9 @@ def _run_outcome(tmp_path, events, status, fatal=False):
     script = (
         f"RUNNER_TEMP={str(tmp_path)!r}\n"
         f"coordinator_jsonl={str(jsonl)!r}\n"
+        f"GITHUB_OUTPUT={str(tmp_path / 'github-output.txt')!r}\n"
         f"coordinator_status={status}\n"
+        "COORDINATOR_TIMEOUT=120\n"
         "trap 'status=$?; printf \"outcome=%s failure=%s\\n\" \"$coordinator_outcome\" \"$coordinator_failure\"; exit \"$status\"' EXIT\n"
         f"{_outcome_block()}\n"
     )
@@ -62,9 +64,18 @@ def test_nonzero_status_with_agent_not_found_error_fails(tmp_path):
     assert "outcome=fail" in result.stdout
 
 
-def test_timeout_status_with_text_fails_as_timeout(tmp_path):
+def test_timeout_status_with_final_text_is_ok_with_a_warning(tmp_path):
     result = _run_outcome(tmp_path, [TEXT], status=124)
+    assert "outcome=ok failure=" in result.stdout
+    assert "::warning::coordinator timed out after 120m but produced a final answer" in result.stdout
+    assert not (tmp_path / "github-output.txt").exists() or "failure_mode" not in (tmp_path / "github-output.txt").read_text()
+
+
+def test_timeout_status_without_text_fails_with_an_error_and_timeout_failure_mode(tmp_path):
+    result = _run_outcome(tmp_path, [], status=124)
     assert "outcome=fail failure=timeout" in result.stdout
+    assert "::error::coordinator timed out after 120m" in result.stdout
+    assert "failure_mode=timeout" in (tmp_path / "github-output.txt").read_text()
 
 
 def test_zero_status_with_empty_output_is_no_final_message(tmp_path):

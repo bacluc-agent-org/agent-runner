@@ -170,6 +170,110 @@ def _pick_decision_block():
     return text[text.index("# pick-decision-start") : text.index("# pick-decision-end")]
 
 
+def _selector_attempt_block():
+    text = WORKFLOW.read_text()
+    return text[text.index("# selector-attempt-start") : text.index("# pick-decision-start")]
+
+
+RECORD_MODEL = """
+calls_file="$RUNNER_TEMP/opencode-calls.txt"
+printf 'call\\n' >> "$calls_file"
+model=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model) model="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf '%s\\n' "$model" >> "$RUNNER_TEMP/opencode-models.txt"
+"""
+
+SECOND_CALL_SELECTS = RECORD_MODEL + """
+if (( $(wc -l < "$RUNNER_TEMP/opencode-calls.txt") == 1 )); then
+  echo "OpenCode's free tier can only be used from within OpenCode" >&2
+  exit 1
+fi
+echo "SELECTED_ISSUE: 42"
+exit 0
+"""
+
+FIRST_CALL_SELECTS_WITH_NONZERO_EXIT = RECORD_MODEL + """
+echo "SELECTED_ISSUE: 42"
+exit 1
+"""
+
+ALWAYS_FAILS = RECORD_MODEL + """
+echo "OpenCode's free tier can only be used from within OpenCode" >&2
+exit 1
+"""
+
+
+def _run_selector(tmp_path, stub_body):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    stub = bindir / "opencode"
+    stub.write_text("#!/usr/bin/env bash\n" + stub_body)
+    stub.chmod(0o755)
+    (tmp_path / "selection-prompt.txt").write_text("pick one")
+    (tmp_path / "candidate-numbers.txt").write_text("42\n")
+    (tmp_path / "available-models.txt").write_text(
+        "opencode/big-pickle\nopencode/runner-up-free\n"
+    )
+    script = (
+        f"selection={str(tmp_path / 'selection.out')!r}\n"
+        f"candidates={str(tmp_path / 'candidate-numbers.txt')!r}\n"
+        f"prompt={str(tmp_path / 'selection-prompt.txt')!r}\n"
+        f"available_models_file={str(tmp_path / 'available-models.txt')!r}\n"
+        f"GITHUB_OUTPUT={str(tmp_path / 'github-output.txt')!r}\n"
+        "SELECTION_TIMEOUT_MINUTES=15\n"
+        "selection_model=opencode/big-pickle\n"
+        "selection_source='preferred list'\n"
+        f"{_selector_attempt_block()}\n"
+        f"{_pick_decision_block()}\n"
+        'printf "REACHED issue=%s\\n" "$issue_number"\n'
+    )
+    return run(
+        ["bash", "-Eeuo", "pipefail", "-c", script],
+        cwd=Path(__file__).parents[1],
+        env={
+            **os.environ,
+            "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
+            "RUNNER_TEMP": str(tmp_path),
+        },
+        capture_output=True,
+        text=True,
+    )
+
+
+def _selector_models(tmp_path):
+    return (tmp_path / "opencode-models.txt").read_text().splitlines()
+
+
+def test_selector_retries_with_a_runner_up_model_after_a_free_tier_error(tmp_path):
+    result = _run_selector(tmp_path, SECOND_CALL_SELECTS)
+    assert result.returncode == 0, result.stderr
+    assert "REACHED issue=42" in result.stdout
+    assert _selector_models(tmp_path) == ["opencode/big-pickle", "opencode/runner-up-free"]
+
+
+def test_selector_accepts_a_valid_pick_from_a_nonzero_exit_without_retrying(tmp_path):
+    result = _run_selector(tmp_path, FIRST_CALL_SELECTS_WITH_NONZERO_EXIT)
+    assert result.returncode == 0, result.stderr
+    assert "REACHED issue=42" in result.stdout
+    assert len(_selector_models(tmp_path)) == 1
+
+
+def test_selector_fails_after_two_failed_attempts(tmp_path):
+    result = _run_selector(tmp_path, ALWAYS_FAILS)
+    assert result.returncode == 1
+    assert "REACHED" not in result.stdout
+    assert len(_selector_models(tmp_path)) == 2
+
+
+def test_selector_attempts_are_hard_killed_after_a_grace_period():
+    assert "--kill-after=30s" in _selector_attempt_block()
+
+
 def _run_pick_decision(tmp_path, selection_text, candidates_text="42\n", status=0, fatal=False):
     (tmp_path / "selection.out").write_text(selection_text)
     (tmp_path / "candidate-numbers.txt").write_text(candidates_text)

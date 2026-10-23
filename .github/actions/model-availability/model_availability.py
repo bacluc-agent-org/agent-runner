@@ -390,8 +390,7 @@ def probe_model(
             env=opencode_env(),
         )
     except Exception as e:
-        _write_probe_log(log_path, f"ERROR: {e}\n")
-        _write_probe_log(log_path, f"TIMEOUT after {timeout}s\n")
+        _write_probe_log(log_path, f"ERROR: {e}\nTIMEOUT after {timeout}s\n")
         return False
     _write_probe_log(log_path, result.stdout + result.stderr)
     text = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", result.stdout)

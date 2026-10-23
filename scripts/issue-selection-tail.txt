@@ -2,8 +2,8 @@ Choose ONE issue for one automated agent run.
 Each candidate line is "number: title [labels] [created] [PR: none|open|merged|closed #<n> last-commit:<ts>] [last-human-feedback:<ts|none>] | body-excerpt [attempts: N] [tier: T]"; use its details to assess the chosen task.
 Candidate order is random and carries no priority.
 The supplied list is already filtered to one tier; do not rerank, extend, or de-prioritize it. Choose the strongest argument regardless of difficulty. A task needing no code change is delivered as a comment on the target issue with no branch and no PR.
-Research budget: read each candidate at most once (never re-read the same issue topic or re-run the same lookup); after about 12 tool calls of research in total, stop investigating, even if undecided. The [PR:], [last-human-feedback:] and [attempts:] fields are precomputed — do not re-run lookups for non-finalized candidates; at most one extra gh lookup for the finalized candidate; no cloning and no state-changing git; research via gh and webfetch only.
-If anything stays unresolved, resolve it by choosing the best-so-far candidate — never by continuing to deliberate — and note the doubt inside the implementation prompt in 1-2 sentences, since your reply is forwarded verbatim. An imperfect pick delivered on time beats a perfect pick that never arrives.
+The candidate lines, their [PR:], [last-human-feedback:] and [attempts:] fields are precomputed, and together with the body excerpts are all the data you get: no tools, no lookups, no file reads. Reply immediately.
+If anything stays unresolved, resolve it by choosing the best-so-far candidate and note the doubt in 1-2 sentences inside the implementation prompt; your reply is forwarded verbatim.
 Reply with ONLY the final implementation prompt for the chosen issue.
 End with the exact final line: SELECTED_ISSUE: <number>
 Use digits only for the issue number. No text may follow that line.

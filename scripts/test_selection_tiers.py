@@ -131,30 +131,38 @@ def test_workflow_uses_latest_commit_and_created_at_when_pr_has_no_commits():
     assert 'map(select(test("^[0-9]")))|max // null' in content
 
 
-def test_selection_tail_keeps_contract_and_research_budget():
+def test_selection_tail_keeps_contract_and_forbids_tools():
     tail = (Path(__file__).parents[1] / "scripts/issue-selection-tail.txt").read_text()
     assert "End with the exact final line: SELECTED_ISSUE: <number>" in tail
     assert "No text may follow that line." in tail
-    assert "read each candidate at most once" in tail
-    assert "12 tool calls" in tail
-    assert "stop investigating, even if undecided" in tail
-    assert "choosing the best-so-far candidate" in tail
+    assert "no tools, no lookups, no file reads" in tail
     assert "fields are precomputed" in tail
-    assert "at most one extra gh lookup for the finalized candidate" in tail
-    assert "no cloning" in tail
-    assert "no state-changing git" in tail
-    assert "research via gh and webfetch only" in tail
-    assert 'note the doubt inside the implementation prompt' in tail
+    assert "choosing the best-so-far candidate" in tail
+    assert "tool calls" not in tail
+    assert "gh lookup" not in tail
+    assert "research" not in tail.lower()
 
 
-def test_issue_selector_prompt_pins_precomputed_dedup_and_tool_budget():
+def test_issue_selector_denies_every_tool():
     selector = (Path(__file__).parents[1] / ".opencode/agent/issue-selector.md").read_text()
+    frontmatter = selector.split("---", 2)[1]
+    assert '"*": deny' in frontmatter
+    assert "read: allow" not in frontmatter
+    assert "glob: allow" not in frontmatter
+    assert "grep: allow" not in frontmatter
+    assert "webfetch: allow" not in frontmatter
+    assert "bash:" not in frontmatter
+    assert "opencode debug" not in selector
+    assert "ONE targeted lookup" not in selector
+    assert "12 tool calls" not in selector
     assert "stamped the result into every candidate line" in selector
-    assert "do not repeat the batched lookups" in selector
-    assert "ONE targeted lookup" in selector
-    assert "never clone repositories" in selector
-    assert "state-changing git commands" in selector
-    assert "12 tool calls" in selector
+    assert "You have no tools" in selector
+
+
+def test_selection_default_timeout_is_fifteen_minutes():
+    workflow = WORKFLOW.read_text()
+    assert "default: 15" in workflow
+    assert "${{ inputs.selection_timeout_minutes || 15 }}" in workflow
 
 
 def _pick_decision_block():

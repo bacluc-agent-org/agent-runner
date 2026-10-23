@@ -292,11 +292,17 @@ def provider_has_credentials(
     model_id: str, provider_options: dict, env: dict, auth_path: str | None = None
 ) -> bool:
     """Gate: model may be probed only when its provider prefix has a resolvable
-    apiKey (config + env) or an auth.json entry; unconfigured/unknown providers fail."""
+    apiKey (config + env) or an auth.json entry. A provider absent from the config
+    is built-in, so opencode supplies its catalog and credentials."""
+    if "/" not in model_id:
+        return False
     provider = model_id.partition("/")[0]
     if not provider:
         return False
     if provider_authenticated(provider, auth_path):
+        return True
+    if provider not in provider_options:
+        # Built-in provider (e.g. opencode/openai): opencode supplies its catalog and credentials.
         return True
     info = provider_options.get(provider)
     if not isinstance(info, dict):

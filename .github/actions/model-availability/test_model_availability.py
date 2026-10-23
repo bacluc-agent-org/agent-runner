@@ -532,6 +532,7 @@ class TestProviderHasCredentials:
         "openrouter": {"baseURL": "https://openrouter.ai/api/v1", "apiKey": "{env:OPENROUTER_API_KEY}"},
         "literal-key-provider": {"baseURL": "https://x.example/v1", "apiKey": "sk-literal"},
         "no-api-key": {"baseURL": "https://x.example/v1"},
+        "cortecs2": {"baseURL": "https://api.cortecs.ai/v1"},
     }
 
     def test_env_key_unset_drops_model(self):
@@ -555,7 +556,12 @@ class TestProviderHasCredentials:
             "no-api-key/glm-5.1", self.OPTIONS, {}
         )
 
-    def test_unknown_provider_dropped(self):
+    def test_builtin_provider_absent_from_config_is_kept(self):
+        assert model_availability.provider_has_credentials(
+            "opencode/a-free", self.OPTIONS, {}
+        )
+
+    def test_configured_provider_without_key_dropped(self):
         assert not model_availability.provider_has_credentials(
             "cortecs2/glm-5.1", self.OPTIONS, {}
         )
@@ -573,8 +579,15 @@ class TestProviderHasCredentials:
         )
 
     def test_absent_auth_json_falls_back_to_config_key(self, tmp_path):
+        auth_path = str(tmp_path / "nope.json")
+        assert model_availability.provider_has_credentials(
+            "vshn-us-ai/subscription.glm-5.3-flash",
+            self.OPTIONS,
+            {"VSHN_US_AI_API_KEY": "k"},
+            auth_path=auth_path,
+        )
         assert not model_availability.provider_has_credentials(
-            "openai/gpt-5.6-luna", self.OPTIONS, {}, auth_path=str(tmp_path / "nope.json")
+            "vshn-us-ai/subscription.glm-5.3-flash", self.OPTIONS, {}, auth_path=auth_path
         )
 
     def test_malformed_provider_info_without_key_fails_closed(self):
@@ -1218,9 +1231,10 @@ class TestLoadProviderOptions:
             )
         )
         options = model_availability.load_provider_options([masked])
-        assert model_availability.provider_has_credentials(
-            "vshn-us-ai/subscription.glm-5.2", options, {}
-        ) is False
+        assert options == {}
+        assert not model_availability.provider_has_credentials(
+            "vshn-us-ai/subscription.glm-5.2", {"vshn-us-ai": {}}, {}
+        )
 
     def test_malformed_provider_entries_skipped(self, tmp_path):
         file = str(
@@ -1498,6 +1512,9 @@ class TestModelAvailabilityAction:
         )
         monkeypatch.setattr(
             model_availability.subprocess, "run", fake_run
+        )
+        monkeypatch.setattr(
+            model_availability, "load_provider_options", lambda *args, **kwargs: {"vshn-us-ai": {}}
         )
         monkeypatch.setattr(model_availability, "probe_candidates", lambda *args: pytest.fail())
         written = []

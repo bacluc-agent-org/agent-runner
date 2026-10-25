@@ -19,3 +19,5 @@ Target repo (todo repo per AGENTS.md) missing locally. Cannot verify PATH A prec
 ## Ponytail skip
 
 No invented feature code; only design doc + branch record delivered.
+
+Note: ./scripts/completion-check prettier failure on this file (part of CHECK FAILED at commit 6939f01 per review request).

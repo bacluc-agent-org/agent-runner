@@ -20,6 +20,9 @@ PRETTIER_VERSION=5.1.1
 # renovate: datasource=docker depName=rhysd/actionlint
 ACTIONLINT_VERSION=1.7.12
 
+verbose=0
+while [[ ${1:-} == "-v" || ${1:-} == "--verbose" ]]; do verbose=1; shift; done
+
 mount=(-v "$PWD:/workspace" -w /workspace)
 status=0
 
@@ -39,6 +42,7 @@ check() {
   local name="$1"
   shift
   printf '==> %s\n' "$name"
+  if [[ "$verbose" == "1" ]]; then printf '==> VERBOSE: %s\n' "$*"; fi
   if "$@"; then
     printf 'PASS: %s\n' "$name"
   else

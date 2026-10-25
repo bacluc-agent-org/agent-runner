@@ -21,7 +21,7 @@ PRETTIER_VERSION=5.1.1
 ACTIONLINT_VERSION=1.7.12
 
 verbose=0
-while [[ ${1:-} == "-v" || ${1:-} == "--verbose" ]]; do verbose=1; shift; done
+while [[ "${1:-}" == "-v" || "${1:-}" == "--verbose" ]]; do verbose=1; shift; done
 
 mount=(-v "$PWD:/workspace" -w /workspace)
 status=0

@@ -747,6 +747,11 @@ class TestParseGoModelIds:
 
 
 class TestBuildCandidates:
+    # Provider gating is covered in TestGatedCandidates; these tests only pin ordering.
+    @pytest.fixture(autouse=True)
+    def _builtin_providers_only(self, monkeypatch):
+        monkeypatch.setattr(model_availability, "load_provider_options", lambda *a, **kw: {})
+
     def test_builds_from_provider_models_without_env_override(self):
         assert model_availability.build_candidates(
             ["opencode/a-free"],
@@ -788,6 +793,38 @@ class TestBuildCandidates:
             {"opencode-go-openai": ["glm-5.2"]},
             {},
         ) == ["opencode-go-openai/glm-5.2", "opencode/a-free"]
+
+
+class TestGatedCandidates:
+    VSHN = {"vshn-us-ai": {"baseURL": "{env:VSHN_US_BASE_URL}", "apiKey": "{env:VSHN_US_AI_API_KEY}"}}
+
+    def test_configured_provider_without_resolvable_key_is_dropped(self, monkeypatch):
+        monkeypatch.setattr(model_availability, "load_provider_options", lambda *a, **kw: self.VSHN)
+        assert model_availability.build_candidates(
+            ["opencode/a-free", "vshn-us-ai/subscription.glm-5.2"], {}, {}
+        ) == ["opencode/a-free"]
+
+    def test_configured_provider_with_resolvable_key_is_kept(self, monkeypatch):
+        monkeypatch.setattr(model_availability, "load_provider_options", lambda *a, **kw: self.VSHN)
+        assert model_availability.build_candidates(
+            [], {"vshn-us-ai": ["subscription.glm-5.2"]}, {"VSHN_US_AI_API_KEY": "k"}
+        ) == ["vshn-us-ai/subscription.glm-5.2"]
+
+    def test_builtin_provider_without_config_entry_is_kept(self, monkeypatch):
+        monkeypatch.setattr(model_availability, "load_provider_options", lambda *a, **kw: {})
+        assert model_availability.build_candidates(
+            ["opencode/a-free"], {}, {}
+        ) == ["opencode/a-free"]
+
+    def test_available_models_skips_cached_unprobeable_provider(self, monkeypatch):
+        monkeypatch.setattr(model_availability, "load_provider_options", lambda *a, **kw: self.VSHN)
+        cache = {
+            "opencode/a-free": {"ok": True, "checked": "x"},
+            "vshn-us-ai/subscription.glm-5.2": {"ok": True, "checked": "x"},
+        }
+        assert model_availability.available_models(
+            cache, ["opencode/a-free"], {"vshn-us-ai": ["subscription.glm-5.2"]}
+        ) == ["opencode/a-free"]
 
 
 class TestIsCacheFresh:
@@ -973,6 +1010,10 @@ class TestMergeResults:
 
 
 class TestAvailableModels:
+    @pytest.fixture(autouse=True)
+    def _builtin_providers_only(self, monkeypatch):
+        monkeypatch.setattr(model_availability, "load_provider_options", lambda *a, **kw: {})
+
     def test_free_first_then_paid(self):
         cache = {
             "opencode-go-openai/glm-5.2": {"ok": True, "checked": "x"},

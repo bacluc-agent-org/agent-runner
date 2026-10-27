@@ -413,11 +413,16 @@ def discover_models() -> tuple[list[str], dict[str, list[str]]]:
 
 
 def build_candidates(whitelisted_models: list[str], provider_models: dict[str, list[str]], env: dict) -> list[str]:
+    provider_options = load_provider_options()
     candidates = []
     for provider, models in provider_models.items():
         for model in models:
-            candidates.append(f"{provider}/{model}")
-    candidates.extend(whitelisted_models)
+            candidate = f"{provider}/{model}"
+            if provider_has_credentials(candidate, provider_options, env):
+                candidates.append(candidate)
+    for model in whitelisted_models:
+        if provider_has_credentials(model, provider_options, env):
+            candidates.append(model)
     return list(dict.fromkeys(candidates))
 
 
@@ -536,14 +541,19 @@ def merge_results(cache: dict, results: dict[str, bool], checked: str) -> dict:
 def available_models(
     cache: dict, whitelisted_models: list[str], provider_models: dict[str, list[str]]
 ) -> list[str]:
+    provider_options = load_provider_options()
     available = []
     for model in whitelisted_models:
-        if cache.get(model, {}).get("ok"):
+        if cache.get(model, {}).get("ok") and provider_has_credentials(
+            model, provider_options, os.environ
+        ):
             available.append(model)
-    for provider, _ in PROVIDERS:
-        for model in provider_models.get(provider, []):
+    for provider, models in provider_models.items():
+        for model in models:
             candidate = f"{provider}/{model}"
-            if cache.get(candidate, {}).get("ok"):
+            if cache.get(candidate, {}).get("ok") and provider_has_credentials(
+                candidate, provider_options, os.environ
+            ):
                 available.append(candidate)
     return list(dict.fromkeys(available))
 

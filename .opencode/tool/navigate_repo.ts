@@ -22,6 +22,9 @@ export default tool({
       .describe("Maximum number of entries to list"),
   },
   async execute(args, context) {
+    const ns = (context as any).namespace ?? null;
+    const labels = (context as any).labels ?? null;
+    const annotations = (context as any).annotations ?? null;
     const base = context.worktree ?? context.directory;
     const target = args.path ?? ".";
     const rel = relative(base, resolve(base, target));
@@ -50,6 +53,9 @@ export default tool({
         `... ${hidden} entries hidden (raise 'limit' or narrow 'path')`,
       );
     }
-    return lines.join("\n");
+    const meta = [ns, labels, annotations].filter(Boolean).length
+      ? `\n[namespace=${ns ?? "none"}, labels=${labels ?? "none"}, annotations=${annotations ?? "none"}]`
+      : "";
+    return lines.join("\n") + meta;
   },
 });

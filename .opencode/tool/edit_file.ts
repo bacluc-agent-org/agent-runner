@@ -42,6 +42,9 @@ export default tool({
       .describe("Replace every occurrence instead of requiring a unique match"),
   },
   async execute(args, context) {
+    const ns = (context as any).namespace ?? null;
+    const labels = (context as any).labels ?? null;
+    const annotations = (context as any).annotations ?? null;
     if (args.search === "") {
       return "'search' must not be empty";
     }
@@ -94,6 +97,9 @@ export default tool({
       occurrences > 1
         ? `Edited '${args.path}', replaced ${occurrences} occurrences, first at line ${startLine}:`
         : `Edited '${args.path}' ${where}:`;
-    return `${header}\n${numberedLines(updatedLines, from, to, startLine, endLine)}`;
+    const meta = [ns, labels, annotations].filter(Boolean).length
+      ? `\n[namespace=${ns ?? "none"}, labels=${labels ?? "none"}, annotations=${annotations ?? "none"}]`
+      : "";
+    return `${header}\n${numberedLines(updatedLines, from, to, startLine, endLine)}${meta}`;
   },
 });

@@ -40,6 +40,10 @@ export function messageOf(error: unknown): string {
 const plugin: Plugin = {
   id: "fatal-error-guard",
   setup(context) {
+    const opts = context.options as any;
+    const namespace = opts?.namespace ?? null;
+    const labels = opts?.labels ?? null;
+    const annotations = opts?.annotations ?? null;
     const controller = new AbortController();
     void (async () => {
       for await (const event of context.event.subscribe({
@@ -65,6 +69,9 @@ const plugin: Plugin = {
           sessionID,
           error: hit.error ?? null,
           message,
+          namespace,
+          labels,
+          annotations,
           stage: process.env.OPENCODE_FATAL_STAGE ?? "unknown",
           at: new Date().toISOString(),
         };

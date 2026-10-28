@@ -86,7 +86,8 @@ jobs:
           SELECTION_PROMPT: ${{ inputs.selection_prompt }}
           AVAILABLE_MODELS: ${{ steps.model-availability.outputs.available-models }}
           OPENCODE_FATAL_STAGE: selection
-          SELECTION_TIMEOUT_MINUTES: ${{ inputs.selection_timeout_minutes || 10 }}
+          SELECTION_TIMEOUT_MINUTES: ${{ inputs.selection_timeout_minutes || 15 }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
         run: |
           set -Eeuo pipefail
           rm -f "$RUNNER_TEMP/opencode-fatal.json"
@@ -96,6 +97,10 @@ jobs:
           printf '::add-mask::%s\n' "$OPENCODE_GO_2_API_KEY"
           printf '::add-mask::%s\n' "$OPENCODE_AUTH_CONTENT"
 
+          if ! gh label create "agent-running:${CURRENT_RUN_ID}" -R "$ISSUE_REPOSITORY" \
+            --color 0E8A16 --description "Selected by the hourly issue runner (run ${CURRENT_RUN_ID})" --force; then
+            printf '::warning::could not ensure the run-scoped agent-running label exists; the claim may not apply\n'
+          fi
           if ! gh label create agent-running -R "$ISSUE_REPOSITORY" \
             --color 0E8A16 --description 'Selected by the hourly issue runner' --force; then
             printf '::warning::could not ensure the agent-running label exists; the claim may not apply\n'
@@ -105,6 +110,17 @@ jobs:
             printf '::warning::could not ensure the agent-attempted label exists; attempt history may not apply\n'
           fi
 
+          # Clean up claims from runs that are no longer in progress/queued
+          while IFS=$'\t' read -r issue_num label; do
+            [[ -z "$issue_num" || -z "$label" ]] && continue
+            run_id="${label#agent-running:}"
+            [[ "$run_id" == "$label" ]] && continue
+            run_status="$(gh run view "$run_id" -R bacluc-agent-org/agent-runner --json status --jq .status 2>/dev/null || echo "unknown")"
+            if [[ "$run_status" != "in_progress" && "$run_status" != "queued" ]]; then
+              gh issue edit "$issue_num" -R "$ISSUE_REPOSITORY" --remove-label "$label" 2>/dev/null || true
+            fi
+          done < <(gh issue list -R "$ISSUE_REPOSITORY" --state open --label 'agent-running:*' --json number,labels --jq '.[] | "\(.number)\t\((.labels[] | select(.name | startswith("agent-running:")) | .name))"' 2>/dev/null || true)
+
           printf '\n\n\n\n\n\n'
           printf 'Fetching github issues...\n'
           printf '\n\n\n\n\n\n'
@@ -113,7 +129,7 @@ jobs:
           lookup_started=$SECONDS
           gh api --paginate --slurp "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:ready-for-implementation+-label:agent-running&per_page=100" \
             > "$search_json.pages"
-          jq '[.[] | .items[]]' "$search_json.pages" > "$search_json"
+          jq '[.[] | .items[] | select(([.labels[]?.name] | any(startswith("agent-running:"))) | not)]' "$search_json.pages" > "$search_json"
           rm "$search_json.pages"
           printf 'GitHub lookup duration: candidate search and collection %ss\n' "$((SECONDS - lookup_started))"
 
@@ -341,7 +357,7 @@ jobs:
             exit 1
           fi
           printf 'issue_number=%s\n' "$issue_number" >> "$GITHUB_OUTPUT"
-          if ! gh issue edit "$issue_number" -R "$ISSUE_REPOSITORY" --add-label agent-running,agent-attempted; then
+          if ! gh issue edit "$issue_number" -R "$ISSUE_REPOSITORY" --add-label "agent-running:${CURRENT_RUN_ID}",agent-attempted; then
             printf '::warning::could not claim issue %s; dispatching unclaimed\n' "$issue_number"
           fi
           {
@@ -410,13 +426,14 @@ jobs:
 
   release:
     needs: [select, run]
-    if: always() && needs.select.outputs.issue_number != ''
+    if: always()
     permissions:
       issues: write
     runs-on: blacksmith-2vcpu-ubuntu-2404
     env:
       GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
       ISSUE_REPOSITORY: ${{ vars.ISSUE_REPOSITORY || github.repository }}
+      CURRENT_RUN_ID: ${{ github.run_id }}
     steps:
       - name: Release the issue claim
         shell: bash
@@ -425,6 +442,16 @@ jobs:
         run: |
           set -Eeuo pipefail
           printf '::add-mask::%s\n' "$GITHUB_TOKEN"
-          if ! gh issue edit "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --remove-label agent-running; then
-            printf '::warning::could not remove agent-running from #%s; it stays claimed until unlabelled by hand\n' "$ISSUE_NUMBER"
+          if [[ -n "${ISSUE_NUMBER:-}" ]]; then
+            if ! gh issue edit "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --remove-label "agent-running:${CURRENT_RUN_ID}" 2>/dev/null; then
+              gh issue edit "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --remove-label agent-running 2>/dev/null || true
+            fi
+          else
+            # Scan for issues whose claim run id equals this run id
+            while IFS=$'\t' read -r issue_num label; do
+              [[ -z "$issue_num" || -z "$label" ]] && continue
+              if [[ "$label" == "agent-running:${CURRENT_RUN_ID}" ]]; then
+                gh issue edit "$issue_num" -R "$ISSUE_REPOSITORY" --remove-label "$label" 2>/dev/null || true
+              fi
+            done < <(gh issue list -R "$ISSUE_REPOSITORY" --state open --label 'agent-running:*' --json number,labels --jq '.[] | "\(.number)\t\((.labels[] | select(.name == "agent-running:'"${CURRENT_RUN_ID}"'") | .name))"' 2>/dev/null || true)
           fi

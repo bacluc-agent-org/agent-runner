@@ -48,7 +48,9 @@ check() {
 }
 
 check 'formatting (prettier --check .)' docker run --rm "${mount[@]}" "ghcr.io/bacluc/prettier-image/prettier-image:${PRETTIER_VERSION}" --ignore-path "$prettier_ignore" --check .
-check 'actionlint (workflows + used actions)' docker run --rm "${mount[@]}" "rhysd/actionlint:${ACTIONLINT_VERSION}" -color
+# The actionlint image runs as an unprivileged user, which cannot read a checkout
+# made with a restrictive umask (0600); root can, and only reads here.
+check 'actionlint (workflows + used actions)' docker run --rm --user 0 "${mount[@]}" "rhysd/actionlint:${ACTIONLINT_VERSION}" -color
 if [[ ! -d .opencode/node_modules/@opencode-ai/plugin ]]; then
   check 'opencode node dependencies (npm install)' npm install --prefix .opencode
 fi

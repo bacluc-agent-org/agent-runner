@@ -189,6 +189,9 @@ def provider_probeable(model_id: str, provider_config: dict, env: dict) -> bool:
     provider = model_id.split("/", 1)[0] if "/" in model_id else ""
     if not provider:
         return True
+    # The built-in opencode provider (e.g. opencode/big-pickle) needs no credentials.
+    if provider == "opencode":
+        return True
     if provider not in provider_config:
         return True
     info = provider_config[provider]

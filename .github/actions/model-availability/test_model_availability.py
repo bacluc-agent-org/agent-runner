@@ -447,6 +447,10 @@ class TestProviderProbeable:
     def test_openai_passes_like_builtin_provider(self):
         assert model_availability.provider_probeable("openai/gpt-5.6-luna", {}, {})
 
+    def test_opencode_builtin_provider_is_probeable_even_with_bad_config(self):
+        config = {"opencode": {"baseURL": None, "apiKey": None}}
+        assert model_availability.provider_probeable("opencode/big-pickle", config, {})
+
 class TestParseWhitelistedModels:
     def test_uses_exact_openai_patterns_without_changing_opencode_matching(self):
         output = (

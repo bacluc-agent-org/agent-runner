@@ -283,7 +283,7 @@ jobs:
             printf '::stop-commands::%s\n' "$stop_token"
             printf 'Model discovery prompt:\n%s\n' "$discovery_prompt"
             set +e
-            timeout "${DISCOVERY_TIMEOUT}m" opencode run --agent model-discovery --model "$fallback_model" --title "model-discovery" "$discovery_prompt" > "$discovery_output"
+            timeout --kill-after=30s "${DISCOVERY_TIMEOUT}m" opencode run --agent model-discovery --model "$fallback_model" --title "model-discovery" "$discovery_prompt" > "$discovery_output"
             discovery_status=$?
             cat "$discovery_output"
             printf '::%s::\n' "$stop_token"

@@ -62,6 +62,22 @@ test("no match returns an error and leaves the file untouched", async (t) => {
   assert.equal(readFileSync(file, "utf8"), "AAA\nBBB\n");
 });
 
+test("empty search returns an error and leaves the file untouched", async (t) => {
+  const ctx = mkCtx();
+  t.after(() => rmSync(ctx.worktree, { recursive: true, force: true }));
+  const file = join(ctx.worktree, "a.txt");
+  writeFileSync(file, "AAA\nBBB\n");
+
+  const res = await editFile.execute(
+    { path: "a.txt", search: "", replace: "x" },
+    ctx,
+  );
+
+  assert.ok(typeof res === "string");
+  assert.match(res, /must not be empty/);
+  assert.equal(readFileSync(file, "utf8"), "AAA\nBBB\n");
+});
+
 test("all=true replaces every occurrence", async (t) => {
   const ctx = mkCtx();
   t.after(() => rmSync(ctx.worktree, { recursive: true, force: true }));

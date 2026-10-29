@@ -57,9 +57,6 @@ export default tool({
     } catch (err) {
       return `Cannot read '${args.path}': ${(err as Error).message}`;
     }
-    if (!args.search || args.search.length === 0) {
-      return `'${args.path}': search string is empty; nothing changed.`;
-    }
     const occurrences = content.split(args.search).length - 1;
     if (occurrences === 0) {
       return `'${args.path}' contains 0 matches for the given search string; nothing was changed. Make sure whitespace and indentation match the file exactly.`;

@@ -3,4 +3,6 @@
 __pycache__/
 .idea/
 loop-metrics.json
-.opencode/node_modules
+.opencode/node_modules/
+.opencode/package-lock.json
+.prettierignore.completion-check

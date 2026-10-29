@@ -3,3 +3,4 @@
 __pycache__/
 .idea/
 loop-metrics.json
+.opencode/node_modules

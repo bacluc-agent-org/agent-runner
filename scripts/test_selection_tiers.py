@@ -139,3 +139,45 @@ def test_selection_tail_keeps_contract_and_research_budget():
     assert "choosing the best-so-far candidate" in tail
     assert 'must not be cut by this budget' in tail
     assert 'note the doubt inside the implementation prompt' in tail
+
+
+def test_run_scoped_agent_running_claim_excludes_candidate():
+    import json
+    import re
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from subprocess import run
+
+    with TemporaryDirectory() as directory:
+        candidates = Path(directory) / "candidates.json"
+        branches = Path(directory) / "branches.txt"
+        tail = Path(directory) / "tail.txt"
+        candidates.write_text(
+            json.dumps(
+                [
+                    {"number": 1, "labels": [{"name": "agent-running:12345"}]},
+                    {"number": 2, "labels": [{"name": "ready-for-implementation"}]},
+                ]
+            )
+        )
+        branches.write_text("")
+        tail.write_text("Choose\n")
+        result = run(
+            [
+                "python3",
+                "scripts/selection_tiers.py",
+                "--candidates",
+                str(candidates),
+                "--branches",
+                str(branches),
+                "--tail-file",
+                str(tail),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    assert "attempts for 1:" not in result.stderr
+    assert "attempts for 2:" in result.stderr
+    assert re.search(r"^2:", result.stdout, re.M)
+    assert not re.search(r"^1:", result.stdout, re.M)

@@ -12,7 +12,7 @@ runs:
 
     - name: Install OpenCode
       shell: bash
-      run: npm install --global @opencode/cli@2.1.4
+      run: npm install --global @opencode/cli@2.2.2
 
     - name: Fetch and prepare OpenCode configuration
       id: config

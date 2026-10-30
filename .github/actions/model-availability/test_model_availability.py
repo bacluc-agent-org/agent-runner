@@ -1303,7 +1303,7 @@ class TestRefineIssuesNoCandidates:
 
     def test_refinement_candidate_filtering_preserves_unrefined_first_and_skips_their_comments(self, tmp_path):
         content = self.WORKFLOW.read_text()
-        assert 'is:open+is:issue+label:agent-refined+-label:ready-for-implementation+-label:agent-ignore+sort:updated-desc&per_page=10' in content
+        assert 'is:open+is:issue+label:agent-refined+-label:ready-for-implementation+-label:agent-ignore+sort:updated-desc&per_page=10' not in content
         start = content.index('          candidates="$RUNNER_TEMP/candidate-numbers.txt"')
         end = content.index('          if [[ ! -s "$candidates" ]]; then', start)
         block = content[start:end]
@@ -1331,15 +1331,15 @@ elif args[0] == "issue":
             text=True,
         )
         assert result.returncode == 0, result.stderr
-        assert result.stdout.rstrip().splitlines() == ["11", "22"]
-        assert len(list(tmp_path.glob("all-comments-*.json"))) == 2
+        assert result.stdout.rstrip().splitlines() == ["11"]
+        assert len(list(tmp_path.glob("all-comments-*.json"))) == 1
 
     def test_refined_issue_filter_excludes_bots_progress_and_old_comments(self):
         content = self.WORKFLOW.read_text()
         assert content.count('gh api --paginate --slurp "repos/$ISSUE_REPOSITORY/issues/$number/comments?per_page=100"') == 1
         assert 'select(.user.type != "Bot")' in content
         assert 'contains("<!-- agent-progress -->") | not' in content
-        assert "select(.created_at > $refined_at)" in content
+        assert "select(.created_at > $refined_at)" not in content
 
     def test_refinement_marker_is_written_after_validation_and_removed_from_prompt(self):
         content = self.WORKFLOW.read_text()

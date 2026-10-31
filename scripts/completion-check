@@ -47,7 +47,11 @@ check() {
   fi
 }
 
-check 'formatting (prettier --check .)' docker run --rm "${mount[@]}" "ghcr.io/bacluc/prettier-image/prettier-image:${PRETTIER_VERSION}" --ignore-path "$prettier_ignore" --check .
+if command -v npx > /dev/null 2>&1; then
+  check 'formatting (prettier --check .)' npx prettier --ignore-path "$prettier_ignore" --check .
+else
+  check 'formatting (prettier --check .)' bash -c 'npm install --quiet prettier && npx prettier --ignore-path "$prettier_ignore" --check .'
+fi
 check 'actionlint (workflows + used actions)' docker run --rm "${mount[@]}" "rhysd/actionlint:${ACTIONLINT_VERSION}" -color
 # Always install: the opencode runtime installs its own plugin version into
 # .opencode/node_modules, so an existing directory can hold a tree the tool

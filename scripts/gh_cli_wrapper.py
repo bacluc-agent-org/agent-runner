@@ -15,7 +15,7 @@ def owned_repo(repo):
     if not re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9_.-]+", repo):
         deny("use an explicit github.com OWNER/REPO")
     owner, name = repo.split("/")
-    if owner.lower() not in {"bacluc", "bacluc-agent"} or name in {".", ".."}:
+    if owner.lower() not in {"bacluc", "bacluc-agent", "bacluc-agent-org"} or name in {".", ".."}:
         deny("create the PR in the bacluc-agent fork, not the upstream repository")
 
 

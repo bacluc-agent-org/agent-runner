@@ -206,7 +206,7 @@ def _reasons_from_case_file(path: str) -> set[str]:
 class TestReasonTokenDrift:
     def test_workflow_case_matches_validator(self):
         assert _reasons_from_case_file(
-            ".github/workflows/refine-issues.yml"
+            ".github/actions/refine-issues/action.yml"
         ) == _validator_reasons()
 
 

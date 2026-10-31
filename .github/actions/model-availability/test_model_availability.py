@@ -1340,7 +1340,9 @@ class TestDiscoveryTimeout:
 
 
 class TestRefineIssuesExitCode:
-    WORKFLOW = Path(__file__).parents[3] / ".github/workflows/refine-issues.yml"
+    WORKFLOW = (
+        Path(__file__).parents[3] / ".github/actions/refine-issues/action.yml"
+    )
 
     @classmethod
     def _completion_tail(cls):
@@ -1370,7 +1372,9 @@ class TestRefineIssuesExitCode:
 
 
 class TestRefineIssuesNoCandidates:
-    WORKFLOW = Path(__file__).parents[3] / ".github/workflows/refine-issues.yml"
+    WORKFLOW = (
+        Path(__file__).parents[3] / ".github/actions/refine-issues/action.yml"
+    )
 
     @classmethod
     def _no_candidates_block(cls):
@@ -1416,7 +1420,7 @@ class TestWorkflowOpenRouterSelection:
     WORKFLOWS = [
         ".github/workflows/opencode.yml",
         ".github/workflows/hourly-issue.yml",
-        ".github/workflows/refine-issues.yml",
+        ".github/actions/refine-issues/action.yml",
     ]
 
     def test_workflows_select_openrouter_and_exclude_weak_free_models(self):
@@ -1424,8 +1428,15 @@ class TestWorkflowOpenRouterSelection:
             content = Path(path).read_text()
             assert "openrouter/*)" in content
             assert '[[ -n "$OPENROUTER_API_KEY" ]]' in content
-            assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in content
             assert "model-deny-list.txt" in content
+            if "/workflows/" in path:
+                assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in content
+        # the refine-issues composite action reads the key from the caller's
+        # job-level env, so the workflow must still set it
+        assert (
+            "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}"
+            in Path(".github/workflows/refine-issues.yml").read_text()
+        )
 
     def test_last_resort_is_deny_list_filtered_and_fails_closed(self):
         for path in self.WORKFLOWS:

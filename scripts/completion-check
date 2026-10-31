@@ -27,13 +27,21 @@ status=0
 # (e.g. cloned target repositories): they have their own formatting rules
 # and toolchain. git lists such checkouts as a single untracked "<dir>/"
 # entry, while regular untracked files of this repository stay checked.
-prettier_ignore=".prettierignore.completion-check"
+# Unique per-run ignore file with inlined generated-dir rules: prettier
+# silently checks everything when the ignore file is empty, unreadable
+# (concurrent git checkout) or deleted (a concurrent run's EXIT trap in a
+# reused workspace), and then fails on generated dirs like .venv.
+prettier_ignore="$(mktemp .prettierignore.completion-check.XXXXXX)"
 trap 'rm -f "$prettier_ignore"' EXIT
-cat .gitignore .prettierignore 2> /dev/null > "$prettier_ignore" || true
-printf '%s\n' "$prettier_ignore" >> "$prettier_ignore"
-while IFS= read -r entry; do
-  if [[ -e "${entry%/}/.git" ]]; then printf '%s\n' "${entry%/}/"; fi
-done < <(git ls-files --others --exclude-standard) >> "$prettier_ignore"
+{
+  printf '%s\n' '.venv/' '.pytest_cache/' '__pycache__/' '.idea/' \
+    'loop-metrics.json' '.playwright-cli/' '.opencode/.gitignore' \
+    '.opencode/node_modules/' "$prettier_ignore"
+  cat .gitignore .prettierignore 2> /dev/null || true
+  while IFS= read -r entry; do
+    if [[ -e "${entry%/}/.git" ]]; then printf '%s\n' "${entry%/}/"; fi
+  done < <(git ls-files --others --exclude-standard)
+} > "$prettier_ignore"
 
 check() {
   local name="$1"

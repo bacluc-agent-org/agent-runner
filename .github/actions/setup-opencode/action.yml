@@ -18,7 +18,7 @@ runs:
       id: config
       shell: bash
       env:
-        SOURCE_REPOSITORY: https://github.com/bacluc-agent/provision-machines.git
+        SOURCE_REPOSITORY: https://github.com/bacluc/provision-machines.git
         CONFIG_PATH: deploys/development_tools/ai_agent_devcontainer/files/opencode
         SKILLS_PATH: deploys/development_tools/ai_agent_devcontainer/files/claude/skills
       run: |

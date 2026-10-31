@@ -14,7 +14,9 @@ runs:
   steps:
     - name: Refine issues
       id: refine
-      timeout-minutes: 22
+      # timeout-minutes is not valid on composite action steps; callers bound
+      # this via their job timeout (the workflow job uses timeout-minutes: 30)
+      # and the script self-limits work to 18 minutes.
       shell: bash
       env:
         AVAILABLE_MODELS: ${{ inputs.available-models }}

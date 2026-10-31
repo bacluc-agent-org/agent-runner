@@ -56,7 +56,9 @@ check 'actionlint (workflows + used actions)' docker run --rm "${mount[@]}" "rhy
 # Always install: the opencode runtime installs its own plugin version into
 # .opencode/node_modules, so an existing directory can hold a tree the tool
 # tests cannot import from.
-check 'opencode node dependencies (npm ci)' npm ci --prefix .opencode
+# Remove node_modules first: the runtime's plugin tree has nested dirs that
+# npm ci cannot clean (ENOTEMPTY).
+check 'opencode node dependencies (npm ci)' bash -c 'rm -rf .opencode/node_modules && npm ci --prefix .opencode'
 check 'opencode plugin tests (node --test)' node --test ".opencode/plugin/*.test.mjs"
 check 'opencode tool tests (node --test)' node --test ".opencode/tool/*.test.mjs"
 if command -v uv > /dev/null 2>&1; then

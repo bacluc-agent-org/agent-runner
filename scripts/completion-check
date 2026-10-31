@@ -53,10 +53,11 @@ else
   check 'formatting (prettier --check .)' bash -c 'npm install --quiet prettier && npx prettier --ignore-path "$prettier_ignore" --check .'
 fi
 check 'actionlint (workflows + used actions)' docker run --rm "${mount[@]}" "rhysd/actionlint:${ACTIONLINT_VERSION}" -color
-# Always install: the opencode runtime installs its own plugin version into
-# .opencode/node_modules, so an existing directory can hold a tree the tool
-# tests cannot import from.
-check 'opencode node dependencies (npm ci)' npm ci --prefix .opencode
+# Always install: the opencode runtime pre-populates .opencode/node_modules
+# with its own plugin, so npm ci's destructive full-tree removal races with
+# that concurrent write (ENOTEMPTY) and can drop the pinned tool-test plugin.
+# npm install installs incrementally and still pins @opencode-ai/plugin@1.19.4.
+check 'opencode node dependencies (npm install)' npm install --prefix .opencode
 check 'opencode plugin tests (node --test)' node --test ".opencode/plugin/*.test.mjs"
 check 'opencode tool tests (node --test)' node --test ".opencode/tool/*.test.mjs"
 if command -v uv > /dev/null 2>&1; then

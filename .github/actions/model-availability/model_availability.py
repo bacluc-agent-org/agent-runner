@@ -135,6 +135,46 @@ def parse_go_model_ids(models_json: str) -> list[str]:
         return []
 
 
+def strip_jsonc(text: str) -> str:
+    lines = []
+    for line in text.splitlines():
+        out = []
+        in_string = False
+        i = 0
+        while i < len(line):
+            char = line[i]
+            if in_string:
+                if char == "\\":
+                    out.append(line[i : i + 2])
+                    i += 2
+                    continue
+                if char == '"':
+                    in_string = False
+            elif char == '"':
+                in_string = True
+            elif char == "/" and line[i + 1 : i + 2] == "/":
+                break
+            out.append(char)
+            i += 1
+        lines.append("".join(out))
+    return re.sub(r",(\s*[}\]])", r"\1", "\n".join(lines))
+
+
+def providers_from_raw_config(config: object) -> dict[str, dict[str, str | None]]:
+    providers = config.get("provider") if isinstance(config, dict) else None
+    if not isinstance(providers, dict):
+        return {}
+    result = {}
+    for name, provider in providers.items():
+        if not isinstance(provider, dict):
+            continue
+        options = provider.get("options", {})
+        if not isinstance(options, dict):
+            continue
+        result[name] = {"baseURL": options.get("baseURL"), "apiKey": options.get("apiKey")}
+    return result
+
+
 def load_provider_config() -> dict[str, dict[str, str | None]]:
     """{provider: {"baseURL": str, "apiKey": str | None}} from `opencode debug config`."""
     tmp_path = None
@@ -162,17 +202,48 @@ def load_provider_config() -> dict[str, dict[str, str | None]]:
                 os.unlink(tmp_path)
             except OSError:
                 pass
-    providers = config.get("provider", {}) if isinstance(config, dict) else {}
-    if not isinstance(providers, dict):
+    if isinstance(config, dict):
+        return providers_from_raw_config(config)
+    if not isinstance(config, list):
         return {}
+
     result = {}
-    for name, provider in providers.items():
-        if not isinstance(provider, dict):
+
+    def merge_config(source: object) -> None:
+        for name, options in providers_from_raw_config(source).items():
+            current = result.setdefault(name, {"baseURL": None, "apiKey": None})
+            for key, value in options.items():
+                if value is not None:
+                    current[key] = value
+
+    for document in config:
+        path = document.get("path") if isinstance(document, dict) else None
+        if not isinstance(path, str) or not os.path.isfile(path):
             continue
-        options = provider.get("options", {})
-        if not isinstance(options, dict):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                merge_config(json.loads(strip_jsonc(fh.read())))
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"warning: failed to parse config file {path}: {e}", file=sys.stderr)
+    try:
+        merge_config(json.loads(opencode_env()["OPENCODE_CONFIG_CONTENT"]))
+    except (KeyError, json.JSONDecodeError):
+        pass
+    if result:
+        return result
+    for document in config:
+        info = document.get("info") if isinstance(document, dict) else None
+        providers = info.get("providers") if isinstance(info, dict) else None
+        if not isinstance(providers, dict):
             continue
-        result[name] = {"baseURL": options.get("baseURL"), "apiKey": options.get("apiKey")}
+        for name, provider in providers.items():
+            settings = provider.get("settings") if isinstance(provider, dict) else None
+            if isinstance(settings, dict):
+                key = settings.get("apiKey")
+                result[name] = {
+                    "baseURL": settings.get("baseURL"),
+                    "apiKey": key if isinstance(key, str) and key != "***" else None,
+                }
     return result
 
 
@@ -204,6 +275,10 @@ def provider_probeable(model_id: str, provider_config: dict, env: dict) -> bool:
     api_key = info.get("apiKey")
     if isinstance(api_key, str) and api_key.startswith("{env:") and api_key.endswith("}"):
         return bool(env.get(api_key[5:-1]))
+    if api_key == "***" or api_key is None:
+        key_env = next((key for name, key in PROVIDERS if name == provider), None)
+        if key_env:
+            return bool(env.get(key_env))
     return bool(api_key)
 
 

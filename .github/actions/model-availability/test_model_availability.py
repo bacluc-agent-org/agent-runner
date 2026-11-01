@@ -37,6 +37,44 @@ def fake_run(args, *a, **kw):
 
 
 class TestDiscoverModels:
+    def test_provider_config_reads_urls_from_array_shaped_debug_output(self, monkeypatch, tmp_path):
+        config_path = tmp_path / "opencode.jsonc"
+        config_path.write_text(
+            '{\n// provider URL and environment key\n"provider":{"openrouter":{"options":{'
+            '"baseURL":"https://openrouter.ai/api/v1","apiKey":"{env:OPENROUTER_API_KEY}",'
+            '},},},\n}'
+        )
+        override_path = tmp_path / "override.jsonc"
+        override_path.write_text(
+            '{"provider":{"openrouter":{"options":{"apiKey":"{env:OTHER_KEY}"}}}}'
+        )
+
+        def fake_run(args, *a, **kw):
+            assert args == ["opencode", "debug", "config"]
+            kw["stdout"].write(
+                json.dumps(
+                    [
+                        {
+                            "type": "document",
+                            "path": str(config_path),
+                            "info": {"providers": {"openrouter": {"settings": {}}}},
+                        },
+                        {"type": "document", "path": str(override_path)},
+                        {"type": "directory", "path": str(tmp_path)},
+                        {"type": "document", "info": {"plugins": []}},
+                    ]
+                )
+            )
+            return types.SimpleNamespace(stdout="")
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+        assert model_availability.load_provider_config() == {
+            "openrouter": {
+                "baseURL": "https://openrouter.ai/api/v1",
+                "apiKey": "{env:OTHER_KEY}",
+            }
+        }
+
     def test_discovers_probeable_openai_oauth_models(self, monkeypatch, tmp_path):
         captured = {}
         auth_path = tmp_path / ".local/share/opencode/auth.json"
@@ -484,6 +522,12 @@ class TestProviderProbeable:
             "openrouter/foo:free", config, {"OPENROUTER_API_KEY": "k"}
         )
         assert not model_availability.provider_probeable("openrouter/foo:free", config, {})
+
+    def test_masked_debug_key_uses_known_provider_environment_key(self):
+        config = {"openrouter": {"baseURL": "https://openrouter.ai/api/v1", "apiKey": "***"}}
+        assert model_availability.provider_probeable(
+            "openrouter/foo:free", config, {"OPENROUTER_API_KEY": "test-key"}
+        )
 
     def test_unknown_provider_passes(self):
         assert model_availability.provider_probeable("opencode/a-free", {}, {})

@@ -24,6 +24,9 @@ jobs:
       OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
       OPENCODE_GO_2_API_KEY: ${{ secrets.OPENCODE_GO_2_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENAI_ACCESS_TOKEN: ${{ secrets.CHATGPT_ACCESS_TOKEN }}
+      OPENAI_REFRESH_TOKEN: ${{ secrets.CHATGPT_REFRESH_TOKEN }}
+      OPENAI_OAUTH_CLIENT_ID: ${{ secrets.OPENAI_OAUTH_CLIENT_ID }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON }}
       ISSUE_REPOSITORY: ${{ vars.ISSUE_REPOSITORY || github.repository }}
@@ -59,13 +62,14 @@ jobs:
             [[ "$1" == openai/* ]] || return 0
             local slug="${1#openai/}"
             export OPENCODE_CONFIG_CONTENT
-            OPENCODE_CONFIG_CONTENT="$(jq -cn --arg slug "$slug" '{provider:{openai:{models:{($slug):{name:$slug}}}}}')"
+            OPENCODE_CONFIG_CONTENT="$(jq -cn --arg slug "$slug" --arg baseURL "$AISIX_PROXY_URL" --arg apiKey "$AISIX_CALLER_KEY" '{provider:{openai:{options:{baseURL:$baseURL,apiKey:$apiKey},models:{($slug):{name:$slug}}}}}')"
           }
 
           printf '::add-mask::%s\n' "$GITHUB_TOKEN"
           printf '::add-mask::%s\n' "$OPENCODE_GO_API_KEY"
           printf '::add-mask::%s\n' "$OPENCODE_GO_2_API_KEY"
-          printf '::add-mask::%s\n' "$OPENCODE_AUTH_CONTENT"
+          printf '::add-mask::%s\n' "$OPENAI_ACCESS_TOKEN"
+          printf '::add-mask::%s\n' "$OPENAI_REFRESH_TOKEN"
 
           printf '::group::ensure agent labels\n'
           if ! gh label create agent-refined -R "$ISSUE_REPOSITORY" \
@@ -129,8 +133,7 @@ jobs:
                 [[ -n "$OPENROUTER_API_KEY" ]] || continue
                 ;;
               openai/*)
-                if [[ ! -s "$HOME/.local/share/opencode/auth.json" ]] \
-                  || ! jq -e '.openai.type == "oauth" and .openai.access != "" and .openai.refresh != ""' "$HOME/.local/share/opencode/auth.json" >/dev/null; then
+                if [[ -z "${AISIX_PROXY_URL:-}" || -z "${AISIX_CALLER_KEY:-}" ]]; then
                   continue
                 fi
                 ;;

@@ -80,12 +80,12 @@ idea (issue in agent-todo)
 
 ### Actions (reusable building blocks)
 
-- `setup-opencode` — installs the OpenCode CLI and copies the shared agent
-  configuration from the `bacluc/provision-machines` repository (pinned to
-  the latest release tag). The AI configuration lives there, not here.
+- `setup-opencode` — installs the OpenCode CLI, copies shared agent
+  configuration from `bacluc/provision-machines`, refreshes ChatGPT OAuth
+  outside OpenCode, and routes OpenAI requests through per-job AISIX.
 - `model-availability` — probes which AI models currently work and stores the
   result in a cache issue in the todo repository. It discovers ChatGPT/Codex
-  models through the OpenAI OAuth catalog and probes them through OpenCode.
+  models with the standalone OAuth bearer token and probes them through AISIX.
   Probing every model on every run would be slow and expensive; the cache makes
   it cheap.
 
@@ -117,8 +117,8 @@ output before dispatching.
   `<details>` fold inside the implementation section.
 - `dump_subagent_transcripts.py` — dumps agent session transcripts for
   debugging.
-- `refresh-token.py` / `chatgpt-login.py` — refresh the OpenAI login without
-  a browser, or fall back to a browser login.
+- `refresh-token.py` / `chatgpt-login.py` — refresh the ChatGPT OAuth bearer
+  token without OpenCode, or fall back to a browser login.
 - `issue-selection-tail.txt` — the default selection instructions appended to
   the issue-selector prompt.
 
@@ -177,7 +177,9 @@ Never print their values.
 | GitHub access                   | `BACLUC_AGENT_GITHUB_TOKEN`                                                | All issue, PR, and workflow operations                                         |
 | GitHub access                   | `FORK_INVITE_USER`                                                         | Fallback for the `FORK_INVITE_USER` variable (variable wins when both are set) |
 | AI providers                    | `OPENCODE_GO_API_KEY`, `OPENCODE_GO_2_API_KEY`, `OPENROUTER_API_KEY`       | API keys for the AI model providers                                            |
-| OpenAI login                    | `OPENCODE_AUTH_JSON`                                                       | The OpenAI OAuth credential (refreshed automatically)                          |
+| ChatGPT OAuth                   | `CHATGPT_ACCESS_TOKEN`, `CHATGPT_REFRESH_TOKEN`                            | Independent bearer and rotating refresh tokens, updated by agent workflows     |
+| ChatGPT OAuth                   | `OPENAI_OAUTH_CLIENT_ID`                                                   | Optional client-ID override; defaults to the OpenCode public client ID         |
+| Legacy migration                | `OPENCODE_AUTH_JSON`                                                       | Bootstrap source until the independent token secrets are set                   |
 | Web search                      | `BRAVE_API_KEY`                                                            | API key for the `brave-search` MCP server (optional)                           |
 | OpenAI login (ChatGPT fallback) | `CHATGPT_EMAIL`, `CHATGPT_PASSWORD`, `CHATGPT_2FA_KEY`, `CHATGPT_TOTP_KEY` | Browser login fallback with a ChatGPT account                                  |
 | OpenAI login (OpenAI fallback)  | `OPENAI_USERNAME`, `OPENAI_PASSWORD`, `OPENAI_2FA_KEY`                     | Browser login fallback with an OpenAI account                                  |

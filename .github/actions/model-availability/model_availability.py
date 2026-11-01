@@ -38,7 +38,7 @@ PROBE_PROMPT = "Respond with exactly OK."
 CACHE_ISSUE_TITLE = "model-discovery cache"
 DISCOVERY_TIMEOUT_SECONDS = 120
 GITHUB_ISSUE_BODY_LIMIT = 65536
-OPENAI_CODEX_MODELS_URL = "https://chatgpt.com/backend-api/codex/models?client_version=2.1.4"
+OPENAI_CODEX_MODELS_URL = "https://chatgpt.com/backend-api/codex/models?client_version=2.2.5"
 
 
 def run_gh(*args: str) -> str:
@@ -47,10 +47,22 @@ def run_gh(*args: str) -> str:
 
 def opencode_env(model_id: str | None = None) -> dict[str, str]:
     env = dict(os.environ)
+    env.pop("OPENAI_ACCESS_TOKEN", None)
+    env.pop("OPENAI_ACCESS_TOKEN_FILE", None)
+    env.pop("OPENAI_REFRESH_TOKEN", None)
+    env.pop("OPENCODE_AUTH_CONTENT", None)
     config = {"plugin": []}
+    proxy_url = os.environ.get("AISIX_PROXY_URL")
+    caller_key = os.environ.get("AISIX_CALLER_KEY")
+    if proxy_url and caller_key:
+        config["provider"] = {
+            "openai": {"options": {"baseURL": proxy_url, "apiKey": caller_key}}
+        }
     if model_id and model_id.startswith("openai/"):
         model = model_id.removeprefix("openai/")
-        config["provider"] = {"openai": {"models": {model: {"name": model}}}}
+        config.setdefault("provider", {}).setdefault("openai", {})["models"] = {
+            model: {"name": model}
+        }
     env["OPENCODE_CONFIG_CONTENT"] = json.dumps(config, separators=(",", ":"))
     return env
 
@@ -316,15 +328,20 @@ def fetch_model_ids(endpoint: str, api_key: str | None = None) -> list[str]:
 
 
 def fetch_openai_oauth_model_ids() -> list[str]:
-    """Fetch the account's ChatGPT/Codex model catalog using OpenCode's OAuth credential."""
-    try:
-        with (Path.home() / ".local/share/opencode/auth.json").open(encoding="utf-8") as auth_file:
-            auth = json.load(auth_file)
-        openai_auth = auth.get("openai", {})
-        access_token = openai_auth.get("access") if openai_auth.get("type") == "oauth" else None
-        if not isinstance(access_token, str) or not access_token:
-            return []
-    except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+    """Fetch the account's ChatGPT/Codex model catalog with the standalone OAuth token."""
+    access_token = os.environ.get("OPENAI_ACCESS_TOKEN")
+    token_file = os.environ.get("OPENAI_ACCESS_TOKEN_FILE")
+    if token_file:
+        try:
+            access_token = Path(token_file).read_text(encoding="utf-8")
+        except OSError:
+            access_token = None
+        finally:
+            try:
+                Path(token_file).unlink()
+            except OSError:
+                pass
+    if not access_token:
         return []
 
     request = urllib.request.Request(

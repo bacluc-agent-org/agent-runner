@@ -77,10 +77,7 @@ class TestDiscoverModels:
 
     def test_discovers_probeable_openai_oauth_models(self, monkeypatch, tmp_path):
         captured = {}
-        auth_path = tmp_path / ".local/share/opencode/auth.json"
-        auth_path.parent.mkdir(parents=True)
-        auth_path.write_text(json.dumps({"openai": {"type": "oauth", "access": "test-token"}}))
-        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("OPENAI_ACCESS_TOKEN", "test-token")
 
         class FakeResponse:
             def __enter__(self):
@@ -122,6 +119,22 @@ class TestDiscoverModels:
         assert captured["authorization"] == "Bearer test-token"
         assert captured["originator"] == "opencode"
         assert captured["beta"] == "responses=experimental"
+
+    def test_oauth_probe_uses_aisix_and_keeps_bearer_out_of_opencode_env(self, monkeypatch):
+        monkeypatch.setenv("AISIX_PROXY_URL", "http://127.0.0.1:3000/v1")
+        monkeypatch.setenv("AISIX_CALLER_KEY", "aisix-caller")
+        monkeypatch.setenv("OPENAI_ACCESS_TOKEN", "upstream-bearer")
+        monkeypatch.setenv("OPENAI_REFRESH_TOKEN", "refresh-secret")
+
+        env = model_availability.opencode_env("openai/gpt-6-luna")
+        config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+
+        assert config["provider"]["openai"]["options"] == {
+            "baseURL": "http://127.0.0.1:3000/v1",
+            "apiKey": "aisix-caller",
+        }
+        assert "OPENAI_ACCESS_TOKEN" not in env
+        assert "OPENAI_REFRESH_TOKEN" not in env
 
     def test_retries_transient_cli_initialization_failure(self, monkeypatch):
         calls = 0
@@ -1357,32 +1370,44 @@ class TestOpencodeWhitelist:
 
 
 class TestModelAvailabilityAction:
-    def test_auth_materialized_by_setup_opencode_not_here(self):
+    def test_oauth_is_refreshed_outside_opencode_and_routed_through_aisix(self):
         root = Path(__file__).parents[3]
         setup = (root / ".github/actions/setup-opencode/action.yml").read_text()
         assert "umask 077" in setup
-        assert (
-            "printf '%s' \"$OPENCODE_AUTH_CONTENT\" > ~/.local/share/opencode/auth.json"
-            in setup
-        )
-        assert "printf '%s\\n' \"$OPENCODE_AUTH_CONTENT\"" not in setup
+        assert "python3 scripts/refresh-token.py" in setup
+        assert "ghcr.io/api7/aisix:1.8.0" in setup
+        assert "CHATGPT_ACCESS_TOKEN" in setup
+        assert "CHATGPT_REFRESH_TOKEN" in setup
+        assert "~/.local/share/opencode/auth.json" not in setup
         action = Path(__file__).with_name("action.yml").read_text()
         assert "OPENCODE_AUTH_CONTENT" not in action
         assert "auth.json" not in action
         assert "python3" in action
 
-    def test_standalone_opencode_workflow_keeps_the_openai_catalog_available(self):
-        # The validate step talks to the openai (ChatGPT OAuth) provider, whose
-        # model catalog comes from opencode's default plugins. Disabling them
-        # there makes every probe fail with "Provider not found: openai".
-        workflow = (Path(__file__).parents[3] / ".github/workflows/refresh-chatgpt-auth.yml").read_text()
-        validation = workflow[
-            workflow.index("- name: Validate refreshed token with opencode") : workflow.index(
-                "- name: Set secret (refreshed token)"
-            )
-        ]
-        assert "OPENCODE_DISABLE_DEFAULT_PLUGINS" not in validation
-        assert "OPENCODE_CONFIG_CONTENT: '{\"plugin\":[]}'" in validation
+    def test_model_discovery_reads_oauth_token_file_without_passing_it_to_opencode(self, tmp_path, monkeypatch):
+        token_file = tmp_path / "access-token"
+        token_file.write_text("test-token")
+        monkeypatch.setenv("OPENAI_ACCESS_TOKEN_FILE", str(token_file))
+        monkeypatch.delenv("OPENAI_ACCESS_TOKEN", raising=False)
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"models":[{"slug":"gpt-6-luna"}]}'
+
+        monkeypatch.setattr(
+            model_availability.urllib.request,
+            "urlopen",
+            lambda request, timeout=30: Response(),
+        )
+        assert model_availability.fetch_openai_oauth_model_ids() == ["gpt-6-luna"]
+        assert not token_file.exists()
+        assert "OPENAI_ACCESS_TOKEN_FILE" not in model_availability.opencode_env()
 
 
     def test_uses_fresh_cache_when_cli_discovery_is_unavailable(self, monkeypatch):

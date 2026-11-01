@@ -127,18 +127,18 @@ def test_issue_selection_and_refinement_can_choose_verified_openai_oauth_models(
         ("refine-issues.yml", "No refinement model is available"),
     ):
         content = (root / ".github/workflows" / workflow_name).read_text()
-        assert "OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON }}" in content
+        assert "OPENAI_REFRESH_TOKEN: ${{ secrets.CHATGPT_REFRESH_TOKEN }}" in content
         assert "mapfile -t openai_models < <(grep -E '^openai/'" in content
         assert '"${openai_models[@]}"' in content
         assert "openai/*)" in content
-        assert '$HOME/.local/share/opencode/auth.json' in content
+        assert '[[ -z "${AISIX_PROXY_URL:-}" || -z "${AISIX_CALLER_KEY:-}" ]]' in content
         assert empty_message in content
         assert 'configure_openai_model "$selection_model"' in content
         assert 'if [[ "$selection_model" == openai/* ]]; then' in content
         assert 'opencode run "${standalone_args[@]}" --agent' in content
 
     opencode = (root / ".github/workflows/opencode.yml").read_text()
-    assert "OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON }}" in opencode
+    assert "OPENAI_REFRESH_TOKEN: ${{ secrets.CHATGPT_REFRESH_TOKEN }}" in opencode
     assert "mapfile -t openai_models < <(grep -E '^openai/'" in opencode
     assert '"${openai_models[@]}"' in opencode
     assert "openai/*)" in opencode
@@ -149,8 +149,10 @@ def test_issue_selection_and_refinement_can_choose_verified_openai_oauth_models(
     assert 'opencode run "${discovery_standalone_args[@]}" --agent model-discovery' in opencode
     assert 'if [[ "$MODEL" == openai/* ]]; then' in opencode
     assert 'opencode run "${coordinator_standalone_args[@]}" --agent coordinator' in opencode
-    assert 'export OPENCODE_DB="$RUNNER_TEMP/opencode-oauth.db"' in opencode
-    oauth_selection = opencode[opencode.index('if [[ "$model" == openai/* ]] && jq'):]
+    assert "export OPENCODE_DB=" not in opencode
+    assert 'unset OPENAI_ACCESS_TOKEN OPENAI_REFRESH_TOKEN OPENCODE_AUTH_CONTENT' in opencode
+    assert 'baseURL:$baseURL,apiKey:$apiKey' in opencode
+    oauth_selection = opencode[opencode.index('if [[ "$model" == openai/* ]] && [[ -n') :]
     assert oauth_selection.index('configure_openai_model "$model"') < oauth_selection.index('exit 0')
     assert oauth_selection.index('OPENCODE_CONFIG_CONTENT=%s') < oauth_selection.index('exit 0')
 
@@ -159,6 +161,16 @@ def test_setup_opencode_pins_cli_version_verified_with_chatgpt_oauth():
     root = Path(__file__).parents[1]
     setup = (root / ".github/actions/setup-opencode/action.yml").read_text()
     assert "npm install --global @opencode/cli@2.2.5" in setup
+
+
+def test_setup_opencode_refreshes_tokens_outside_opencode_and_starts_aisix():
+    root = Path(__file__).parents[1]
+    setup = (root / ".github/actions/setup-opencode/action.yml").read_text()
+    assert "python3 scripts/refresh-token.py" in setup
+    assert "ghcr.io/api7/aisix:1.8.0" in setup
+    assert "CHATGPT_ACCESS_TOKEN" in setup
+    assert "CHATGPT_REFRESH_TOKEN" in setup
+    assert "Materialize OpenCode auth" not in setup
 
 
 def test_selection_tail_requires_fast_tool_free_selection():

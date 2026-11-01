@@ -306,21 +306,15 @@ def test_primitives_loop_sleeps_and_continues_when_blocked():
 _OPENAI_ERROR_BODY = "<html><body><h1>Oops, an error occurred!</h1></body></html>"
 
 
-def test_validate_step_keeps_default_plugins_and_only_the_chatgpt_model():
+def test_refresh_workflow_uses_generic_oauth_tokens_without_opencode_validation():
     workflow = (
         Path(__file__).parents[1] / ".github/workflows/refresh-chatgpt-auth.yml"
     ).read_text(encoding="utf-8")
-    validation = workflow[
-        workflow.index("- name: Validate refreshed token with opencode") : workflow.index(
-            "- name: Set secret (refreshed token)"
-        )
-    ]
-    assert "OPENCODE_DISABLE_DEFAULT_PLUGINS" not in validation
-    assert "openai/gpt-5.6-luna" in validation
-    assert "openai/gpt-5.5" not in validation
-    assert "openai/gpt-5.4" not in validation
-    assert "openai/gpt-5.4-mini" not in validation
-    assert "printf '::stop-commands::%s\\n' \"$stop_token\"" in validation
+    assert "OPENAI_REFRESH_TOKEN: ${{ secrets.CHATGPT_REFRESH_TOKEN }}" in workflow
+    assert "access_token:$access" in workflow
+    assert "CHATGPT_ACCESS_TOKEN" in workflow
+    assert "CHATGPT_REFRESH_TOKEN" in workflow
+    assert "Validate refreshed token with opencode" not in workflow
 
 
 def test_force_fallback_input_gates_the_refresh_step():
@@ -330,7 +324,7 @@ def test_force_fallback_input_gates_the_refresh_step():
     assert "force_fallback:" in workflow
     refresh = workflow[
         workflow.index("- name: Try token refresh (no browser)") : workflow.index(
-            "- name: Validate refreshed token with opencode"
+            "- name: Browser login (fallback)"
         )
     ]
     assert "if: ${{ !inputs.force_fallback }}" in refresh

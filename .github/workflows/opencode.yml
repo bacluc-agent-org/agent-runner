@@ -107,6 +107,9 @@ jobs:
       OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
       OPENCODE_GO_2_API_KEY: ${{ secrets.OPENCODE_GO_2_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENAI_ACCESS_TOKEN: ${{ secrets.CHATGPT_ACCESS_TOKEN }}
+      OPENAI_REFRESH_TOKEN: ${{ secrets.CHATGPT_REFRESH_TOKEN }}
+      OPENAI_OAUTH_CLIENT_ID: ${{ secrets.OPENAI_OAUTH_CLIENT_ID }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON }}
       BACLUC_AGENT_GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
@@ -196,7 +199,7 @@ jobs:
             [[ "$1" == openai/* ]] || return 0
             local slug="${1#openai/}"
             export OPENCODE_CONFIG_CONTENT
-            OPENCODE_CONFIG_CONTENT="$(jq -cn --arg slug "$slug" '{provider:{openai:{models:{($slug):{name:$slug}}}}}')"
+            OPENCODE_CONFIG_CONTENT="$(jq -cn --arg slug "$slug" --arg baseURL "$AISIX_PROXY_URL" --arg apiKey "$AISIX_CALLER_KEY" '{provider:{openai:{options:{baseURL:$baseURL,apiKey:$apiKey},models:{($slug):{name:$slug}}}}}')"
           }
 
           requested="${MODEL_TEXT:-}"
@@ -375,10 +378,10 @@ jobs:
           }
 
           requested_model="$model"
-          if [[ "$model" == openai/* ]] && jq -e '.openai.type == "oauth" and .openai.access != "" and .openai.refresh != ""' ~/.local/share/opencode/auth.json >/dev/null 2>&1; then
+          if [[ "$model" == openai/* ]] && [[ -n "${AISIX_PROXY_URL:-}" && -n "${AISIX_CALLER_KEY:-}" ]]; then
             configure_openai_model "$model"
             printf 'OPENCODE_CONFIG_CONTENT=%s\n' "$OPENCODE_CONFIG_CONTENT" >> "$GITHUB_ENV"
-            printf 'Model availability: requested %q is openai/* and auth.json is present; skipping fallback\n' "$model"
+            printf 'Model availability: requested %q is openai/* and AISIX OAuth proxy is ready; skipping fallback\n' "$model"
             echo "model=${model}" >> "$GITHUB_OUTPUT"
             printf '\n\n\n\n\n\n'
             printf 'Chosen model is %s (source: %s)\n' "$model" "$model_source"
@@ -388,7 +391,7 @@ jobs:
           fi
           printf '::%s::\n' "$stop_token"
           if [[ "$model" == openai/* ]]; then
-            printf '::error::Model availability: requested %q is openai/* but no valid auth.json is present (OPENCODE_AUTH_CONTENT empty or invalid); cannot run openai models.\n' "$model" >&2
+            printf '::error::Model availability: requested %q is openai/* but no valid AISIX OAuth proxy is ready; cannot run openai models.\n' "$model" >&2
             exit 1
           fi
           stop_token="$(openssl rand -hex 32)"
@@ -498,8 +501,8 @@ jobs:
           coordinator_standalone_args=()
           if [[ "$MODEL" == openai/* ]]; then
             coordinator_standalone_args+=(--standalone)
-            export OPENCODE_DB="$RUNNER_TEMP/opencode-oauth.db"
           fi
+          unset OPENAI_ACCESS_TOKEN OPENAI_REFRESH_TOKEN OPENCODE_AUTH_CONTENT
           stop_token="$(openssl rand -hex 32)"
           : "${stop_token:?stop-commands fence token generation failed}"
           printf '::stop-commands::%s\n' "$stop_token"

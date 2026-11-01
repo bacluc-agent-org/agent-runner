@@ -1,6 +1,7 @@
 .venv/
 .pytest_cache/
 __pycache__/
+.idea/
 loop-metrics.json
 
 .opencode/node_modules/

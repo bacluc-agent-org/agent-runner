@@ -232,13 +232,17 @@ jobs:
           }
           run_selection() {
             local stop_token selection_command_status fatal_marker
+            local -a standalone_args=()
             selection_started=$SECONDS
             configure_openai_model "$selection_model"
+            if [[ "$selection_model" == openai/* ]]; then
+              standalone_args+=(--standalone)
+            fi
             stop_token="$(openssl rand -hex 32)"
             : "${stop_token:?stop-commands fence token generation failed}"
             printf '::stop-commands::%s\n' "$stop_token"
             set +e
-            timeout "${SELECTION_TIMEOUT_MINUTES}m" opencode run --agent issue-selector --model "$selection_model" --title "issue-selector" "$(< "$prompt")" | tee "$selection"
+            timeout "${SELECTION_TIMEOUT_MINUTES}m" opencode run "${standalone_args[@]}" --agent issue-selector --model "$selection_model" --title "issue-selector" "$(< "$prompt")" | tee "$selection"
             selection_statuses=("${PIPESTATUS[@]}")
             set -e
             printf '::%s::\n' "$stop_token"

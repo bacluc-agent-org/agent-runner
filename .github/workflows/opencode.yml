@@ -298,7 +298,11 @@ jobs:
             printf 'Model discovery prompt:\n%s\n' "$discovery_prompt"
             set +e
             configure_openai_model "$fallback_model"
-            timeout "${DISCOVERY_TIMEOUT}m" opencode run --agent model-discovery --model "$fallback_model" --title "model-discovery" "$discovery_prompt" | tee "$discovery_output"
+            discovery_standalone_args=()
+            if [[ "$fallback_model" == openai/* ]]; then
+              discovery_standalone_args+=(--standalone)
+            fi
+            timeout "${DISCOVERY_TIMEOUT}m" opencode run "${discovery_standalone_args[@]}" --agent model-discovery --model "$fallback_model" --title "model-discovery" "$discovery_prompt" | tee "$discovery_output"
             discovery_statuses=("${PIPESTATUS[@]}")
             printf '::%s::\n' "$stop_token"
             discovery_status=${discovery_statuses[0]}
@@ -491,13 +495,17 @@ jobs:
 
           coordinator_session_title='coordinator-run'
           PROMPT=$(printf 'model: %s \n%s\n\n%s' "$MODEL" "$PROMPT" "$(cat "$RUNNER_TEMP/agent-runner/scripts/progress-reporting.txt")")
+          coordinator_standalone_args=()
+          if [[ "$MODEL" == openai/* ]]; then
+            coordinator_standalone_args+=(--standalone)
+          fi
           stop_token="$(openssl rand -hex 32)"
           : "${stop_token:?stop-commands fence token generation failed}"
           printf '::stop-commands::%s\n' "$stop_token"
-          printf 'Final coordinator command: opencode run --agent coordinator --model %q --title %q\n' "$MODEL" "$coordinator_session_title"
+          printf 'Final coordinator command: opencode run %s --agent coordinator --model %q --title %q\n' "${coordinator_standalone_args[*]}" "$MODEL" "$coordinator_session_title"
           printf 'Coordinator prompt:\n%s\n' "$PROMPT"
           set +e
-          timeout "${COORDINATOR_TIMEOUT}m" opencode run --agent coordinator --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
+          timeout "${COORDINATOR_TIMEOUT}m" opencode run "${coordinator_standalone_args[@]}" --agent coordinator --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
           coordinator_statuses=("${PIPESTATUS[@]}")
           printf '::%s::\n' "$stop_token"
           coordinator_status=${coordinator_statuses[0]}

@@ -503,14 +503,12 @@ def probe_model(
     log_path = os.path.join(work_dir, "model-probes", "probe-" + candidate.replace("/", "-") + ".log")
     # noinspection broad-exception
     try:
+        command = ["opencode", "run"]
+        if candidate.startswith("openai/"):
+            command.append("--standalone")
+        command.extend(["--model", candidate, PROBE_PROMPT])
         result = subprocess.run(
-            [
-                "opencode",
-                "run",
-                "--model",
-                candidate,
-                PROBE_PROMPT,
-            ],
+            command,
             cwd=probe_dir,
             capture_output=True,
             text=True,

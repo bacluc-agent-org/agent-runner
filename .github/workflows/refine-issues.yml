@@ -204,11 +204,15 @@ jobs:
               fi
 
               configure_openai_model "$selection_model"
+              standalone_args=()
+              if [[ "$selection_model" == openai/* ]]; then
+                standalone_args+=(--standalone)
+              fi
               set +e
               stop_token="$(openssl rand -hex 32)"
               : "${stop_token:?stop-commands fence token generation failed}"
               printf '::stop-commands::%s\n' "$stop_token"
-              timeout 8m opencode run --agent issue-refiner --model "$selection_model" --title "issue-refiner" \
+              timeout 8m opencode run "${standalone_args[@]}" --agent issue-refiner --model "$selection_model" --title "issue-refiner" \
                 "$(< "$prompt")" | tee "$out"
               statuses=("${PIPESTATUS[@]}")
               printf '::%s::\n' "$stop_token"

@@ -130,14 +130,31 @@ def test_workflow_uses_latest_commit_and_created_at_when_pr_has_no_commits():
     assert 'map(select(test("^[0-9]")))|max // null' in content
 
 
-def test_selection_tail_keeps_contract_and_research_budget():
+def test_hourly_workflow_logs_candidate_enrichment_and_selector_durations():
+    content = WORKFLOW.read_text()
+    for label in (
+        "GitHub lookup duration: candidate search and collection",
+        "GitHub lookup duration: repository branches",
+        "GitHub lookup duration: repo existence",
+        "GitHub lookup duration: PR list",
+        "GitHub lookup duration: PR commits",
+        "GitHub lookup duration: PR feedback",
+        "GitHub lookup duration: issue feedback",
+        "Candidate enrichment total:",
+        "Issue selector duration:",
+    ):
+        assert label in content
+
+
+def test_selection_tail_requires_fast_tool_free_selection():
     tail = (Path(__file__).parents[1] / "scripts/issue-selection-tail.txt").read_text()
+    agent = (Path(__file__).parents[1] / ".opencode/agent/issue-selector.md").read_text()
     assert "End with the exact final line: SELECTED_ISSUE: <number>" in tail
     assert "No text may follow that line." in tail
-    assert "read each candidate at most once" in tail
-    assert "stop investigating, even if undecided" in tail
-    assert "choosing the best-so-far candidate" in tail
-    assert 'must not be cut by this budget' in tail
+    assert "Do not use tools or perform research." in tail
+    assert '  "*": deny' in agent
+    assert "do not run commands, browse, fetch URLs, or look up issues or pull requests during selection" in agent
+    assert "choose the best-so-far candidate" in tail
     assert 'note the doubt inside the implementation prompt' in tail
 
 

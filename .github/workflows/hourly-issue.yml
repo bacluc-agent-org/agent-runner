@@ -107,10 +107,12 @@ jobs:
           printf '\n\n\n\n\n\n'
 
           search_json="$RUNNER_TEMP/candidates.json"
+          lookup_started=$SECONDS
           gh api --paginate --slurp "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:ready-for-implementation+-label:agent-running&per_page=100" \
             > "$search_json.pages"
           jq '[.[] | .items[]]' "$search_json.pages" > "$search_json"
           rm "$search_json.pages"
+          printf 'GitHub lookup duration: candidate search and collection %ss\n' "$((SECONDS - lookup_started))"
 
           candidates="$RUNNER_TEMP/candidate-numbers.txt"
           jq -r '.[].number | tostring' "$search_json" | shuf -n 50 > "$candidates"
@@ -193,8 +195,11 @@ jobs:
           tail_instruction="${SELECTION_PROMPT:-$default_tail}"
 
           enriched="$RUNNER_TEMP/candidates.enriched.json"
+          enrichment_started=$SECONDS
           cp "$search_json" "$enriched"
+          lookup_started=$SECONDS
           gh api "repos/${GITHUB_REPOSITORY}/branches?per_page=100" --paginate --jq '.[].name' > "$RUNNER_TEMP/branches.txt"
+          printf 'GitHub lookup duration: repository branches %ss\n' "$((SECONDS - lookup_started))"
           : > "$RUNNER_TEMP/enrichment.jsonl"
 
           # Repos to check for open agent PRs: the known agent repos plus any repos
@@ -209,9 +214,11 @@ jobs:
             | sort -u)
           existing_repos=()
           for repo in "${body_repos[@]}"; do
+            lookup_started=$SECONDS
             if gh repo view "$repo" --json nameWithOwner --jq .nameWithOwner >/dev/null 2>&1; then
               existing_repos+=("$repo")
             fi
+            printf 'GitHub lookup duration: repo existence %s %ss\n' "$repo" "$((SECONDS - lookup_started))"
           done
           body_repos=("${existing_repos[@]}")
           for repo in "${body_repos[@]}"; do
@@ -228,9 +235,11 @@ jobs:
           mkdir -p "$pr_lookup_dir"
           for repo in "${repo_list[@]}"; do
             key="$(echo "$repo" | tr '/' '_')"
+            lookup_started=$SECONDS
             gh pr list -R "$repo" --state all --limit 200 --json number,createdAt,updatedAt,headRefName,state,title,body \
               --jq '.[] | "\(.headRefName)|#\(.number)|\(.createdAt)|\(.updatedAt)|\(.state)|\(.title)|\(.body // "" | gsub("[\r\n|]"; " "))"' 2>/dev/null \
               | sort -t'|' -k4 -r > "$pr_lookup_dir/$key.lookup" || true
+            printf 'GitHub lookup duration: PR list %s %ss\n' "$repo" "$((SECONDS - lookup_started))"
           done
 
           # Shuffle candidates so enrichment order (and the debug dump) is random.
@@ -246,7 +255,9 @@ jobs:
                 pr_number="$(echo "$match" | cut -d'|' -f2 | tr -d '#')"
                 pr_created="$(echo "$match" | cut -d'|' -f3)"
                 pr_state="$(echo "$match" | cut -d'|' -f5)"
+                lookup_started=$SECONDS
                 pr_last_commit="$(gh api --paginate --slurp "repos/$pr_repo/pulls/$pr_number/commits" | jq -er --arg fallback "$pr_created" '([.[][] | .commit.committer.date] | max) // $fallback')"
+                printf 'GitHub lookup duration: PR commits %s#%s %ss\n' "$pr_repo" "$pr_number" "$((SECONDS - lookup_started))"
                 case "$pr_state" in
                   MERGED) pr_info="merged #${pr_number} last-commit:${pr_last_commit}" ;;
                   CLOSED) pr_info="closed #${pr_number} last-commit:${pr_last_commit}" ;;
@@ -259,13 +270,18 @@ jobs:
             # submitted_at and also mirror inline review comments, so one call covers both.
             pr_human_ts="none"
             if [[ -n "$pr_number" ]]; then
+              lookup_started=$SECONDS
               pr_human_ts="$(gh pr view "$pr_number" -R "$pr_repo" --json comments,reviews --jq '[[.comments[] | select(.author.login != "bacluc-agent") | .createdAt], [.reviews[] | select(.author.login != "bacluc-agent") | .submittedAt]] | add | max // "none"' 2>/dev/null || echo "none")"
+              printf 'GitHub lookup duration: PR feedback %s#%s %ss\n' "$pr_repo" "$pr_number" "$((SECONDS - lookup_started))"
             fi
+            lookup_started=$SECONDS
             issue_human_ts="$(gh issue view "$num" -R "$ISSUE_REPOSITORY" --json comments --jq '[.comments[] | select(.author.login != "bacluc-agent")] | max_by(.createdAt) | .createdAt // "none"' 2>/dev/null || echo "none")"
+            printf 'GitHub lookup duration: issue feedback #%s %ss\n' "$num" "$((SECONDS - lookup_started))"
             jq -nc --arg num "$num" --arg pr "$pr_info" --arg a "$issue_human_ts" --arg b "$pr_human_ts" '{number:($num|tonumber),pr_info:$pr,last_human_comment_at:([$a,$b]|map(select(test("^[0-9]")))|max // null)}' >> "$RUNNER_TEMP/enrichment.jsonl"
           done < <(shuf "$candidates")
           jq -n --slurpfile issues "$enriched" --slurpfile enrichment "$RUNNER_TEMP/enrichment.jsonl" '$issues[0] | map(. as $issue | ($enrichment | map(select(.number == $issue.number)) | .[0]) as $e | if $e then . + {last_human_comment_at:$e.last_human_comment_at, pr_state:($e.pr_info|split(" ")[0]), pr_number:(if $e.pr_info == "none" then null else ($e.pr_info|split("#")[1]|split(" ")[0]|tonumber) end), pr_last_commit_at:(if $e.pr_info == "none" then null else ($e.pr_info|split("last-commit:")[1]) end)} else . end)' > "$RUNNER_TEMP/candidates.final.json"
           cp "$RUNNER_TEMP/candidates.final.json" "$enriched"
+          printf 'Candidate enrichment total: issues=%s seconds=%s\n' "$(wc -l < "$candidates" | tr -d ' ')" "$((SECONDS - enrichment_started))"
 
           prompt="$RUNNER_TEMP/selection-prompt.txt"
           printf '%s\n' "$tail_instruction" > "$RUNNER_TEMP/tail.txt"
@@ -273,9 +289,10 @@ jobs:
           printf 'Randomized candidates:\n'
           cat "$prompt"
 
-           selection="$RUNNER_TEMP/selection.out"
+          selection="$RUNNER_TEMP/selection.out"
           run_selection() {
             local stop_token
+            selection_started=$SECONDS
             stop_token="$(openssl rand -hex 32)"
             : "${stop_token:?stop-commands fence token generation failed}"
             printf '::stop-commands::%s\n' "$stop_token"
@@ -286,6 +303,7 @@ jobs:
             printf '::%s::\n' "$stop_token"
             selection_status=${selection_statuses[0]}
             selection_tee_status=${selection_statuses[1]}
+            printf 'Issue selector duration: model=%s seconds=%s exit=%s\n' "$selection_model" "$((SECONDS - selection_started))" "$selection_status"
           }
           run_selection
           printf 'Model selection statuses: opencode=%s tee=%s\n' "$selection_status" "$selection_tee_status"

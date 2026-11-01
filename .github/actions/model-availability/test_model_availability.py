@@ -1490,12 +1490,17 @@ class TestWorkflowOpenRouterSelection:
             "'opencode-go-openai-2/qwen3.8-flash'"
         )
 
-    def test_hourly_issue_retries_free_model_after_qwen_provider_failure(self):
+    def test_hourly_issue_retries_nonzero_selector_invocations_on_other_eligible_models(self):
         content = Path(".github/workflows/hourly-issue.yml").read_text()
-        assert "balance:opencode-go-openai/qwen3.8-flash" in content
-        assert "model_unavailable:opencode-go-openai-2/qwen3.8-flash" in content
         assert 'selection_retry_count < 2' in content
         assert '"${free_models[@]}"' in content
+        assert "while (( selection_status != 0 && selection_retry_count < 2 ))" in content
+        assert '[[ "$candidate" == "$selection_model" ]] && continue' in content
+        assert '[[ " ${attempted_selection_models[*]} " == *" $candidate "* ]] && continue' in content
+        assert '[[ -n "$OPENCODE_GO_API_KEY" ]] || continue' in content
+        assert '[[ -n "$OPENCODE_GO_2_API_KEY" ]] || continue' in content
+        assert '[[ -n "$OPENROUTER_API_KEY" ]] || continue' in content
+        assert "mapfile -t allowed_models < <(grep -Ev -f scripts/model-deny-list.txt" in content
 
     def test_hourly_issue_uses_weak_free_model_only_as_last_resort(self):
         content = Path(".github/workflows/hourly-issue.yml").read_text()

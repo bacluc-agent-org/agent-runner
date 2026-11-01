@@ -290,6 +290,16 @@ jobs:
           cat "$prompt"
 
           selection="$RUNNER_TEMP/selection.out"
+          mapfile -t allowed_models < <(grep -Ev -f scripts/model-deny-list.txt "$available_models_file" | awk '!seen[$0]++')
+          retry_candidates=(
+            'opencode-go-openai/qwen3.8-flash'
+            'opencode-go-openai-2/qwen3.8-flash'
+            'opencode/big-pickle'
+            "${free_models[@]}"
+            "${allowed_models[@]}"
+            "${all_free_models[@]}"
+          )
+          attempted_selection_models=("$selection_model")
           run_selection() {
             local stop_token
             selection_started=$SECONDS
@@ -312,18 +322,10 @@ jobs:
           fi
           selection_retry_count=0
           while (( selection_status != 0 && selection_retry_count < 2 )); do
-            fatal_reason="$(jq -r '.reason // empty' "$RUNNER_TEMP/opencode-fatal.json" 2>/dev/null || true)"
-            case "$fatal_reason:$selection_model" in
-              balance:opencode-go-openai/qwen3.8-flash|auth:opencode-go-openai/qwen3.8-flash|model_unavailable:opencode-go-openai/qwen3.8-flash)
-                retry_candidates=('opencode-go-openai-2/qwen3.8-flash' 'opencode/big-pickle' "${free_models[@]}" "${all_free_models[@]}")
-                ;;
-              balance:opencode-go-openai-2/qwen3.8-flash|auth:opencode-go-openai-2/qwen3.8-flash|model_unavailable:opencode-go-openai-2/qwen3.8-flash)
-                retry_candidates=('opencode/big-pickle' "${free_models[@]}" "${all_free_models[@]}")
-                ;;
-              *) break ;;
-            esac
             retry_model=''
             for candidate in "${retry_candidates[@]}"; do
+              [[ "$candidate" == "$selection_model" ]] && continue
+              [[ " ${attempted_selection_models[*]} " == *" $candidate "* ]] && continue
               case "$candidate" in
                 opencode-go-openai/qwen3.8-flash)
                   grep -Fxq "$candidate" "$available_models_file" && [[ -n "$OPENCODE_GO_API_KEY" ]] || continue
@@ -334,8 +336,18 @@ jobs:
                 opencode/big-pickle)
                   grep -Fxq "$candidate" "$available_models_file" || continue
                   ;;
-                opencode/*-free) ;;
+                opencode-go-openai/*)
+                  grep -Fxq "$candidate" "$available_models_file" && [[ -n "$OPENCODE_GO_API_KEY" ]] || continue
+                  ;;
+                opencode-go-openai-2/*)
+                  grep -Fxq "$candidate" "$available_models_file" && [[ -n "$OPENCODE_GO_2_API_KEY" ]] || continue
+                  ;;
+                opencode-go-*) continue ;;
+                opencode/*)
+                  grep -Fxq "$candidate" "$available_models_file" || continue
+                  ;;
                 openrouter/*)
+                  grep -Fxq "$candidate" "$available_models_file" || continue
                   [[ -n "$OPENROUTER_API_KEY" ]] || continue
                   ;;
                 *) continue ;;
@@ -344,7 +356,8 @@ jobs:
               break
             done
             [[ -n "$retry_model" ]] || break
-            printf 'Qwen selection failed (%s); retrying with %s.\n' "$fatal_reason" "$retry_model"
+            printf 'Issue selector invocation failed (exit %s); retrying with %s.\n' "$selection_status" "$retry_model"
+            attempted_selection_models+=("$retry_model")
             selection_model="$retry_model"
             echo "selection_model=${selection_model}" >> "$GITHUB_OUTPUT"
             : > "$selection"

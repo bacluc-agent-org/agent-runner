@@ -146,6 +146,21 @@ def test_hourly_workflow_logs_candidate_enrichment_and_selector_durations():
         assert label in content
 
 
+def test_selector_retries_invocation_failures_on_distinct_eligible_models_only():
+    content = WORKFLOW.read_text()
+    retry = content[content.index('selection="$RUNNER_TEMP/selection.out"'):content.index("if ! grep -q '[^[:space:]]' \"$selection\"")]
+    assert "while (( selection_status != 0 && selection_retry_count < 2 ))" in retry
+    assert "retry_candidates=(" in retry
+    assert '[[ "$candidate" == "$selection_model" ]] && continue' in retry
+    assert 'grep -Fxq "$candidate" "$available_models_file"' in retry
+    assert '[[ -n "$OPENROUTER_API_KEY" ]] || continue' in retry
+    assert "grep -Ev -f scripts/model-deny-list.txt" in retry
+    assert '[[ -n "$OPENCODE_GO_API_KEY" ]] || continue' in retry
+    assert '[[ -n "$OPENCODE_GO_2_API_KEY" ]] || continue' in retry
+    assert "selection_status != 0" in retry
+    assert content.index("if ! grep -q '[^[:space:]]' \"$selection\"") > content.index("if (( selection_status != 0 )); then")
+
+
 def test_selection_tail_requires_fast_tool_free_selection():
     tail = (Path(__file__).parents[1] / "scripts/issue-selection-tail.txt").read_text()
     agent = (Path(__file__).parents[1] / ".opencode/agent/issue-selector.md").read_text()

@@ -340,7 +340,7 @@ def test_human_feedback_is_checked_before_finishing_progress():
     assert result.index('last_human_comment=$(gh issue view') < result.index('--mode finish')
     assert result.index('--mode finish') < result.index('gh issue comment "$ISSUE_NUMBER"')
     assert 'actor=$(gh api user --jq .login)' in result
-    assert result.count('.author.login != \\\"$actor\\\"') == 2
+    assert result.count('.author.login != \\\"$actor\\\"') == 3
 
 
 def test_human_feedback_is_requeried_against_pre_update_baseline():

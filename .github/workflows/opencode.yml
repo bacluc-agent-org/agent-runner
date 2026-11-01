@@ -372,6 +372,8 @@ jobs:
 
           requested_model="$model"
           if [[ "$model" == openai/* ]] && jq -e '.openai.type == "oauth" and .openai.access != "" and .openai.refresh != ""' ~/.local/share/opencode/auth.json >/dev/null 2>&1; then
+            configure_openai_model "$model"
+            printf 'OPENCODE_CONFIG_CONTENT=%s\n' "$OPENCODE_CONFIG_CONTENT" >> "$GITHUB_ENV"
             printf 'Model availability: requested %q is openai/* and auth.json is present; skipping fallback\n' "$model"
             echo "model=${model}" >> "$GITHUB_OUTPUT"
             printf '\n\n\n\n\n\n'

@@ -143,6 +143,9 @@ def test_issue_selection_and_refinement_can_choose_verified_openai_oauth_models(
     assert "--agent model-discovery" in opencode
     assert 'configure_openai_model "$fallback_model"' in opencode
     assert 'configure_openai_model "$model"' in opencode
+    oauth_selection = opencode[opencode.index('if [[ "$model" == openai/* ]] && jq'):]
+    assert oauth_selection.index('configure_openai_model "$model"') < oauth_selection.index('exit 0')
+    assert oauth_selection.index('OPENCODE_CONFIG_CONTENT=%s') < oauth_selection.index('exit 0')
 
 
 def test_selection_tail_requires_fast_tool_free_selection():

@@ -149,6 +149,7 @@ def test_issue_selection_and_refinement_can_choose_verified_openai_oauth_models(
     assert 'opencode run "${discovery_standalone_args[@]}" --agent model-discovery' in opencode
     assert 'if [[ "$MODEL" == openai/* ]]; then' in opencode
     assert 'opencode run "${coordinator_standalone_args[@]}" --agent coordinator' in opencode
+    assert 'export OPENCODE_DB="$RUNNER_TEMP/opencode-oauth.db"' in opencode
     oauth_selection = opencode[opencode.index('if [[ "$model" == openai/* ]] && jq'):]
     assert oauth_selection.index('configure_openai_model "$model"') < oauth_selection.index('exit 0')
     assert oauth_selection.index('OPENCODE_CONFIG_CONTENT=%s') < oauth_selection.index('exit 0')

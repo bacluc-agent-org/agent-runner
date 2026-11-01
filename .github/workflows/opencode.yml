@@ -498,6 +498,7 @@ jobs:
           coordinator_standalone_args=()
           if [[ "$MODEL" == openai/* ]]; then
             coordinator_standalone_args+=(--standalone)
+            export OPENCODE_DB="$RUNNER_TEMP/opencode-oauth.db"
           fi
           stop_token="$(openssl rand -hex 32)"
           : "${stop_token:?stop-commands fence token generation failed}"

@@ -59,6 +59,7 @@ class TestDiscoverModels:
                 captured["url"] = request.full_url
                 captured["authorization"] = request.get_header("Authorization")
                 captured["originator"] = request.get_header("Originator")
+                captured["beta"] = request.get_header("Openai-beta")
             return FakeResponse()
 
         def fake_run_with_openai_provider(args, *a, **kw):
@@ -82,6 +83,7 @@ class TestDiscoverModels:
         assert captured["url"].startswith("https://chatgpt.com/backend-api/codex/models?")
         assert captured["authorization"] == "Bearer test-token"
         assert captured["originator"] == "opencode"
+        assert captured["beta"] == "responses=experimental"
 
     def test_retries_transient_cli_initialization_failure(self, monkeypatch):
         calls = 0

@@ -255,6 +255,7 @@ def fetch_openai_oauth_model_ids() -> list[str]:
             "Authorization": f"Bearer {access_token}",
             "Originator": "opencode",
             "User-Agent": "opencode/2.1.4",
+            "OpenAI-Beta": "responses=experimental",
             "Accept": "application/json",
         },
     )

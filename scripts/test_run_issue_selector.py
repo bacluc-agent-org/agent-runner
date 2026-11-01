@@ -7,9 +7,35 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("run_issue_selector.sh")
 WORKFLOW = SCRIPT.parents[1] / ".github/workflows/hourly-issue.yml"
+MODEL_SCRIPT = SCRIPT.with_name("issue_selection_models.sh")
+DENY_LIST = SCRIPT.with_name("model-deny-list.txt")
 
 
 class IssueSelectorRetryTests(unittest.TestCase):
+    def test_workflow_candidate_builder_filters_credentials_orders_and_caps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            available = Path(directory) / "available"
+            available.write_text("\n".join([
+                "openrouter/mimo-v2.6-flash-free",
+                "openrouter/first-free",
+                "openrouter/second-free",
+                "opencode-go-openai/qwen3.8-flash",
+                "opencode-go-openai-2/qwen3.8-flash",
+                "opencode/big-pickle",
+            ]) + "\n")
+            env = os.environ | {
+                "OPENCODE_GO_API_KEY": "",
+                "OPENCODE_GO_2_API_KEY": "credential-two",
+                "OPENROUTER_API_KEY": "",
+            }
+            result = subprocess.run(["bash", str(MODEL_SCRIPT), str(available), str(DENY_LIST)], env=env, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.splitlines(), ["opencode-go-openai-2/qwen3.8-flash", "opencode/big-pickle"])
+
+            env["OPENCODE_GO_API_KEY"] = "credential-one"
+            result = subprocess.run(["bash", str(MODEL_SCRIPT), str(available), str(DENY_LIST)], env=env, text=True, capture_output=True)
+            self.assertEqual(result.stdout.splitlines(), ["opencode-go-openai/qwen3.8-flash", "opencode-go-openai-2/qwen3.8-flash"])
+
     def run_selector(self, responses, models=("m1", "m2")):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

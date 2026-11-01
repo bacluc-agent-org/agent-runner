@@ -1422,15 +1422,26 @@ class TestWorkflowOpenRouterSelection:
     def test_workflows_select_openrouter_and_exclude_weak_free_models(self):
         for path in self.WORKFLOWS:
             content = Path(path).read_text()
+            if path.endswith("hourly-issue.yml"):
+                helper = Path("scripts/issue_selection_models.sh").read_text()
+                assert 'scripts/issue_selection_models.sh "$available_models_file" scripts/model-deny-list.txt' in content
+                content = helper
             assert "openrouter/*)" in content
             assert '[[ -n "$OPENROUTER_API_KEY" ]]' in content
-            assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in content
-            assert "model-deny-list.txt" in content
+            assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in Path(path).read_text()
+            assert "model-deny-list.txt" in Path(path).read_text()
 
     def test_last_resort_is_deny_list_filtered_and_fails_closed(self):
         for path in self.WORKFLOWS:
             content = Path(path).read_text()
+            hourly = path.endswith("hourly-issue.yml")
+            if hourly:
+                content = Path("scripts/issue_selection_models.sh").read_text()
             mapfile = content.index("mapfile -t free_models")
+            if hourly:
+                assert 'grep -Ev -f "$deny_list_file"' in content
+                assert 'head -n1 || true' in content
+                continue
             give_up = content.rindex("not dispatching.' >&2")
             if path.endswith("opencode.yml"):
                 filtered = content.index('filtered_models="$(grep -Ev "$deny_re" "$available_models_file")"')

@@ -253,6 +253,24 @@ class TestFinish:
 
 
 class TestEnsure:
+    def test_ensure_and_finish_reuse_owned_marker_despite_newer_foreign_comments(self, fake_gh):
+        mine = _comment(333, upc.TEMPLATE.read_text(encoding="utf-8"))
+        gh = fake_gh([mine])
+
+        assert upc.main(_argv("--mode", "ensure")) == 0
+        gh.comments.extend(
+            [
+                _comment(444, upc.MARKER, login="someone-else", created_at="2026-09-27T00:00:00Z"),
+                _comment(555, "status without marker", created_at="2026-09-28T00:00:00Z"),
+            ]
+        )
+        assert upc.main(_argv("--mode", "finish", "--result", "completed")) == 0
+
+        assert [call[:4] for call in gh.mutating_calls] == [
+            ("api", "-X", "PATCH", f"repos/{REPO}/issues/comments/333")
+        ]
+        assert len(_rows(mine["body"])) == 1
+
     def test_never_duplicates_an_existing_marker_comment(self, fake_gh, tmp_path):
         mine = _comment(333, upc.TEMPLATE.read_text(encoding="utf-8"))
         foreign = _comment(

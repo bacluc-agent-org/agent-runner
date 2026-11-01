@@ -1131,6 +1131,25 @@ class TestProbeModelLogging:
         assert model_availability.probe_model("opencode/a-free", str(tmp_path))
         assert captured["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugin":[]}'
 
+    def test_oauth_probe_registers_the_catalog_model_in_opencode_config(self, tmp_path, monkeypatch):
+        captured = {}
+
+        class FakeResult:
+            returncode = 0
+            stdout = "OK\n"
+            stderr = ""
+
+        def fake_run(*args, **kwargs):
+            captured["env"] = kwargs["env"]
+            return FakeResult()
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+        assert model_availability.probe_model("openai/gpt-6-luna", str(tmp_path))
+        config = json.loads(captured["env"]["OPENCODE_CONFIG_CONTENT"])
+        assert config["provider"]["openai"]["models"]["gpt-6-luna"] == {
+            "name": "gpt-6-luna"
+        }
+
     def test_writes_probe_log_with_stdout_and_stderr(self, tmp_path, monkeypatch):
         class FakeResult:
             returncode = 0

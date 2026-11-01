@@ -45,9 +45,13 @@ def run_gh(*args: str) -> str:
     return subprocess.run(["gh", *args], check=True, capture_output=True, text=True).stdout
 
 
-def opencode_env() -> dict[str, str]:
+def opencode_env(model_id: str | None = None) -> dict[str, str]:
     env = dict(os.environ)
-    env["OPENCODE_CONFIG_CONTENT"] = '{"plugin":[]}'
+    config = {"plugin": []}
+    if model_id and model_id.startswith("openai/"):
+        model = model_id.removeprefix("openai/")
+        config["provider"] = {"openai": {"models": {model: {"name": model}}}}
+    env["OPENCODE_CONFIG_CONTENT"] = json.dumps(config, separators=(",", ":"))
     return env
 
 
@@ -511,7 +515,7 @@ def probe_model(
             capture_output=True,
             text=True,
             timeout=timeout,
-            env=opencode_env(),
+            env=opencode_env(candidate),
         )
     except Exception as e:
         _write_probe_log(log_path, f"ERROR: {e}\n")

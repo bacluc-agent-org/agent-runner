@@ -114,8 +114,8 @@ runs:
         printf '::add-mask::%s\n' "${OPENAI_REFRESH_TOKEN:-}"
         printf '::add-mask::%s\n' "${OPENCODE_AUTH_CONTENT:-}"
         if [[ -z "${OPENAI_REFRESH_TOKEN:-}" && -z "${OPENCODE_AUTH_CONTENT:-}" ]]; then
-          printf '::error::Set CHATGPT_REFRESH_TOKEN and CHATGPT_ACCESS_TOKEN, or keep OPENCODE_AUTH_JSON for one-time migration.\n' >&2
-          exit 1
+          printf 'ChatGPT OAuth credentials are not configured; skipping AISIX startup\n'
+          exit 0
         fi
         OPENAI_REFRESH_TOKEN="${OPENAI_REFRESH_TOKEN:-}" python3 scripts/refresh-token.py > "$RUNNER_TEMP/chatgpt-oauth.json"
         jq -e '.access_token != "" and .refresh_token != "" and (.expires_at | type == "number")' "$RUNNER_TEMP/chatgpt-oauth.json" >/dev/null

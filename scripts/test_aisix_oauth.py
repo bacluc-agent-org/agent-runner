@@ -30,6 +30,8 @@ def test_write_resources_routes_oauth_through_aisix(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_MODEL_SLUGS", "gpt-6-luna")
     monkeypatch.setenv("AISIX_CALLER_KEY", "test-caller-key")
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.setenv("GITHUB_RUN_ID", "12345")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
 
     resources_path, config_path = aisix_oauth.write_config()
 
@@ -37,7 +39,8 @@ def test_write_resources_routes_oauth_through_aisix(tmp_path, monkeypatch):
     assert "api_base: https://chatgpt.com/backend-api/codex" in resources
     assert f"api_key: {token}" in resources
     assert "ChatGPT-Account-Id: test-account" in resources
-    assert "OpenAI-Beta: responses=experimental" in resources
+    assert "x-codex-beta-features: remote_compaction_v2" in resources
+    assert 'session-id: "12345-2"' in resources
     assert 'display_name: "gpt-6-luna"' in resources
     assert 'model_name: "gpt-6-luna"' in resources
     assert "key_env: AISIX_CALLER_KEY" in resources

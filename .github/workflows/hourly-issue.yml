@@ -130,6 +130,10 @@ jobs:
           selection_model=''
           selection_models=()
           mapfile -t selection_models < <(scripts/issue_selection_models.sh "$available_models_file" scripts/model-deny-list.txt)
+          if ((${#selection_models[@]} == 0)); then
+            printf '%s\n' 'No issue-selection model is available; not dispatching.' >&2
+            exit 1
+          fi
           selection_model="${selection_models[0]}"
           printf 'Issue selection models: %s\n' "${selection_models[*]}"
           printf '\n\n\n\n\n\n'

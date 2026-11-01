@@ -315,6 +315,12 @@ jobs:
             selection_tee_status=${selection_statuses[1]}
             selection_command_status=$selection_status
             fatal_marker=0
+            if (( selection_status == 0 )) && ! grep -Eq '^SELECTED_ISSUE:[[:space:]]*[0-9]+[[:space:]]*$' "$selection"; then
+              for _ in {1..10}; do
+                [[ -f "$RUNNER_TEMP/opencode-fatal.json" ]] && break
+                sleep 0.1
+              done
+            fi
             if (( selection_status == 0 )) && [[ -f "$RUNNER_TEMP/opencode-fatal.json" ]]; then
               selection_status=1
               fatal_marker=1

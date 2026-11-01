@@ -158,6 +158,8 @@ def test_selector_retries_invocation_failures_on_distinct_eligible_models_only()
     assert '[[ -n "$OPENCODE_GO_API_KEY" ]] || continue' in retry
     assert '[[ -n "$OPENCODE_GO_2_API_KEY" ]] || continue' in retry
     assert "selection_status != 0" in retry
+    assert 'if (( selection_status == 0 )) && [[ -f "$RUNNER_TEMP/opencode-fatal.json" ]]; then' in retry
+    assert "selection_status=1" in retry
     assert content.index("if ! grep -q '[^[:space:]]' \"$selection\"") > content.index("if (( selection_status != 0 )); then")
 
 

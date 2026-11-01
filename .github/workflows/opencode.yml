@@ -192,6 +192,12 @@ jobs:
           DISCOVERY_TIMEOUT: ${{ inputs.discovery_timeout_minutes || 5 }}
         run: |
           set -Eeuo pipefail
+          configure_openai_model() {
+            [[ "$1" == openai/* ]] || return 0
+            local slug="${1#openai/}"
+            export OPENCODE_CONFIG_CONTENT
+            OPENCODE_CONFIG_CONTENT="$(jq -cn --arg slug "$slug" '{provider:{openai:{models:{($slug):{name:$slug}}}}}')"
+          }
 
           requested="${MODEL_TEXT:-}"
           if [[ -z "$requested" && "${MODEL_CHOICE:-auto}" != auto ]]; then requested="$MODEL_CHOICE"; fi
@@ -291,6 +297,7 @@ jobs:
             printf '::stop-commands::%s\n' "$stop_token"
             printf 'Model discovery prompt:\n%s\n' "$discovery_prompt"
             set +e
+            configure_openai_model "$fallback_model"
             timeout "${DISCOVERY_TIMEOUT}m" opencode run --agent model-discovery --model "$fallback_model" --title "model-discovery" "$discovery_prompt" | tee "$discovery_output"
             discovery_statuses=("${PIPESTATUS[@]}")
             printf '::%s::\n' "$stop_token"
@@ -418,7 +425,11 @@ jobs:
           printf '\n\n\n\n\n\n'
           printf '::%s::\n' "$stop_token"
 
+          configure_openai_model "$model"
           echo "model=${model}" >> "$GITHUB_OUTPUT"
+          if [[ "$model" == openai/* ]]; then
+            printf 'OPENCODE_CONFIG_CONTENT=%s\n' "$OPENCODE_CONFIG_CONTENT" >> "$GITHUB_ENV"
+          fi
 
       - name: Extract target issue number
         id: target-issue

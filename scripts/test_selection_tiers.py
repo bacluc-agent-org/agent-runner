@@ -133,6 +133,7 @@ def test_issue_selection_and_refinement_can_choose_verified_openai_oauth_models(
         assert "openai/*)" in content
         assert '$HOME/.local/share/opencode/auth.json' in content
         assert empty_message in content
+        assert 'configure_openai_model "$selection_model"' in content
 
     opencode = (root / ".github/workflows/opencode.yml").read_text()
     assert "OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON }}" in opencode
@@ -140,6 +141,8 @@ def test_issue_selection_and_refinement_can_choose_verified_openai_oauth_models(
     assert '"${openai_models[@]}"' in opencode
     assert "openai/*)" in opencode
     assert "--agent model-discovery" in opencode
+    assert 'configure_openai_model "$fallback_model"' in opencode
+    assert 'configure_openai_model "$model"' in opencode
 
 
 def test_selection_tail_requires_fast_tool_free_selection():

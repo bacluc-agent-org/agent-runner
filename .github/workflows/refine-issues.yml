@@ -55,6 +55,12 @@ jobs:
           AVAILABLE_MODELS: ${{ steps.model-availability.outputs.available-models }}
         run: |
           set -Eeuo pipefail
+          configure_openai_model() {
+            [[ "$1" == openai/* ]] || return 0
+            local slug="${1#openai/}"
+            export OPENCODE_CONFIG_CONTENT
+            OPENCODE_CONFIG_CONTENT="$(jq -cn --arg slug "$slug" '{provider:{openai:{models:{($slug):{name:$slug}}}}}')"
+          }
 
           printf '::add-mask::%s\n' "$GITHUB_TOKEN"
           printf '::add-mask::%s\n' "$OPENCODE_GO_API_KEY"
@@ -197,6 +203,7 @@ jobs:
                 break
               fi
 
+              configure_openai_model "$selection_model"
               set +e
               stop_token="$(openssl rand -hex 32)"
               : "${stop_token:?stop-commands fence token generation failed}"

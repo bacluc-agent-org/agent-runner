@@ -224,9 +224,16 @@ jobs:
             "${all_free_models[@]}"
           )
           attempted_selection_models=("$selection_model")
+          configure_openai_model() {
+            [[ "$1" == openai/* ]] || return 0
+            local slug="${1#openai/}"
+            export OPENCODE_CONFIG_CONTENT
+            OPENCODE_CONFIG_CONTENT="$(jq -cn --arg slug "$slug" '{provider:{openai:{models:{($slug):{name:$slug}}}}}')"
+          }
           run_selection() {
             local stop_token selection_command_status fatal_marker
             selection_started=$SECONDS
+            configure_openai_model "$selection_model"
             stop_token="$(openssl rand -hex 32)"
             : "${stop_token:?stop-commands fence token generation failed}"
             printf '::stop-commands::%s\n' "$stop_token"

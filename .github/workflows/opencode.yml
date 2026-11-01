@@ -197,7 +197,7 @@ jobs:
           if [[ -z "$requested" && "${MODEL_CHOICE:-auto}" != auto ]]; then requested="$MODEL_CHOICE"; fi
           model_source='requested'
           if [[ -z "$requested" ]]; then model_source=''; fi
-          
+
           if [[ -z "$requested" ]]; then
             printf 'Chosen model is %s (source: %s)\n' "$requested" "$model_source"
             printf 'Now dispatching agent\n'

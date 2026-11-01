@@ -197,6 +197,15 @@ jobs:
           if [[ -z "$requested" && "${MODEL_CHOICE:-auto}" != auto ]]; then requested="$MODEL_CHOICE"; fi
           model_source='requested'
           if [[ -z "$requested" ]]; then model_source=''; fi
+          
+          if [[ -z "$requested" ]]; then
+            printf 'Chosen model is %s (source: %s)\n' "$requested" "$model_source"
+            printf 'Now dispatching agent\n'
+            printf '\n\n\n\n\n\n'
+
+            echo "model=${requested}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           printf '::add-mask::%s\n' "$GITHUB_TOKEN"
           printf '::add-mask::%s\n' "$OPENCODE_GO_API_KEY"
@@ -239,7 +248,7 @@ jobs:
                 ;;
               *) continue ;;
             esac
-            fallback_model="$candidate"
+            fallback_model="$candidate"q
             model_source='fallback: preferred list'
             break
           done

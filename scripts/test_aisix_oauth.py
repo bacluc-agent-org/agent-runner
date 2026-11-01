@@ -37,6 +37,7 @@ def test_write_resources_routes_oauth_through_aisix(tmp_path, monkeypatch):
 
     resources = resources_path.read_text()
     assert "api_base: https://chatgpt.com/backend-api/codex" in resources
+    assert "      responses: {}" in resources
     assert f"api_key: {token}" in resources
     assert "ChatGPT-Account-Id: test-account" in resources
     assert "x-codex-beta-features: remote_compaction_v2" in resources

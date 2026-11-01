@@ -83,7 +83,7 @@ def write_config() -> tuple[Path, Path]:
                 "    api_base: https://chatgpt.com/backend-api/codex",
                 f"    api_key: {access_token}",
                 "    apis:",
-                "      responses: null",
+                "      responses: {}",
                 "    request:",
                 "      default_headers:",
                 f"        ChatGPT-Account-Id: {account_id(access_token)}",

@@ -68,6 +68,11 @@ def test_render_prompt_randomizes_all_candidates(monkeypatch):
 def test_workflow_fetches_all_search_pages_and_passes_all_tiers():
     workflow = WORKFLOW.read_text()
     assert 'gh api --paginate --slurp "search/issues?' in workflow
+    assert '> "$search_json.pages"' in workflow
+    assert 'jq \'[.[] | .items[]]\' "$search_json.pages" > "$search_json"' in workflow
+    assert "--jq" not in next(
+        line for line in workflow.splitlines() if "search/issues?" in line
+    )
     assert "&per_page=100\"" in workflow
     assert "sort:created-asc" not in workflow
     tail = (Path(__file__).parents[1] / "scripts/issue-selection-tail.txt").read_text()

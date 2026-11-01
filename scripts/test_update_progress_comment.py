@@ -341,3 +341,12 @@ def test_human_feedback_is_checked_before_finishing_progress():
     assert result.index('--mode finish') < result.index('gh issue comment "$ISSUE_NUMBER"')
     assert 'actor=$(gh api user --jq .login)' in result
     assert result.count('.author.login != \\\"$actor\\\"') == 2
+
+
+def test_human_feedback_is_requeried_against_pre_update_baseline():
+    workflow = (upc.TEMPLATE.parent.parent / '.github/workflows/opencode.yml').read_text(encoding='utf-8')
+    result = workflow.split('- name: Post run-result comment', 1)[1]
+    assert 'progress_baseline=' in result
+    assert result.index('progress_baseline=') < result.index('--mode finish')
+    assert result.index('--mode finish') < result.rindex('last_human_comment=$(gh issue view')
+    assert '[[ "$last_human_comment" > "$progress_baseline" ]]' in result

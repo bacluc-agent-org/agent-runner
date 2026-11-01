@@ -106,19 +106,17 @@ jobs:
           printf 'Fetching github issues...\n'
           printf '\n\n\n\n\n\n'
 
-          # Oldest-first: the 50-item page keeps the OLDEST 50 unclaimed issues instead of the
-          # newest 50, so backlog items beyond the cap are the newest, not the oldest.
           search_json="$RUNNER_TEMP/candidates.json"
-          gh api "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:ready-for-implementation+-label:agent-running+sort:created-asc&per_page=50" \
-            --jq '.items' > "$search_json"
+          gh api --paginate --slurp "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:ready-for-implementation+-label:agent-running&per_page=100" \
+            --jq '[.[] | .items[]]' > "$search_json"
 
           candidates="$RUNNER_TEMP/candidate-numbers.txt"
-          jq -r '.[].number | tostring' "$search_json" > "$candidates"
+          jq -r '.[].number | tostring' "$search_json" | shuf -n 50 > "$candidates"
           if [[ ! -s "$candidates" ]]; then
             printf '%s\n' 'No unclaimed open issues; nothing to do.'
             exit 0
           fi
-          printf 'Unclaimed candidate issues (oldest first):\n'
+          printf 'Randomized sample of up to 50 eligible issues:\n'
           cat "$candidates"
           printf '\n\n\n\n\n\n'
           printf 'Selecting model...\n'
@@ -255,7 +253,7 @@ jobs:
           prompt="$RUNNER_TEMP/selection-prompt.txt"
           printf '%s\n' "$tail_instruction" > "$RUNNER_TEMP/tail.txt"
           python3 scripts/selection_tiers.py --candidates "$enriched" --branches "$RUNNER_TEMP/branches.txt" --tail-file "$RUNNER_TEMP/tail.txt" > "$prompt"
-          printf 'Selected-tier candidates:\n'
+          printf 'Randomized candidates:\n'
           cat "$prompt"
 
           selection="$RUNNER_TEMP/selection.out"

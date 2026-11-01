@@ -37,7 +37,7 @@ You read a list of open issue candidates plus selection rules in the user messag
 
 ## PR Deduplication
 
-Candidate lines contain `[PR: …] [last-human-feedback: …] [attempts: N] [tier: T]`. The workflow has already applied tiers mechanically; do not override that priority. `[PR: none]` means no matching PR was found in the queried repos, not that no agent PR exists anywhere.
+Candidate lines contain `[PR: …] [last-human-feedback: …] [attempts: N] [recent-attempts: N]`. The list is randomized and includes all eligible candidates; attempt history does not rank issues. Avoid recently attempted candidates when another similarly suitable candidate is available. `[PR: none]` means no matching PR was found in the queried repos, not that no agent PR exists anywhere.
 
 Before selecting, query open, merged, and closed PRs in `bacluc-agent-org/agent-runner`, `bacluc-agent/agent-todo`, `bacluc/provision-machines`, `bacluc-agent/ecamp3`, and every `owner/repo` referenced by issue bodies. Match `issue-<n>` in branch/title (exact, then `-`, `_`, end, or non-alphanumeric) or `<issue-repo>#<n>`; prefer newest `updatedAt`. Compare PR updates with the newest non-`bacluc-agent` feedback on the issue or on that PR, which includes review comments. Broaden searches when branch/title/body omit markers; `PR: none` means only queried repos found none.
 
@@ -54,9 +54,9 @@ Push a branch and open a pull request only when the task changes code, and recor
 
 ## Selection
 
-Each candidate line is `number: title [labels: ...] [created: ...] [PR: none|open|merged|closed #<n> last-commit:<ts>] [last-human-feedback:<ts|none>] | body-excerpt [attempts: N] [tier: T]`. Select only among the supplied candidates and use the strongest argument for implementation; difficulty is not a reason to avoid a task.
+Each candidate line is `number: title [labels: ...] [created: ...] [PR: none|open|merged|closed #<n> last-commit:<ts>] [last-human-feedback:<ts|none>] | body-excerpt [attempts: N] [recent-attempts: N]`. Select only among the supplied candidates and use the strongest argument for implementation; difficulty is not a reason to avoid a task.
 
-Treat avoid list as authoritative; never choose avoided unless all others are infeasible. Order carries no priority; rotate area and target repo from the last two picks, cap standing never-close meta tasks to once per four runs, and prefer concrete, implementable bodies over docs-only issues. Use every candidate field: number, title, labels, date, PR state/last-commit time, last-human-feedback time, excerpt. Prefer untried `PR: none` and feedback-ready candidates over awaiting-feedback PRs without skipping hard work.
+Treat avoid list as authoritative; never choose avoided unless all others are infeasible. Order carries no priority; rotate area and target repo from the last two picks, cap standing never-close meta tasks to once per four runs, and prefer concrete, implementable bodies over docs-only issues. Use every candidate field: number, title, labels, date, PR state/last-commit time, last-human-feedback time, excerpt. Do not prefer untried issues solely because they are untried; avoid recently attempted issues when another similarly suitable candidate is available.
 
 The final prompt must be immediate and output-only; end the reply with exactly `SELECTED_ISSUE: <issue number>` (digits only) and nothing after it; no selection explanation or post-selection verification.
 

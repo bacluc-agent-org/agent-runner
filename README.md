@@ -91,8 +91,8 @@ dispatching when no allowed model is available.
 
 ### Agents (the AI personas)
 
-- `issue-selector` — reads the candidate issues and picks one from the best
-  available mechanically ranked tier.
+- `issue-selector` — reads all eligible candidate issues in random order and
+  picks one while avoiding recent repeats.
 
 - `issue-refiner` — a technical writer that rewrites issue bodies into
   `## Goal` and `## How to implement`, keeping at most 4000 visible

@@ -1442,6 +1442,13 @@ class TestWorkflowOpenRouterSelection:
             "'opencode-go-openai-2/qwen3.8-flash'"
         )
 
+    def test_hourly_issue_retries_free_model_after_qwen_provider_failure(self):
+        content = Path(".github/workflows/hourly-issue.yml").read_text()
+        assert "balance:opencode-go-openai/qwen3.8-flash" in content
+        assert "model_unavailable:opencode-go-openai-2/qwen3.8-flash" in content
+        assert 'selection_retry_count < 2' in content
+        assert '"${free_models[@]}"' in content
+
     def test_last_resort_is_deny_list_filtered_and_fails_closed(self):
         for path in self.WORKFLOWS:
             content = Path(path).read_text()

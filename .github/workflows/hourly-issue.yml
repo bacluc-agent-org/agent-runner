@@ -258,21 +258,71 @@ jobs:
           printf 'Randomized candidates:\n'
           cat "$prompt"
 
-          selection="$RUNNER_TEMP/selection.out"
-          set +e
-          stop_token="$(openssl rand -hex 32)"
-          : "${stop_token:?stop-commands fence token generation failed}"
-          printf '::stop-commands::%s\n' "$stop_token"
-          timeout "${SELECTION_TIMEOUT_MINUTES}m" opencode run --agent issue-selector --model "$selection_model" --title "issue-selector" "$(< "$prompt")" | tee "$selection"
-          selection_statuses=("${PIPESTATUS[@]}")
-          printf '::%s::\n' "$stop_token"
-          selection_status=${selection_statuses[0]}
-          selection_tee_status=${selection_statuses[1]}
-          set -e
+           selection="$RUNNER_TEMP/selection.out"
+          run_selection() {
+            local stop_token
+            stop_token="$(openssl rand -hex 32)"
+            : "${stop_token:?stop-commands fence token generation failed}"
+            printf '::stop-commands::%s\n' "$stop_token"
+            set +e
+            timeout "${SELECTION_TIMEOUT_MINUTES}m" opencode run --agent issue-selector --model "$selection_model" --title "issue-selector" "$(< "$prompt")" | tee "$selection"
+            selection_statuses=("${PIPESTATUS[@]}")
+            set -e
+            printf '::%s::\n' "$stop_token"
+            selection_status=${selection_statuses[0]}
+            selection_tee_status=${selection_statuses[1]}
+          }
+          run_selection
           printf 'Model selection statuses: opencode=%s tee=%s\n' "$selection_status" "$selection_tee_status"
           if (( selection_tee_status != 0 )); then
             exit "$selection_tee_status"
           fi
+          selection_retry_count=0
+          while (( selection_status != 0 && selection_retry_count < 2 )); do
+            fatal_reason="$(jq -r '.reason // empty' "$RUNNER_TEMP/opencode-fatal.json" 2>/dev/null || true)"
+            case "$fatal_reason:$selection_model" in
+              balance:opencode-go-openai/qwen3.8-flash|auth:opencode-go-openai/qwen3.8-flash|model_unavailable:opencode-go-openai/qwen3.8-flash)
+                retry_candidates=('opencode-go-openai-2/qwen3.8-flash' 'opencode/big-pickle' "${free_models[@]}")
+                ;;
+              balance:opencode-go-openai-2/qwen3.8-flash|auth:opencode-go-openai-2/qwen3.8-flash|model_unavailable:opencode-go-openai-2/qwen3.8-flash)
+                retry_candidates=('opencode/big-pickle' "${free_models[@]}")
+                ;;
+              *) break ;;
+            esac
+            retry_model=''
+            for candidate in "${retry_candidates[@]}"; do
+              case "$candidate" in
+                opencode-go-openai/qwen3.8-flash)
+                  grep -Fxq "$candidate" "$available_models_file" && [[ -n "$OPENCODE_GO_API_KEY" ]] || continue
+                  ;;
+                opencode-go-openai-2/qwen3.8-flash)
+                  grep -Fxq "$candidate" "$available_models_file" && [[ -n "$OPENCODE_GO_2_API_KEY" ]] || continue
+                  ;;
+                opencode/big-pickle)
+                  grep -Fxq "$candidate" "$available_models_file" || continue
+                  ;;
+                opencode/*-free) ;;
+                openrouter/*)
+                  [[ -n "$OPENROUTER_API_KEY" ]] || continue
+                  ;;
+                *) continue ;;
+              esac
+              retry_model="$candidate"
+              break
+            done
+            [[ -n "$retry_model" ]] || break
+            printf 'Qwen selection failed (%s); retrying with %s.\n' "$fatal_reason" "$retry_model"
+            selection_model="$retry_model"
+            echo "selection_model=${selection_model}" >> "$GITHUB_OUTPUT"
+            : > "$selection"
+            rm -f "$RUNNER_TEMP/opencode-fatal.json"
+            ((selection_retry_count++))
+            run_selection
+            if (( selection_tee_status != 0 )); then
+              exit "$selection_tee_status"
+            fi
+          done
+          printf 'Model selection statuses: opencode=%s tee=%s\n' "$selection_status" "$selection_tee_status"
           if (( selection_status != 0 )); then
             printf 'Selection failed (opencode=%s); not dispatching.\n' "$selection_status" >&2
             ((selection_status == 124)) && printf '::error::issue selection exceeded the %sm limit (opencode exit %s)\n' "$SELECTION_TIMEOUT_MINUTES" "$selection_status"

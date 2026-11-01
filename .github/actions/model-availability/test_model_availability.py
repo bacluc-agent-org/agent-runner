@@ -1449,7 +1449,13 @@ class TestWorkflowOpenRouterSelection:
         assert 'selection_retry_count < 2' in content
         assert '"${free_models[@]}"' in content
 
-    def test_last_resort_is_deny_list_filtered_and_fails_closed(self):
+    def test_hourly_issue_uses_weak_free_model_only_as_last_resort(self):
+        content = Path(".github/workflows/hourly-issue.yml").read_text()
+        assert "mapfile -t all_free_models" in content
+        assert '"${all_free_models[@]}"' in content
+        assert "last resort (known-weak free)" in content
+
+    def test_last_resort_filters_deny_list_before_free_fallback(self):
         for path in self.WORKFLOWS:
             content = Path(path).read_text()
             mapfile = content.index("mapfile -t free_models")

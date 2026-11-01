@@ -86,8 +86,10 @@ idea (issue in agent-todo)
   result in a cache issue in the todo repository. Probing every model on
   every run would be slow and expensive; the cache makes it cheap.
 
-Selectors apply the shared `scripts/model-deny-list.txt` and stop instead of
-dispatching when no allowed model is available.
+Selectors prefer models outside the shared `scripts/model-deny-list.txt`. If
+none are available, the hourly issue selector makes one last-resort attempt
+with an available free model from that list; it still validates the selector
+output before dispatching.
 
 ### Agents (the AI personas)
 

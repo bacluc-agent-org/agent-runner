@@ -132,6 +132,7 @@ jobs:
           # Exclude known-weak free models per scripts/model-deny-list.txt (shared with
           # opencode.yml and refine-issues.yml); they pass the trivial OK probe but
           # fail as coordinator/selector in 10+ runs (e.g. 34029380869, 34042660858).
+          mapfile -t all_free_models < <(grep -E '^(opencode|openrouter)/[^[:space:]]+(-free|:free)$' "$available_models_file" | awk '!seen[$0]++')
           mapfile -t free_models < <(grep -E '^(opencode|openrouter)/[^[:space:]]+(-free|:free)$' "$available_models_file" | grep -Ev -f scripts/model-deny-list.txt | awk '!seen[$0]++')
           for candidate in \
             'opencode-go-openai/qwen3.8-flash' \
@@ -161,6 +162,20 @@ jobs:
           if [[ -z "$selection_model" ]]; then
             selection_model="$(grep -Ev -f scripts/model-deny-list.txt "$available_models_file" | head -n1 || true)"
             selection_source='last resort (deny-list filtered)'
+            if [[ -z "$selection_model" ]]; then
+              for candidate in "${all_free_models[@]}"; do
+                case "$candidate" in
+                  opencode/*-free) ;;
+                  openrouter/*)
+                    [[ -n "$OPENROUTER_API_KEY" ]] || continue
+                    ;;
+                  *) continue ;;
+                esac
+                selection_model="$candidate"
+                selection_source='last resort (known-weak free)'
+                break
+              done
+            fi
             if [[ -z "$selection_model" ]]; then
               printf '%s\n' 'No issue-selection model is available; not dispatching.' >&2
               exit 1
@@ -282,10 +297,10 @@ jobs:
             fatal_reason="$(jq -r '.reason // empty' "$RUNNER_TEMP/opencode-fatal.json" 2>/dev/null || true)"
             case "$fatal_reason:$selection_model" in
               balance:opencode-go-openai/qwen3.8-flash|auth:opencode-go-openai/qwen3.8-flash|model_unavailable:opencode-go-openai/qwen3.8-flash)
-                retry_candidates=('opencode-go-openai-2/qwen3.8-flash' 'opencode/big-pickle' "${free_models[@]}")
+                retry_candidates=('opencode-go-openai-2/qwen3.8-flash' 'opencode/big-pickle' "${free_models[@]}" "${all_free_models[@]}")
                 ;;
               balance:opencode-go-openai-2/qwen3.8-flash|auth:opencode-go-openai-2/qwen3.8-flash|model_unavailable:opencode-go-openai-2/qwen3.8-flash)
-                retry_candidates=('opencode/big-pickle' "${free_models[@]}")
+                retry_candidates=('opencode/big-pickle' "${free_models[@]}" "${all_free_models[@]}")
                 ;;
               *) break ;;
             esac

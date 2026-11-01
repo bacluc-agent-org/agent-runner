@@ -459,7 +459,7 @@ def candidate_priority(candidate: str) -> int:
     if provider == "opencode":
         return 2 if free else 4
     if provider == "openai":
-        return 2
+        return 1
     if re.search(r"gpt", model, re.IGNORECASE):
         return 2 if provider in ("opencode-go-openai", "opencode-go-openai-2") else 6
     if provider == "openrouter":

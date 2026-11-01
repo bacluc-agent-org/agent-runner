@@ -785,9 +785,9 @@ class TestCandidatePriority:
         assert model_availability.candidate_priority("opencode/paid-model") == 4
 
     def test_openai_models(self):
-        assert model_availability.candidate_priority("openai/gpt-5.6-luna") == 2
-        assert model_availability.candidate_priority("openai/gpt-6-luna") == 2
-        assert model_availability.candidate_priority("openai/gpt-5.4") == 2
+        assert model_availability.candidate_priority("openai/gpt-5.6-luna") == 1
+        assert model_availability.candidate_priority("openai/gpt-6-luna") == 1
+        assert model_availability.candidate_priority("openai/gpt-5.4") == 1
 
     def test_go_openai_providers(self):
         assert model_availability.candidate_priority("opencode-go-openai/glm-5.3") == 5
@@ -808,7 +808,7 @@ class TestCandidatePriority:
         assert model_availability.candidate_priority("opencode-go-openai-2/glm-5.3") == 5
 
     def test_openai_non_gpt_priority(self):
-        assert model_availability.candidate_priority("openai/other-model") == 2
+        assert model_availability.candidate_priority("openai/other-model") == 1
 
     def test_go_anthropic_providers(self):
         assert model_availability.candidate_priority("opencode-go-anthropic/glm-5.3") == 6
@@ -824,12 +824,14 @@ class TestPrioritizeCandidates:
         candidates = [
             "openrouter/anthropic/claude-sonnet-4.5",
             "opencode-go-openai/qwen3.8-flash",
+            "openai/gpt-6-luna",
             "opencode/a-free",
             "opencode/big-pickle",
         ]
         assert model_availability.prioritize_candidates(candidates) == [
             "opencode/big-pickle",
             "opencode-go-openai/qwen3.8-flash",
+            "openai/gpt-6-luna",
             "opencode/a-free",
             "openrouter/anthropic/claude-sonnet-4.5",
         ]

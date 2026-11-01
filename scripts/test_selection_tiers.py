@@ -46,6 +46,38 @@ def test_durable_attempt_label_counts_as_history_without_branch():
     assert "[attempts: 1] [recent-attempts: 0]" in result.stdout
 
 
+def test_running_claims_are_not_candidates():
+    import json
+
+    with TemporaryDirectory() as directory:
+        candidates = Path(directory) / "candidates.json"
+        branches = Path(directory) / "branches.txt"
+        tail = Path(directory) / "tail.txt"
+        candidates.write_text(
+            json.dumps(
+                [
+                    {"number": 1, "labels": [{"name": "agent-running"}]},
+                    {"number": 2, "labels": [{"name": "agent-running:12345"}]},
+                    {"number": 3, "labels": [{"name": "ready-for-implementation"}]},
+                ]
+            )
+        )
+        branches.write_text("")
+        tail.write_text("Choose\n")
+        result = run(
+            ["python3", "scripts/selection_tiers.py", "--candidates", str(candidates), "--branches", str(branches), "--tail-file", str(tail)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    assert "attempts for 1:" not in result.stderr
+    assert "attempts for 2:" not in result.stderr
+    assert "attempts for 3:" in result.stderr
+    assert "3:" in result.stdout
+    assert "1:" not in result.stdout
+    assert "2:" not in result.stdout
+
+
 def test_render_prompt_randomizes_all_candidates(monkeypatch):
     better, awaiting = candidate(2), candidate(3)
     big = candidate(4)
@@ -65,7 +97,7 @@ def test_workflow_fetches_all_search_pages_and_passes_all_tiers():
     workflow = WORKFLOW.read_text()
     assert 'gh api --paginate --slurp "search/issues?' in workflow
     assert '> "$search_json.pages"' in workflow
-    assert 'jq \'[.[] | .items[]]\' "$search_json.pages" > "$search_json"' in workflow
+    assert 'jq \'[.[] | .items[] | select(([.labels[]?.name] | any(. == "agent-running" or startswith("agent-running:"))) | not)]\' "$search_json.pages" > "$search_json"' in workflow
     assert "--jq" not in next(
         line for line in workflow.splitlines() if "search/issues?" in line
     )

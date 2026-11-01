@@ -10,7 +10,7 @@ on:
         required: false
         type: string
       selection_timeout_minutes:
-        description: Issue selector timeout in minutes
+        description: Per-attempt selector timeout; a failed invocation may use one alternate, doubling the maximum selection time
         required: false
         type: number
         default: 10
@@ -128,7 +128,7 @@ jobs:
           printf '%s\n' "$AVAILABLE_MODELS" > "$available_models_file"
 
           selection_model=''
-          selection_source=''
+          selection_models=()
           # Exclude known-weak free models per scripts/model-deny-list.txt (shared with
           # opencode.yml and refine-issues.yml); they pass the trivial OK probe but
           # fail as coordinator/selector in 10+ runs (e.g. 34029380869, 34042660858).
@@ -154,22 +154,21 @@ jobs:
                 ;;
               *) continue ;;
             esac
-            selection_model="$candidate"
-            selection_source='preferred list'
-            break
+            selection_models+=("$candidate")
           done
-          if [[ -z "$selection_model" ]]; then
-            selection_model="$(grep -Ev -f scripts/model-deny-list.txt "$available_models_file" | head -n1 || true)"
-            selection_source='last resort (deny-list filtered)'
-            if [[ -z "$selection_model" ]]; then
+          if ((${#selection_models[@]} == 0)); then
+            fallback_model="$(grep -Ev -f scripts/model-deny-list.txt "$available_models_file" | head -n1 || true)"
+            if [[ -z "$fallback_model" ]]; then
               printf '%s\n' 'No issue-selection model is available; not dispatching.' >&2
               exit 1
             fi
-            printf '%s\n' "Using fallback model: $selection_model" >&2
+            selection_models+=("$fallback_model")
+            printf '%s\n' "Using fallback model: $fallback_model" >&2
           fi
-          printf 'Issue selection model: %s (source: %s)\n' "$selection_model" "$selection_source"
-          echo "selection_model=${selection_model}" >> "$GITHUB_OUTPUT"
-          export MODEL="$selection_model"
+          # Preserve deterministic eligibility ordering, then allow only one distinct alternate.
+          mapfile -t selection_models < <(printf '%s\n' "${selection_models[@]}" | awk '!seen[$0]++' | head -n2)
+          selection_model="${selection_models[0]}"
+          printf 'Issue selection models: %s\n' "${selection_models[*]}"
           printf '\n\n\n\n\n\n'
           printf 'Choosing issue...\n'
           printf '\n\n\n\n\n\n'
@@ -259,29 +258,14 @@ jobs:
           cat "$prompt"
 
           selection="$RUNNER_TEMP/selection.out"
-          set +e
-          stop_token="$(openssl rand -hex 32)"
-          : "${stop_token:?stop-commands fence token generation failed}"
-          printf '::stop-commands::%s\n' "$stop_token"
-          timeout "${SELECTION_TIMEOUT_MINUTES}m" opencode run --agent issue-selector --model "$selection_model" --title "issue-selector" "$(< "$prompt")" | tee "$selection"
-          selection_statuses=("${PIPESTATUS[@]}")
-          printf '::%s::\n' "$stop_token"
-          selection_status=${selection_statuses[0]}
-          selection_tee_status=${selection_statuses[1]}
-          set -e
-          printf 'Model selection statuses: opencode=%s tee=%s\n' "$selection_status" "$selection_tee_status"
-          if (( selection_tee_status != 0 )); then
-            exit "$selection_tee_status"
-          fi
-          if (( selection_status != 0 )); then
-            printf 'Selection failed (opencode=%s); not dispatching.\n' "$selection_status" >&2
-            ((selection_status == 124)) && printf '::error::issue selection exceeded the %sm limit (opencode exit %s)\n' "$SELECTION_TIMEOUT_MINUTES" "$selection_status"
+          if ! scripts/run_issue_selector.sh "$prompt" "$selection" "$candidates" "$RUNNER_TEMP/opencode-fatal.json" "$SELECTION_TIMEOUT_MINUTES" "${selection_models[@]}"; then
+            selection_model="$(cat "${selection}.failed-model" 2>/dev/null || printf '%s' "$selection_model")"
+            echo "selection_model=${selection_model}" >> "$GITHUB_OUTPUT"
             exit 1
           fi
-          if ! grep -q '[^[:space:]]' "$selection"; then
-            printf '%s\n' 'Selection produced no output; not dispatching.' >&2
-            exit 1
-          fi
+          selection_model="$(cat "${selection}.model")"
+          echo "selection_model=${selection_model}" >> "$GITHUB_OUTPUT"
+          export MODEL="$selection_model"
 
           eof="EOF_PROMPT_$(openssl rand -hex 32)"
           if grep -Fqx -- "$eof" "$selection"; then
@@ -290,11 +274,7 @@ jobs:
           fi
           # `|| true` is required: under `set -Eeuo pipefail` a non-matching grep fails the whole
           # pipeline, and the assignment would abort the step before the dispatch happens.
-          issue_number="$(grep -E '^SELECTED_ISSUE:[[:space:]]*[0-9]+[[:space:]]*$' "$selection" | tail -1 | grep -oE '[0-9]+' || true)"
-          if [[ -z "$issue_number" ]] || ! grep -qxF "$issue_number" "$candidates"; then
-            printf '::error::missing or invalid SELECTED_ISSUE; not dispatching\n'
-            exit 1
-          fi
+          issue_number="$(grep -E '^SELECTED_ISSUE:[[:space:]]*[0-9]+[[:space:]]*$' "$selection" | tail -1 | grep -oE '[0-9]+')"
           printf 'issue_number=%s\n' "$issue_number" >> "$GITHUB_OUTPUT"
           if ! gh issue edit "$issue_number" -R "$ISSUE_REPOSITORY" --add-label agent-running,agent-attempted; then
             printf '::warning::could not claim issue %s; dispatching unclaimed\n' "$issue_number"

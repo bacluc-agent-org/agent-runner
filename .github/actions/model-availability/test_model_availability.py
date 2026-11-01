@@ -1427,6 +1427,18 @@ class TestWorkflowOpenRouterSelection:
             assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in content
             assert "model-deny-list.txt" in content
 
+    def test_hourly_issue_prefers_verified_free_models_before_go_fallback(self):
+        content = Path(".github/workflows/hourly-issue.yml").read_text()
+        start = content.index("for candidate in \\")
+        end = content.index("; do", start)
+        candidates = content[start:end]
+        assert candidates.index('"${free_models[@]}"') < candidates.index(
+            "'opencode-go-openai/qwen3.8-flash'"
+        )
+        assert candidates.index('"${free_models[@]}"') < candidates.index(
+            "'opencode-go-openai-2/qwen3.8-flash'"
+        )
+
     def test_last_resort_is_deny_list_filtered_and_fails_closed(self):
         for path in self.WORKFLOWS:
             content = Path(path).read_text()

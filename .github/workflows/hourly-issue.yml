@@ -108,15 +108,18 @@ jobs:
           fi
 
           # Clean up claims from runs that are no longer in progress/queued
-          while IFS=$'\t' read -r issue_num label; do
-            [[ -z "$issue_num" || -z "$label" ]] && continue
-            run_id="${label#agent-running:}"
-            [[ "$run_id" == "$label" ]] && continue
-            run_status="$(gh run view "$run_id" -R bacluc-agent-org/agent-runner --json status --jq .status 2>/dev/null || echo "unknown")"
-            if [[ "$run_status" != "in_progress" && "$run_status" != "queued" ]]; then
-              gh issue edit "$issue_num" -R "$ISSUE_REPOSITORY" --remove-label "$label" 2>/dev/null || true
-            fi
-          done < <(gh issue list -R "$ISSUE_REPOSITORY" --state open --label 'agent-running:*' --json number,labels --jq '.[] | "\(.number)\t\((.labels[] | select(.name | startswith("agent-running:")) | .name))"' 2>/dev/null || true)
+          while IFS=$'\t' read -r issue_num labels; do
+            IFS=',' read -ra claim_labels <<< "$labels"
+            for label in "${claim_labels[@]}"; do
+              [[ -z "$issue_num" || -z "$label" ]] && continue
+              run_id="${label#agent-running:}"
+              [[ "$run_id" == "$label" ]] && continue
+              run_status="$(gh run view "$run_id" -R bacluc-agent-org/agent-runner --json status --jq .status 2>/dev/null || echo "unknown")"
+              if [[ "$run_status" != "in_progress" && "$run_status" != "queued" ]]; then
+                gh issue edit "$issue_num" -R "$ISSUE_REPOSITORY" --remove-label "$label" 2>/dev/null || true
+              fi
+            done
+          done < <(gh issue list -R "$ISSUE_REPOSITORY" --state open --limit 1000 --json number,labels --jq '.[] | [.number, ([.labels[]?.name | select(startswith("agent-running:"))] | join(","))] | select(.[1] != "") | @tsv' 2>/dev/null || true)
 
           printf '\n\n\n\n\n\n'
           printf 'Fetching github issues...\n'
@@ -405,10 +408,12 @@ jobs:
             fi
           else
             # Scan for issues whose claim run id equals this run id
-            while IFS=$'\t' read -r issue_num label; do
-              [[ -z "$issue_num" || -z "$label" ]] && continue
-              if [[ "$label" == "agent-running:${CURRENT_RUN_ID}" ]]; then
-                gh issue edit "$issue_num" -R "$ISSUE_REPOSITORY" --remove-label "$label" 2>/dev/null || true
-              fi
-            done < <(gh issue list -R "$ISSUE_REPOSITORY" --state open --label 'agent-running:*' --json number,labels --jq '.[] | "\(.number)\t\((.labels[] | select(.name == "agent-running:'"${CURRENT_RUN_ID}"'") | .name))"' 2>/dev/null || true)
+            while IFS=$'\t' read -r issue_num labels; do
+              IFS=',' read -ra claim_labels <<< "$labels"
+              for label in "${claim_labels[@]}"; do
+                if [[ "$label" == "agent-running:${CURRENT_RUN_ID}" ]]; then
+                  gh issue edit "$issue_num" -R "$ISSUE_REPOSITORY" --remove-label "$label" 2>/dev/null || true
+                fi
+              done
+            done < <(gh issue list -R "$ISSUE_REPOSITORY" --state open --limit 1000 --json number,labels --jq '.[] | [.number, ([.labels[]?.name | select(startswith("agent-running:"))] | join(","))] | select(.[1] != "") | @tsv' 2>/dev/null || true)
           fi

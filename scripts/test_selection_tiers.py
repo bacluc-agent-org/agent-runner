@@ -120,6 +120,28 @@ def test_selector_retries_invocation_failures_on_distinct_eligible_models_only()
     assert content.index("if ! grep -q '[^[:space:]]' \"$selection\"") > content.index("if (( selection_status != 0 )); then")
 
 
+def test_issue_selection_and_refinement_can_choose_verified_openai_oauth_models():
+    root = Path(__file__).parents[1]
+    for workflow_name, empty_message in (
+        ("hourly-issue.yml", "No issue-selection model is available"),
+        ("refine-issues.yml", "No refinement model is available"),
+    ):
+        content = (root / ".github/workflows" / workflow_name).read_text()
+        assert "OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON }}" in content
+        assert "mapfile -t openai_models < <(grep -E '^openai/'" in content
+        assert '"${openai_models[@]}"' in content
+        assert "openai/*)" in content
+        assert '$HOME/.local/share/opencode/auth.json' in content
+        assert empty_message in content
+
+    opencode = (root / ".github/workflows/opencode.yml").read_text()
+    assert "OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON }}" in opencode
+    assert "mapfile -t openai_models < <(grep -E '^openai/'" in opencode
+    assert '"${openai_models[@]}"' in opencode
+    assert "openai/*)" in opencode
+    assert "--agent model-discovery" in opencode
+
+
 def test_selection_tail_requires_fast_tool_free_selection():
     tail = (Path(__file__).parents[1] / "scripts/issue-selection-tail.txt").read_text()
     agent = (Path(__file__).parents[1] / ".opencode/agent/issue-selector.md").read_text()

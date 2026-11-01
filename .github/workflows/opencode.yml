@@ -218,10 +218,12 @@ jobs:
           [[ -n "$deny_re" ]] || deny_re='^$'
 
           mapfile -t free_models < <(grep -E '^(opencode|openrouter)/[^[:space:]]+(-free|:free)$' "$available_models_file" | grep -Ev "$deny_re" | awk '!seen[$0]++')
+          mapfile -t openai_models < <(grep -E '^openai/' "$available_models_file" | awk '!seen[$0]++')
           for candidate in \
             'opencode/big-pickle' \
             'opencode-go-openai/qwen3.8-flash' \
             'opencode-go-openai-2/qwen3.8-flash' \
+            "${openai_models[@]}" \
             "${free_models[@]}"; do
             case "$candidate" in
               opencode-go-openai/qwen3.8-flash)
@@ -236,6 +238,12 @@ jobs:
               opencode/*-free) ;;
               openrouter/*)
                 [[ -n "$OPENROUTER_API_KEY" ]] || continue
+                ;;
+              openai/*)
+                if [[ ! -s "$HOME/.local/share/opencode/auth.json" ]] \
+                  || ! jq -e '.openai.type == "oauth" and .openai.access != "" and .openai.refresh != ""' "$HOME/.local/share/opencode/auth.json" >/dev/null; then
+                  continue
+                fi
                 ;;
               *) continue ;;
             esac
@@ -356,7 +364,7 @@ jobs:
           }
 
           requested_model="$model"
-          if [[ "$model" == openai/* && -f ~/.local/share/opencode/auth.json ]]; then
+          if [[ "$model" == openai/* ]] && jq -e '.openai.type == "oauth" and .openai.access != "" and .openai.refresh != ""' ~/.local/share/opencode/auth.json >/dev/null 2>&1; then
             printf 'Model availability: requested %q is openai/* and auth.json is present; skipping fallback\n' "$model"
             echo "model=${model}" >> "$GITHUB_OUTPUT"
             printf '\n\n\n\n\n\n'

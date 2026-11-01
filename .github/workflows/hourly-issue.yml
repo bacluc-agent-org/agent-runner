@@ -136,10 +136,12 @@ jobs:
           # fail as coordinator/selector in 10+ runs (e.g. 34029380869, 34042660858).
           mapfile -t all_free_models < <(grep -E '^(opencode|openrouter)/[^[:space:]]+(-free|:free)$' "$available_models_file" | awk '!seen[$0]++')
           mapfile -t free_models < <(grep -E '^(opencode|openrouter)/[^[:space:]]+(-free|:free)$' "$available_models_file" | grep -Ev -f scripts/model-deny-list.txt | awk '!seen[$0]++')
+          mapfile -t openai_models < <(grep -E '^openai/' "$available_models_file" | awk '!seen[$0]++')
           for candidate in \
             'opencode-go-openai/qwen3.8-flash' \
             'opencode-go-openai-2/qwen3.8-flash' \
             'opencode/big-pickle' \
+            "${openai_models[@]}" \
             "${free_models[@]}"; do
             case "$candidate" in
               opencode-go-openai/qwen3.8-flash)
@@ -154,6 +156,12 @@ jobs:
               opencode/*-free) ;;
               openrouter/*)
                 [[ -n "$OPENROUTER_API_KEY" ]] || continue
+                ;;
+              openai/*)
+                if [[ ! -s "$HOME/.local/share/opencode/auth.json" ]] \
+                  || ! jq -e '.openai.type == "oauth" and .openai.access != "" and .openai.refresh != ""' "$HOME/.local/share/opencode/auth.json" >/dev/null; then
+                  continue
+                fi
                 ;;
               *) continue ;;
             esac

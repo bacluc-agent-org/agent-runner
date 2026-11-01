@@ -47,7 +47,6 @@ def run_gh(*args: str) -> str:
 
 def opencode_env() -> dict[str, str]:
     env = dict(os.environ)
-    env["OPENCODE_DISABLE_DEFAULT_PLUGINS"] = "true"
     env["OPENCODE_CONFIG_CONTENT"] = '{"plugin":[]}'
     return env
 
@@ -456,7 +455,7 @@ def candidate_priority(candidate: str) -> int:
     if provider == "opencode":
         return 2 if free else 4
     if provider == "openai":
-        return 4
+        return 2
     if re.search(r"gpt", model, re.IGNORECASE):
         return 2 if provider in ("opencode-go-openai", "opencode-go-openai-2") else 6
     if provider == "openrouter":

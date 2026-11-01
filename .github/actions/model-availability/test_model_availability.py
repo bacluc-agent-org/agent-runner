@@ -157,8 +157,9 @@ class TestDiscoverModels:
         assert error.value.returncode == 17
         assert captured["args"] == ["opencode", "models"]
         assert captured["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugin":[]}'
+        assert "OPENCODE_DISABLE_DEFAULT_PLUGINS" not in captured["env"]
 
-    def test_debug_config_uses_plugin_safe_environment(self, monkeypatch):
+    def test_debug_config_preserves_builtin_providers_in_plugin_safe_environment(self, monkeypatch):
         captured = {}
 
         def fake_config(args, *a, **kw):
@@ -176,6 +177,7 @@ class TestDiscoverModels:
             "openrouter": {"baseURL": "https://openrouter.ai/api/v1", "apiKey": None},
         }
         assert captured["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugin":[]}'
+        assert "OPENCODE_DISABLE_DEFAULT_PLUGINS" not in captured["env"]
 
     def test_discovers_models_per_provider(self, monkeypatch):
         captured = {}
@@ -783,9 +785,9 @@ class TestCandidatePriority:
         assert model_availability.candidate_priority("opencode/paid-model") == 4
 
     def test_openai_models(self):
-        assert model_availability.candidate_priority("openai/gpt-5.6-luna") == 4
-        assert model_availability.candidate_priority("openai/gpt-6-luna") == 4
-        assert model_availability.candidate_priority("openai/gpt-5.4") == 4
+        assert model_availability.candidate_priority("openai/gpt-5.6-luna") == 2
+        assert model_availability.candidate_priority("openai/gpt-6-luna") == 2
+        assert model_availability.candidate_priority("openai/gpt-5.4") == 2
 
     def test_go_openai_providers(self):
         assert model_availability.candidate_priority("opencode-go-openai/glm-5.3") == 5
@@ -806,7 +808,7 @@ class TestCandidatePriority:
         assert model_availability.candidate_priority("opencode-go-openai-2/glm-5.3") == 5
 
     def test_openai_non_gpt_priority(self):
-        assert model_availability.candidate_priority("openai/other-model") == 4
+        assert model_availability.candidate_priority("openai/other-model") == 2
 
     def test_go_anthropic_providers(self):
         assert model_availability.candidate_priority("opencode-go-anthropic/glm-5.3") == 6

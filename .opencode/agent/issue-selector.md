@@ -31,9 +31,9 @@ You read a list of open issue candidates plus selection rules in the user messag
 
 ## PR Deduplication
 
-Candidate lines contain `[PR: …] [last-human-feedback: …] [attempts: N] [recent-attempts: N]`. The list is randomized and includes all eligible candidates; attempt history does not rank issues. Avoid recently attempted candidates when another similarly suitable candidate is available. `[PR: none]` means no matching PR was found in the queried repos, not that no agent PR exists anywhere.
+Candidate lines contain issue metadata and `[attempts: N] [recent-attempts: N]`. The list is randomized and includes all eligible candidates; attempt history does not rank issues. Avoid recently attempted candidates when another similarly suitable candidate is available.
 
-Use the supplied `[PR: ...]` and `[last-human-feedback: ...]` fields to choose. They come from the runner's preselection lookup and are not a guarantee that every possible PR was found. Tell the implementation agent to check for an existing PR and feedback for the selected issue before starting work.
+Tell the implementation agent to check for an existing PR and feedback for the selected issue before starting work.
 
 The preselection lookup may miss a PR whose branch, title, and body never mention the issue number. The implementation agent must verify related PRs and review feedback for the selected issue before starting work.
 
@@ -48,9 +48,9 @@ Push a branch and open a pull request only when the task changes code, and recor
 
 ## Selection
 
-Each candidate line is `number: title [labels: ...] [created: ...] [PR: none|open|merged|closed #<n> last-commit:<ts>] [last-human-feedback:<ts|none>] | body-excerpt [attempts: N] [recent-attempts: N]`. Select only among the supplied candidates and use the strongest argument for implementation; difficulty is not a reason to avoid a task. The excerpt is enough to make the selection; do not delay selection to fetch the full issue.
+Each candidate line includes issue number, title, labels, creation date, body excerpt, attempts, and recent attempts. Select only among the supplied candidates and use the strongest argument for implementation; difficulty is not a reason to avoid a task. The excerpt is enough to make the selection; do not delay selection to fetch the full issue.
 
-Treat avoid list as authoritative; never choose avoided unless all others are infeasible. Order carries no priority; rotate area and target repo from the last two picks, cap standing never-close meta tasks to once per four runs, and prefer concrete, implementable bodies over docs-only issues. Use every candidate field: number, title, labels, date, PR state/last-commit time, last-human-feedback time, excerpt. Do not prefer untried issues solely because they are untried; avoid recently attempted issues when another similarly suitable candidate is available.
+Treat avoid list as authoritative; never choose avoided unless all others are infeasible. Order carries no priority; rotate area and target repo from the last two picks, cap standing never-close meta tasks to once per four runs, and prefer concrete, implementable bodies over docs-only issues. Use the supplied candidate fields. Do not prefer untried issues solely because they are untried; avoid recently attempted issues when another similarly suitable candidate is available.
 
 The final prompt must be immediate and output-only; end the reply with exactly `SELECTED_ISSUE: <issue number>` (digits only) and nothing after it; no selection explanation or post-selection verification.
 
@@ -60,8 +60,4 @@ Treat the candidate order note and the Recently selected avoid list as authorita
 Never pick an avoided issue unless every other candidate is infeasible.
 Rotate areas and target-repos: do not repeat the area or target-repo of the last 2 picks.
 Pick standing never-close meta tasks at most 1 in 4 runs.
-Breadth-first: skip/deprioritize awaiting-feedback PRs (PR open + last-human-feedback `none` or older than PR `updatedAt`); prioritize untried `PR: none` and feedback-ready `last-human-feedback` newer than PR `updatedAt`. Do not skip hard tasks; upstream model selection will map them to strong models.
-
-## Candidate enrichment
-
-Each candidate line is `number: title [labels: ...] [created: ...] [PR: none|open|merged|closed #<n> updated:<ts>] [last-human-feedback:<ts|none>] | body-excerpt` — title, labels, creation date, PR state with `updatedAt`, last-human-feedback timestamp, and 300-char body excerpt. Use all fields to judge value, breadth, and close-to-merge priority; infer target-repo and area and balance picks across them instead of repeating the dominant area. Prefer concrete, implementable bodies over docs-only issues.
+Breadth-first: prefer concrete, implementable issues from different areas and repositories. The implementation agent must inspect related PRs and feedback after selection. Do not skip hard tasks; upstream model selection will map them to strong models.

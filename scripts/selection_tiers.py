@@ -18,10 +18,6 @@ class Candidate:
     title: str
     labels: list[str]
     created_at: str
-    pr_state: str
-    pr_number: int | None
-    pr_last_commit_at: str | None
-    last_human_comment_at: str | None
     attempts: int
     recent_attempts: int
     body: str = ""
@@ -47,9 +43,7 @@ def render_prompt(candidates: list[Candidate], tail_text: str) -> str:
         title = candidate.title.replace("\r", " ").replace("\n", " ")
         lines.append(
             f"{candidate.number}: {title} [labels: {','.join(candidate.labels)}] "
-            f"[created: {candidate.created_at}] [PR: {candidate.pr_state} "
-            f"#{candidate.pr_number or 'none'} last-commit:{candidate.pr_last_commit_at or 'none'}] "
-            f"[last-human-feedback:{candidate.last_human_comment_at or 'none'}] | {body} "
+            f"[created: {candidate.created_at}] | {body} "
             f"[attempts: {candidate.attempts}] [recent-attempts: {candidate.recent_attempts}]"
         )
     lines.append(tail_text.strip())
@@ -76,10 +70,6 @@ def main() -> None:
             title=issue.get("title", ""),
             labels=labels,
             created_at=issue.get("created_at", ""),
-            pr_state=issue.get("pr_state", "none").lower(),
-            pr_number=issue.get("pr_number"),
-            pr_last_commit_at=issue.get("pr_last_commit_at"),
-            last_human_comment_at=issue.get("last_human_comment_at"),
             attempts=attempts,
             recent_attempts=sum(number == recent for recent in newest_three),
             body=issue.get("body") or "",

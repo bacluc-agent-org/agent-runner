@@ -149,6 +149,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: bacluc-agent-org/agent-runner
+          ref: ${{ github.repository == 'bacluc-agent-org/agent-runner' && github.sha || '' }}
           path: ${{ env.DIAGNOSTICS_CHECKOUT }}
           fetch-depth: 1
           persist-credentials: false
@@ -732,6 +733,20 @@ jobs:
             RUN_SUMMARY="${RUN_SUMMARY}; pushed: ${PUSHED_REPOS//$'\n'/ }"
           fi
 
+          new_comment_needed="false"
+          if [[ -n "${COMMENT_ID:-}" ]]; then
+            actor=$(gh api user --jq .login)
+            bot_comment_updated=$(gh api "repos/$ISSUE_REPOSITORY/issues/comments/$COMMENT_ID" --jq '.updated_at // .created_at' 2>/dev/null || echo '')
+            last_human_comment=$(gh issue view "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --json comments --jq "[.comments[] | select(.author.login != \"$actor\")] | max_by(.createdAt) | .createdAt // \"none\"" 2>/dev/null || echo 'none')
+            if [[ -n "$last_human_comment" && "$last_human_comment" != "none" && -n "$bot_comment_updated" ]]; then
+              # Compare timestamps lexicographically (ISO 8601 works for this)
+              if [[ "$last_human_comment" > "$bot_comment_updated" ]]; then
+                new_comment_needed="true"
+              fi
+            fi
+          fi
+
+
           # The runner owns the single progress comment: the script replaces this run's
           # row and the Open PR line. Never append a free-form run report to the issue.
           python3 "$RUNNER_TEMP/agent-runner/scripts/update_progress_comment.py" \
@@ -747,24 +762,11 @@ jobs:
             --github-output "$GITHUB_OUTPUT" \
             || printf 'warning: could not update the progress comment\n' >&2
 
-          # Check if a human commented after our last update; if so, respond with a new comment.
-          # ponytail: global scan of issue comments per update; per-account locks if throughput matters.
-          new_comment_needed="false"
-          if [[ -n "${COMMENT_ID:-}" ]]; then
-            bot_comment_updated=$(gh api "repos/$ISSUE_REPOSITORY/issues/comments/$COMMENT_ID" --jq '.updated_at // .created_at' 2>/dev/null || echo '')
-            last_human_comment=$(gh issue view "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --json comments --jq '[.comments[] | select(.author.login != "bacluc-agent")] | max_by(.createdAt) | .createdAt // "none"' 2>/dev/null || echo 'none')
-            if [[ -n "$last_human_comment" && "$last_human_comment" != "none" && -n "$bot_comment_updated" ]]; then
-              # Compare timestamps lexicographically (ISO 8601 works for this)
-              if [[ "$last_human_comment" > "$bot_comment_updated" ]]; then
-                new_comment_needed="true"
-              fi
-            fi
-          fi
 
           if [[ "$new_comment_needed" == "true" ]]; then
             # A human answered after our last update: reply with the quoted comment plus one
             # acknowledgement line. The run report belongs in the progress comment, never here.
-            last_human_body=$(gh issue view "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --json comments --jq '[.comments[] | select(.author.login != "bacluc-agent")] | max_by(.createdAt) | .body // empty' 2>/dev/null || echo '')
+            last_human_body=$(gh issue view "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --json comments --jq "[.comments[] | select(.author.login != \"$actor\")] | max_by(.createdAt) | .body // empty" 2>/dev/null || echo '')
             reply_body="Thanks for the feedback — picking it up."
             if [[ -n "$last_human_body" && "$last_human_body" != "null" ]]; then
               reply_body="${reply_body}"$'\n\n'"$(printf '%s\n' "$last_human_body" | sed 's/^/> /')"

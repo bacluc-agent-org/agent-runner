@@ -319,3 +319,25 @@ class TestErrors:
         monkeypatch.setattr(upc, "run_gh", boom)
 
         assert upc.main(_argv("--mode", "ensure")) == 1
+
+
+def test_coordinator_and_subagents_receive_canonical_progress_policy():
+    root = upc.TEMPLATE.parent.parent
+    workflow = (root / '.github/workflows/opencode.yml').read_text(encoding='utf-8')
+    policy = (root / 'scripts/progress-reporting.txt').read_text(encoding='utf-8')
+    assert '$(cat "$RUNNER_TEMP/agent-runner/scripts/progress-reporting.txt")' in workflow
+    assert "ref: ${{ github.repository == 'bacluc-agent-org/agent-runner' && github.sha || '' }}" in workflow
+    assert 'newest issue comment authored by the authenticated user' in policy
+    assert 'Never create another marked or unmarked progress or status comment' in policy
+    assert 'including per run, per step, per milestone, or by a subagent' in policy
+    assert 'Post a separate comment ONLY as a short reply to a human comment' in policy
+    assert 'Pass these rules verbatim into every subagent prompt' in policy
+
+
+def test_human_feedback_is_checked_before_finishing_progress():
+    workflow = (upc.TEMPLATE.parent.parent / '.github/workflows/opencode.yml').read_text(encoding='utf-8')
+    result = workflow.split('- name: Post run-result comment', 1)[1]
+    assert result.index('last_human_comment=$(gh issue view') < result.index('--mode finish')
+    assert result.index('--mode finish') < result.index('gh issue comment "$ISSUE_NUMBER"')
+    assert 'actor=$(gh api user --jq .login)' in result
+    assert result.count('.author.login != \\\"$actor\\\"') == 2

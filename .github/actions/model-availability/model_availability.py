@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+from pathlib import Path
 from urllib.parse import urlsplit
 from datetime import datetime, timezone
 
@@ -37,6 +38,7 @@ PROBE_PROMPT = "Respond with exactly OK."
 CACHE_ISSUE_TITLE = "model-discovery cache"
 DISCOVERY_TIMEOUT_SECONDS = 120
 GITHUB_ISSUE_BODY_LIMIT = 65536
+OPENAI_CODEX_MODELS_URL = "https://chatgpt.com/backend-api/codex/models?client_version=2.1.4"
 
 
 def run_gh(*args: str) -> str:
@@ -189,6 +191,8 @@ def provider_probeable(model_id: str, provider_config: dict, env: dict) -> bool:
     provider = model_id.split("/", 1)[0] if "/" in model_id else ""
     if not provider:
         return True
+    if provider == "openai":
+        return True
     if provider not in provider_config:
         return True
     info = provider_config[provider]
@@ -233,6 +237,45 @@ def fetch_model_ids(endpoint: str, api_key: str | None = None) -> list[str]:
         return []
 
 
+def fetch_openai_oauth_model_ids() -> list[str]:
+    """Fetch the account's ChatGPT/Codex model catalog using OpenCode's OAuth credential."""
+    try:
+        with (Path.home() / ".local/share/opencode/auth.json").open(encoding="utf-8") as auth_file:
+            auth = json.load(auth_file)
+        openai_auth = auth.get("openai", {})
+        access_token = openai_auth.get("access") if openai_auth.get("type") == "oauth" else None
+        if not isinstance(access_token, str) or not access_token:
+            return []
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+        return []
+
+    request = urllib.request.Request(
+        OPENAI_CODEX_MODELS_URL,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Originator": "opencode",
+            "User-Agent": "opencode/2.1.4",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode())
+        return sorted(
+            {
+                model["slug"].strip()
+                for model in payload.get("models", [])
+                if isinstance(model, dict)
+                and isinstance(model.get("slug"), str)
+                and model["slug"].strip()
+                and model.get("supported_in_api") is not False
+            }
+        )
+    except Exception as e:
+        print(f"warning: failed to discover models from {OPENAI_CODEX_MODELS_URL}: {e}", file=sys.stderr)
+        return []
+
+
 def discover_models() -> tuple[list[str], dict[str, list[str]]]:
     """whitelisted_models from `opencode models`; provider_models: {provider: model_ids} per provider."""
     for attempt in range(5):
@@ -262,6 +305,12 @@ def discover_models() -> tuple[list[str], dict[str, list[str]]]:
     except OSError:
         pass
     whitelisted_models = parse_whitelisted_models(result.stdout)
+    openai_patterns = PROVIDER_WHITELISTS["openai"]
+    whitelisted_models.extend(
+        f"openai/{model}"
+        for model in fetch_openai_oauth_model_ids()
+        if is_whitelisted(model, openai_patterns)
+    )
     provider_config = load_provider_config()
     base_urls = {
         name: info["baseURL"]

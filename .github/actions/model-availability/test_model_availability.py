@@ -37,6 +37,52 @@ def fake_run(args, *a, **kw):
 
 
 class TestDiscoverModels:
+    def test_discovers_probeable_openai_oauth_models(self, monkeypatch, tmp_path):
+        captured = {}
+        auth_path = tmp_path / ".local/share/opencode/auth.json"
+        auth_path.parent.mkdir(parents=True)
+        auth_path.write_text(json.dumps({"openai": {"type": "oauth", "access": "test-token"}}))
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"models": [{"slug": "gpt-5.6-luna", "supported_in_api": true}, {"slug": "gpt-5.6-sol", "supported_in_api": false}]}'
+
+        def fake_urlopen(request, timeout=30):
+            if request.full_url.startswith("https://chatgpt.com/backend-api/codex/models"):
+                captured["url"] = request.full_url
+                captured["authorization"] = request.get_header("Authorization")
+                captured["originator"] = request.get_header("Originator")
+            return FakeResponse()
+
+        def fake_run_with_openai_provider(args, *a, **kw):
+            if args == ["opencode", "debug", "config"]:
+                config = json.loads(json.dumps(CONFIG))
+                config["provider"]["openai"] = {"options": {}}
+                kw["stdout"].write(json.dumps(config))
+                return types.SimpleNamespace(stdout="")
+            return fake_run(args, *a, **kw)
+
+        monkeypatch.setattr(model_availability.urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run_with_openai_provider)
+
+        models, _ = model_availability.discover_models()
+
+        assert "openai/gpt-5.6-luna" in models
+        assert "openai/gpt-5.6-sol" not in models
+        assert model_availability.available_models(
+            {"openai/gpt-5.6-luna": {"ok": True}}, models, {}
+        ) == ["openai/gpt-5.6-luna"]
+        assert captured["url"].startswith("https://chatgpt.com/backend-api/codex/models?")
+        assert captured["authorization"] == "Bearer test-token"
+        assert captured["originator"] == "opencode"
+
     def test_retries_transient_cli_initialization_failure(self, monkeypatch):
         calls = 0
 

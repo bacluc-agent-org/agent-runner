@@ -154,6 +154,12 @@ def test_issue_selection_and_refinement_can_choose_verified_openai_oauth_models(
     assert oauth_selection.index('OPENCODE_CONFIG_CONTENT=%s') < oauth_selection.index('exit 0')
 
 
+def test_setup_opencode_pins_cli_version_verified_with_chatgpt_oauth():
+    root = Path(__file__).parents[1]
+    setup = (root / ".github/actions/setup-opencode/action.yml").read_text()
+    assert "npm install --global @opencode/cli@2.2.5" in setup
+
+
 def test_selection_tail_requires_fast_tool_free_selection():
     tail = (Path(__file__).parents[1] / "scripts/issue-selection-tail.txt").read_text()
     agent = (Path(__file__).parents[1] / ".opencode/agent/issue-selector.md").read_text()

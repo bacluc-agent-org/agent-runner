@@ -103,6 +103,8 @@ def test_selector_retries_invocation_failures_on_distinct_eligible_models_only()
     content = WORKFLOW.read_text()
     retry = content[content.index('selection="$RUNNER_TEMP/selection.out"'):content.index("if ! grep -q '[^[:space:]]' \"$selection\"")]
     assert "while (( selection_status != 0 && selection_retry_count < 2 ))" in retry
+    assert "((selection_retry_count+=1))" in retry
+    assert "((selection_retry_count++))" not in retry
     assert "retry_candidates=(" in retry
     assert '[[ "$candidate" == "$selection_model" ]] && continue' in retry
     assert 'grep -Fxq "$candidate" "$available_models_file"' in retry

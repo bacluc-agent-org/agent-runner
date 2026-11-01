@@ -290,7 +290,7 @@ jobs:
             echo "selection_model=${selection_model}" >> "$GITHUB_OUTPUT"
             : > "$selection"
             rm -f "$RUNNER_TEMP/opencode-fatal.json"
-            ((selection_retry_count++))
+            ((selection_retry_count+=1))
             run_selection
             if (( selection_tee_status != 0 )); then
               exit "$selection_tee_status"

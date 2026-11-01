@@ -356,8 +356,19 @@ jobs:
           }
 
           requested_model="$model"
-          if [[ "$model" == openai/* && -f ~/.local/share/opencode/auth.json ]]; then
-            printf 'Model availability: requested %q is openai/* and auth.json is present; skipping fallback\n' "$model"
+          auth_file="$HOME/.local/share/opencode/auth.json"
+          auth_status='not-required'
+          if [[ -f "$auth_file" ]]; then
+            if jq -e '.openai.type == "oauth" and (.openai.access | type == "string" and length > 0) and (.openai.refresh | type == "string" and length > 0) and (.openai.expires | type == "number")' "$auth_file" >/dev/null 2>&1; then
+              auth_status='valid'
+            else
+              auth_status='invalid'
+            fi
+          else
+            auth_status='missing'
+          fi
+          if [[ "$model" == openai/* && "$auth_status" == valid ]]; then
+            printf 'Model availability: requested %q is openai/* and auth.json is valid; skipping fallback (OPENCODE_AUTH_CONTENT present=%s)\n' "$model" "$([[ -n "$OPENCODE_AUTH_CONTENT" ]] && echo yes || echo no)"
             echo "model=${model}" >> "$GITHUB_OUTPUT"
             printf '\n\n\n\n\n\n'
             printf 'Chosen model is %s (source: %s)\n' "$model" "$model_source"
@@ -367,7 +378,7 @@ jobs:
           fi
           printf '::%s::\n' "$stop_token"
           if [[ "$model" == openai/* ]]; then
-            printf '::error::Model availability: requested %q is openai/* but no valid auth.json is present (OPENCODE_AUTH_CONTENT empty or invalid); cannot run openai models.\n' "$model" >&2
+            printf '::error::Model availability: requested %q requires OpenAI OAuth auth.json; validation=%s; OPENCODE_AUTH_CONTENT present=%s. Secret contents were not logged.\n' "$model" "$auth_status" "$([[ -n "$OPENCODE_AUTH_CONTENT" ]] && echo yes || echo no)" >&2
             exit 1
           fi
           stop_token="$(openssl rand -hex 32)"
@@ -483,6 +494,16 @@ jobs:
           coordinator_tee_status=${coordinator_statuses[1]}
           set -e
           printf 'Coordinator statuses: opencode=%s tee=%s\n' "$coordinator_status" "$coordinator_tee_status"
+          if ((coordinator_status != 0)); then
+            auth_status='not-required'
+            if [[ "$MODEL" == openai/* ]]; then
+              auth_status='missing-or-invalid'
+              if jq -e '.openai.type == "oauth" and (.openai.access | type == "string" and length > 0) and (.openai.refresh | type == "string" and length > 0) and (.openai.expires | type == "number")' "$HOME/.local/share/opencode/auth.json" >/dev/null 2>&1; then
+                auth_status='valid'
+              fi
+            fi
+            printf '::error::Coordinator dispatch failed: model=%s provider=%s exit_status=%s auth_validation=%s; see coordinator output above for the failure detail. Credential values are not logged.\n' "$MODEL" "${MODEL%%/*}" "$coordinator_status" "$auth_status" >&2
+          fi
           echo "coordinator_status=${coordinator_status}" >> "$GITHUB_OUTPUT"
           echo "coordinator_tee_status=${coordinator_tee_status}" >> "$GITHUB_OUTPUT"
           if ((coordinator_status == 124)); then

@@ -22,10 +22,4 @@ jobs:
     with:
       issue-repository: ${{ vars.ISSUE_REPOSITORY || github.repository }}
       model-availability-cache-issue: ${{ vars.MODEL_AVAILABILITY_CACHE_ISSUE }}
-    secrets:
-      BACLUC_AGENT_GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
-      OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
-      OPENCODE_GO_2_API_KEY: ${{ secrets.OPENCODE_GO_2_API_KEY }}
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-      BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
-      OPENCODE_AUTH_JSON: ${{ secrets.OPENCODE_AUTH_JSON }}
+    secrets: inherit

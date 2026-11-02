@@ -78,6 +78,7 @@ jobs:
 
       - name: Refine issues
         id: refine
+        timeout-minutes: 22
         shell: bash
         env:
           AVAILABLE_MODELS: ${{ steps.model-availability.outputs.available-models }}

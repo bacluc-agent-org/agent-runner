@@ -7,6 +7,7 @@ on:
   push:
     paths:
       - ".github/workflows/refine-issues.yml"
+      - ".github/workflows/refine-issues-action.yml"
       - ".github/actions/**"
       - ".opencode/**"
       - "scripts/**"
@@ -16,7 +17,7 @@ permissions:
   issues: write
 
 jobs:
-  refine:
+  check-model-availability:
     runs-on: blacksmith-2vcpu-ubuntu-2404-arm
     timeout-minutes: 30
     env:
@@ -28,6 +29,9 @@ jobs:
       OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON }}
       ISSUE_REPOSITORY: ${{ vars.ISSUE_REPOSITORY || github.repository }}
       MODEL_AVAILABILITY_CACHE_ISSUE: ${{ vars.MODEL_AVAILABILITY_CACHE_ISSUE }}
+
+    outputs:
+      available-models: ${{ steps.model-availability.outputs.available-models }}
 
     steps:
       - name: Check out repository
@@ -47,16 +51,9 @@ jobs:
         timeout-minutes: 10
         uses: ./.github/actions/model-availability
 
-      - name: Refine issues
-        id: refine
-        uses: ./.github/actions/refine-issues
-        with:
-          available-models: ${{ steps.model-availability.outputs.available-models }}
-
-      - name: Dump debug output
-        if: always()
-        shell: bash
-        env:
-          COORDINATOR_SESSION_TITLE: issue-refiner
-        run: |
-          python3 scripts/dump_subagent_transcripts.py || true
+  refine:
+    needs: check-model-availability
+    uses: ./.github/workflows/refine-issues-action.yml
+    with:
+      available-models: ${{ needs.check-model-availability.outputs.available-models }}
+    secrets: inherit

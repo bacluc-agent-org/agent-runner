@@ -9,6 +9,9 @@ import pytest
 
 import model_availability
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+REFINE_ISSUES_WORKFLOW = REPO_ROOT / ".github/workflows/refine-issues-action.yml"
+
 
 CONFIG = {
     "provider": {
@@ -1340,9 +1343,7 @@ class TestDiscoveryTimeout:
 
 
 class TestRefineIssuesExitCode:
-    WORKFLOW = (
-        Path(__file__).parents[3] / ".github/actions/refine-issues/action.yml"
-    )
+    WORKFLOW = REFINE_ISSUES_WORKFLOW
 
     @classmethod
     def _completion_tail(cls):
@@ -1372,9 +1373,7 @@ class TestRefineIssuesExitCode:
 
 
 class TestRefineIssuesNoCandidates:
-    WORKFLOW = (
-        Path(__file__).parents[3] / ".github/actions/refine-issues/action.yml"
-    )
+    WORKFLOW = REFINE_ISSUES_WORKFLOW
 
     @classmethod
     def _no_candidates_block(cls):
@@ -1418,9 +1417,9 @@ class TestRefineIssuesNoCandidates:
 
 class TestWorkflowOpenRouterSelection:
     WORKFLOWS = [
-        ".github/workflows/opencode.yml",
-        ".github/workflows/hourly-issue.yml",
-        ".github/actions/refine-issues/action.yml",
+        REPO_ROOT / ".github/workflows/opencode.yml",
+        REPO_ROOT / ".github/workflows/hourly-issue.yml",
+        REFINE_ISSUES_WORKFLOW,
     ]
 
     def test_workflows_select_openrouter_and_exclude_weak_free_models(self):
@@ -1429,13 +1428,11 @@ class TestWorkflowOpenRouterSelection:
             assert "openrouter/*)" in content
             assert '[[ -n "$OPENROUTER_API_KEY" ]]' in content
             assert "model-deny-list.txt" in content
-            if "/workflows/" in path:
+            if "/workflows/" in str(path):
                 assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in content
-        # the refine-issues composite action reads the key from the caller's
-        # job-level env, so the workflow must still set it
         assert (
             "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}"
-            in Path(".github/workflows/refine-issues.yml").read_text()
+            in REFINE_ISSUES_WORKFLOW.read_text()
         )
 
     def test_last_resort_is_deny_list_filtered_and_fails_closed(self):
@@ -1443,7 +1440,7 @@ class TestWorkflowOpenRouterSelection:
             content = Path(path).read_text()
             mapfile = content.index("mapfile -t free_models")
             give_up = content.rindex("not dispatching.' >&2")
-            if path.endswith("opencode.yml"):
+            if str(path).endswith("opencode.yml"):
                 filtered = content.index('filtered_models="$(grep -Ev "$deny_re" "$available_models_file")"')
                 assert 'if ((grep_status > 1)); then' in content[filtered:give_up]
                 assert "exit 1" in content[filtered:give_up]
@@ -1568,7 +1565,7 @@ class TestWorkflowOpenRouterSelection:
 
     def test_opencode_loads_deny_list_for_all_selections(self):
         """Verify opencode.yml loads the deny-list regardless of explicit request."""
-        content = Path(".github/workflows/opencode.yml").read_text()
+        content = (REPO_ROOT / ".github/workflows/opencode.yml").read_text()
         # Deny-list should be loaded unconditionally (not inside 'if [[ -z "$requested" ]]')
         deny_load = content.index('deny_file="$RUNNER_TEMP/agent-runner/scripts/model-deny-list.txt"')
         requested_check = content.index('requested="${MODEL_TEXT:-}"')

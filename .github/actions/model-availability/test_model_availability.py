@@ -1814,3 +1814,37 @@ class TestWorkflowOpenRouterSelection:
         )
         assert result.returncode == 0
         assert "fallback: good-model" in result.stdout
+
+
+class TestRefineIssuesRunsOnGitHubHosted:
+    # issue-413's actual goal: the refine job left the Blacksmith runner.
+    # Without these pins, moving it back (or dropping secrets in the
+    # dispatcher) would keep every other test green.
+
+    def test_reusable_workflow_runs_on_github_hosted_runner(self):
+        content = REFINE_ISSUES_WORKFLOW.read_text()
+        assert "runs-on: ubuntu-latest" in content
+        assert "blacksmith" not in content.lower()
+
+    def test_dispatcher_forwards_all_called_workflow_secrets(self):
+        content = REFINE_ISSUES_DISPATCHER.read_text()
+        for name in (
+            "BACLUC_AGENT_GITHUB_TOKEN",
+            "OPENCODE_GO_API_KEY",
+            "OPENCODE_GO_2_API_KEY",
+            "OPENROUTER_API_KEY",
+            "BRAVE_API_KEY",
+            "OPENCODE_AUTH_JSON",
+        ):
+            assert f"{name}: ${{{{ secrets.{name} }}}}" in content
+
+    def test_refine_step_has_no_step_timeout(self):
+        # A step cap below the 18*60 self-budget plus one in-flight
+        # `timeout 8m opencode run` would cancel partial-success runs and
+        # fail the job instead of exiting 0 (see bc608edf0, reverted 1ccf7877c).
+        content = REFINE_ISSUES_WORKFLOW.read_text()
+        step = content[
+            content.index("- name: Refine issues") : content.index("- name: Dump debug output")
+        ]
+        assert "timeout-minutes" not in step
+        assert "18 * 60" in step

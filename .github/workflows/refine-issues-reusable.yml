@@ -2,7 +2,7 @@
 # repository with the issue-refiner opencode agent, running on a GitHub-hosted
 # runner. Called by refine-issues.yml, and by any other workflow that needs the
 # same refinement step (issue-413: this replaced the refine-issues composite
-# action so the refine job can leave the Blacksmith runner).
+# action so the refine job can leave the self-hosted runner).
 name: Refine issues (reusable)
 
 on:

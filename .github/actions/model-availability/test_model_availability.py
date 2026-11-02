@@ -37,6 +37,54 @@ def fake_run(args, *a, **kw):
 
 
 class TestDiscoverModels:
+    def test_discovers_probeable_openai_oauth_models(self, monkeypatch, tmp_path):
+        captured = {}
+        auth_path = tmp_path / ".local/share/opencode/auth.json"
+        auth_path.parent.mkdir(parents=True)
+        auth_path.write_text(json.dumps({"openai": {"type": "oauth", "access": "test-token"}}))
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"models": [{"slug": "gpt-5.6-luna", "supported_in_api": true}, {"slug": "gpt-5.6-sol", "supported_in_api": false}]}'
+
+        def fake_urlopen(request, timeout=30):
+            if request.full_url.startswith("https://chatgpt.com/backend-api/codex/models"):
+                captured["url"] = request.full_url
+                captured["authorization"] = request.get_header("Authorization")
+                captured["originator"] = request.get_header("Originator")
+                captured["beta"] = request.get_header("Openai-beta")
+            return FakeResponse()
+
+        def fake_run_with_openai_provider(args, *a, **kw):
+            if args == ["opencode", "debug", "config"]:
+                config = json.loads(json.dumps(CONFIG))
+                config["provider"]["openai"] = {"options": {}}
+                kw["stdout"].write(json.dumps(config))
+                return types.SimpleNamespace(stdout="")
+            return fake_run(args, *a, **kw)
+
+        monkeypatch.setattr(model_availability.urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run_with_openai_provider)
+
+        models, _ = model_availability.discover_models()
+
+        assert "openai/gpt-5.6-luna" in models
+        assert "openai/gpt-5.6-sol" not in models
+        assert model_availability.available_models(
+            {"openai/gpt-5.6-luna": {"ok": True}}, models, {}
+        ) == ["openai/gpt-5.6-luna"]
+        assert captured["url"].startswith("https://chatgpt.com/backend-api/codex/models?")
+        assert captured["authorization"] == "Bearer test-token"
+        assert captured["originator"] == "opencode"
+        assert captured["beta"] == "responses=experimental"
+
     def test_retries_transient_cli_initialization_failure(self, monkeypatch):
         calls = 0
 
@@ -1427,7 +1475,35 @@ class TestWorkflowOpenRouterSelection:
             assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in content
             assert "model-deny-list.txt" in content
 
-    def test_last_resort_is_deny_list_filtered_and_fails_closed(self):
+    def test_hourly_issue_prefers_qwen_before_free_fallbacks(self):
+        content = Path(".github/workflows/hourly-issue.yml").read_text()
+        start = content.index("for candidate in \\")
+        end = content.index("; do", start)
+        candidates = content[start:end]
+        assert candidates.index("'opencode-go-openai/qwen3.8-flash'") < candidates.index(
+            '"${free_models[@]}"'
+        )
+        assert candidates.index("'opencode-go-openai-2/qwen3.8-flash'") < candidates.index(
+            '"${free_models[@]}"'
+        )
+        assert candidates.index("'opencode-go-openai/qwen3.8-flash'") < candidates.index(
+            "'opencode-go-openai-2/qwen3.8-flash'"
+        )
+
+    def test_hourly_issue_retries_free_model_after_qwen_provider_failure(self):
+        content = Path(".github/workflows/hourly-issue.yml").read_text()
+        assert "balance:opencode-go-openai/qwen3.8-flash" in content
+        assert "model_unavailable:opencode-go-openai-2/qwen3.8-flash" in content
+        assert 'selection_retry_count < 2' in content
+        assert '"${free_models[@]}"' in content
+
+    def test_hourly_issue_uses_weak_free_model_only_as_last_resort(self):
+        content = Path(".github/workflows/hourly-issue.yml").read_text()
+        assert "mapfile -t all_free_models" in content
+        assert '"${all_free_models[@]}"' in content
+        assert "last resort (known-weak free)" in content
+
+    def test_last_resort_filters_deny_list_before_free_fallback(self):
         for path in self.WORKFLOWS:
             content = Path(path).read_text()
             mapfile = content.index("mapfile -t free_models")

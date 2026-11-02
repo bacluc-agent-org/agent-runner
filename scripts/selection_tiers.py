@@ -9,7 +9,6 @@ import random
 import re
 import sys
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
 
@@ -25,7 +24,6 @@ class Candidate:
     last_human_comment_at: str | None
     attempts: int
     recent_attempts: int
-    is_standing: bool
     body: str = ""
 
 
@@ -38,47 +36,11 @@ def parse_branches(names: list[str]) -> list[tuple[int, int]]:
     return sorted(parsed, key=lambda item: item[1], reverse=True)
 
 
-def is_standing(title: str, labels: list[str] | None = None) -> bool:
-    return bool(re.match(r"^standing\b", title, re.IGNORECASE)) or any(
-        label.casefold() == "meta: standing" for label in labels or []
-    )
-
-
-def _newer(left: str | None, right: str | None) -> bool:
-    if not left or not right:
-        return False
-    return datetime.fromisoformat(left.replace("Z", "+00:00")) > datetime.fromisoformat(
-        right.replace("Z", "+00:00")
-    )
-
-
-def tier(candidate: Candidate) -> int:
-    if candidate.pr_state == "open" and _newer(candidate.last_human_comment_at, candidate.pr_last_commit_at):
-        value = 0
-    elif candidate.pr_state in {"merged", "closed"}:
-        value = 2
-    elif candidate.pr_state == "open":
-        value = 3
-    elif candidate.attempts == 0 and not candidate.is_standing:
-        value = 1
-    else:
-        value = 2
-    if candidate.recent_attempts and not (value == 0 and not candidate.is_standing):
-        return 3
-    return value
-
-
-def select_tier(candidates: list[Candidate]) -> int:
-    if not candidates:
-        raise ValueError("no candidates")
-    return min(tier(candidate) for candidate in candidates)
-
-
-def render_prompt(candidates: list[Candidate], tier_value: int, tail_text: str) -> str:
-    selected = [candidate for candidate in candidates if tier(candidate) == tier_value]
+def render_prompt(candidates: list[Candidate], tail_text: str) -> str:
+    selected = list(candidates)
     random.shuffle(selected)
     lines = [
-        f"Candidates in selected tier {tier_value} only (RANDOM ORDER — position carries no priority):"
+        "All candidates (RANDOM ORDER — position carries no priority):"
     ]
     for candidate in selected:
         body = candidate.body.replace("\r", " ").replace("\n", " ").replace("|", "¦")[:300]
@@ -88,7 +50,7 @@ def render_prompt(candidates: list[Candidate], tier_value: int, tail_text: str) 
             f"[created: {candidate.created_at}] [PR: {candidate.pr_state} "
             f"#{candidate.pr_number or 'none'} last-commit:{candidate.pr_last_commit_at or 'none'}] "
             f"[last-human-feedback:{candidate.last_human_comment_at or 'none'}] | {body} "
-            f"[attempts: {candidate.attempts}] [tier: {tier(candidate)}]"
+            f"[attempts: {candidate.attempts}] [recent-attempts: {candidate.recent_attempts}]"
         )
     lines.append(tail_text.strip())
     return "\n".join(lines) + "\n"
@@ -120,16 +82,12 @@ def main() -> None:
             last_human_comment_at=issue.get("last_human_comment_at"),
             attempts=attempts,
             recent_attempts=sum(number == recent for recent in newest_three),
-            is_standing=is_standing(issue.get("title", ""), labels),
             body=issue.get("body") or "",
         )
         candidates.append(candidate)
-    chosen_tier = select_tier(candidates)
     for candidate in candidates:
         print(f"attempts for {candidate.number}: {candidate.attempts}", file=sys.stderr)
-    counts = [sum(tier(candidate) == value for candidate in candidates) for value in range(4)]
-    print("Candidate tiers: " + " ".join(f"{value}={count}" for value, count in enumerate(counts)) + f" (selected tier {chosen_tier})", file=sys.stderr)
-    print(render_prompt(candidates, chosen_tier, Path(args.tail_file).read_text()), end="")
+    print(render_prompt(candidates, Path(args.tail_file).read_text()), end="")
 
 
 if __name__ == "__main__":

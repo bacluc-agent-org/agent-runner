@@ -83,16 +83,20 @@ idea (issue in agent-todo)
   configuration from the `bacluc/provision-machines` repository (pinned to
   the latest release tag). The AI configuration lives there, not here.
 - `model-availability` — probes which AI models currently work and stores the
-  result in a cache issue in the todo repository. Probing every model on
-  every run would be slow and expensive; the cache makes it cheap.
+  result in a cache issue in the todo repository. It discovers ChatGPT/Codex
+  models through the OpenAI OAuth catalog and probes them through OpenCode.
+  Probing every model on every run would be slow and expensive; the cache makes
+  it cheap.
 
-Selectors apply the shared `scripts/model-deny-list.txt` and stop instead of
-dispatching when no allowed model is available.
+Selectors prefer models outside the shared `scripts/model-deny-list.txt`. If
+none are available, the hourly issue selector makes one last-resort attempt
+with an available free model from that list; it still validates the selector
+output before dispatching.
 
 ### Agents (the AI personas)
 
-- `issue-selector` — reads the candidate issues and picks one from the best
-  available mechanically ranked tier.
+- `issue-selector` — reads all eligible candidate issues in random order and
+  picks one while avoiding recent repeats.
 
 - `issue-refiner` — a technical writer that rewrites issue bodies into
   `## Goal` and `## How to implement`, keeping at most 4000 visible

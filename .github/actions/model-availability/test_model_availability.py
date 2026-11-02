@@ -10,7 +10,8 @@ import pytest
 import model_availability
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-REFINE_ISSUES_WORKFLOW = REPO_ROOT / ".github/workflows/refine-issues-action.yml"
+REFINE_ISSUES_WORKFLOW = REPO_ROOT / ".github/workflows/refine-issues-reusable.yml"
+REFINE_ISSUES_DISPATCHER = REPO_ROOT / ".github/workflows/refine-issues.yml"
 
 
 CONFIG = {
@@ -1430,9 +1431,11 @@ class TestWorkflowOpenRouterSelection:
             assert "model-deny-list.txt" in content
             if "/workflows/" in str(path):
                 assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in content
+        # the reusable workflow reads the key from its own job-level env, so the
+        # dispatcher must hand it over as a called-workflow secret
         assert (
             "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}"
-            in REFINE_ISSUES_WORKFLOW.read_text()
+            in REFINE_ISSUES_DISPATCHER.read_text()
         )
 
     def test_last_resort_is_deny_list_filtered_and_fails_closed(self):

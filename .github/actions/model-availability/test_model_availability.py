@@ -1847,13 +1847,10 @@ class TestRefineIssuesRunsOnGitHubHosted:
             for name in names:
                 assert f"{name}: ${{{{ secrets.{name} }}}}" in content
 
-    def test_refine_step_has_no_step_timeout(self):
-        # A step cap below the 18*60 self-budget plus one in-flight
-        # `timeout 8m opencode run` would cancel partial-success runs and
-        # fail the job instead of exiting 0 (see bc608edf0, reverted 1ccf7877c).
+    def test_refine_step_has_22_minute_timeout(self):
         content = REFINE_ISSUES_WORKFLOW.read_text()
         step = content[
             content.index("- name: Refine issues") : content.index("- name: Dump debug output")
         ]
-        assert "timeout-minutes" not in step
+        assert "timeout-minutes: 22" in step
         assert "18 * 60" in step

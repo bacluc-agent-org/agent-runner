@@ -99,6 +99,7 @@ class TestDiscoverModels:
 
         monkeypatch.setattr(model_availability.subprocess, "run", fail_once)
         monkeypatch.setattr(model_availability.time, "sleep", lambda _: None)
+        monkeypatch.setattr(model_availability, "fetch_openai_oauth_model_ids", lambda: [])
         assert model_availability.discover_models()[0] == ["opencode/a-free"]
         assert calls == 3
 
@@ -230,6 +231,7 @@ class TestDiscoverModels:
             raise RuntimeError("opencode failed")
 
         monkeypatch.setattr(model_availability.subprocess, "run", fail_config)
+        monkeypatch.setattr(model_availability, "fetch_openai_oauth_model_ids", lambda: [])
         free_models, provider_models = model_availability.discover_models()
         assert free_models == ["opencode/a-free"]
         assert provider_models == {}
@@ -345,6 +347,7 @@ class TestDiscoverModels:
             raise AssertionError(f"unexpected args: {args}")
 
         monkeypatch.setattr(model_availability.subprocess, "run", fake_run_non_string)
+        monkeypatch.setattr(model_availability, "fetch_openai_oauth_model_ids", lambda: [])
         free_models, provider_models = model_availability.discover_models()
         assert free_models == ["opencode/a-free"]
         assert provider_models == {}

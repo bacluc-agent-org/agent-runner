@@ -24,6 +24,13 @@ CONFIG = {
 
 
 @pytest.fixture(autouse=True)
+def _isolated_home(monkeypatch, tmp_path):
+    """Empty HOME: discovery would otherwise read the real opencode auth.json and query ChatGPT."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _provider_api_keys(monkeypatch):
     """Provider discovery tests exercise the real PROVIDERS loop; provide the keys."""
     monkeypatch.setenv("OPENCODE_GO_API_KEY", "test-go-key")

@@ -1,4 +1,4 @@
-import { tool } from "@opencode-ai/plugin";
+import { tool } from "@opencode-ai/plugin/tool";
 import { spawnSync } from "node:child_process";
 import { isAbsolute, relative, resolve } from "node:path";
 

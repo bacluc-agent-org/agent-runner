@@ -28,7 +28,8 @@ status=0
 # and toolchain. git lists such checkouts as a single untracked "<dir>/"
 # entry, while regular untracked files of this repository stay checked.
 prettier_ignore=".prettierignore.completion-check"
-trap 'rm -f "$prettier_ignore"' EXIT
+oc_test_dir=""
+trap 'rm -f "$prettier_ignore"; if [ -n "$oc_test_dir" ]; then rm -rf "$oc_test_dir"; fi' EXIT
 cat .gitignore .prettierignore 2> /dev/null > "$prettier_ignore" || true
 printf '%s\n' "$prettier_ignore" >> "$prettier_ignore"
 while IFS= read -r entry; do
@@ -53,12 +54,18 @@ else
   check 'formatting (prettier --check .)' bash -c 'npm install --quiet prettier && npx prettier --ignore-path "$prettier_ignore" --check .'
 fi
 check 'actionlint (workflows + used actions)' docker run --rm "${mount[@]}" "rhysd/actionlint:${ACTIONLINT_VERSION}" -color
-# Always install: the opencode runtime installs its own plugin version into
-# .opencode/node_modules, so an existing directory can hold a tree the tool
-# tests cannot import from.
-check 'opencode node dependencies (npm ci)' npm ci --prefix .opencode
-check 'opencode plugin tests (node --test)' node --test ".opencode/plugin/*.test.mjs"
-check 'opencode tool tests (node --test)' node --test ".opencode/tool/*.test.mjs"
+# The live opencode session and every parallel completion-check share
+# .opencode/node_modules: the runtime npm-installs its plugins there while
+# `npm ci` deletes and rewrites the same tree, so npm fails with
+# ENOTEMPTY/ENOENT and the tests cannot import the half-installed tree.
+# Install and test in a throwaway copy; the sources the tests import, without
+# node_modules, which npm ci recreates.
+oc_test_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/completion-check-opencode-XXXXXX")"
+mkdir -p "$oc_test_dir"
+cp -a .opencode/package.json .opencode/package-lock.json .opencode/classify.ts .opencode/plugin .opencode/tool "$oc_test_dir/"
+check 'opencode node dependencies (npm ci)' npm ci --prefix "$oc_test_dir"
+check 'opencode plugin tests (node --test)' node --test "$oc_test_dir/plugin/*.test.mjs"
+check 'opencode tool tests (node --test)' node --test "$oc_test_dir/tool/*.test.mjs"
 if command -v uv > /dev/null 2>&1; then
   check 'pytest (scripts tests)' uv run --group dev python -m pytest -q
 elif command -v pytest > /dev/null 2>&1; then

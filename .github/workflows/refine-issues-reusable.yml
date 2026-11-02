@@ -1,12 +1,44 @@
-name: Refine issues
+# Reusable workflow that refines the unrefined open issues of an issue
+# repository with the issue-refiner opencode agent, running on a GitHub-hosted
+# runner. Called by refine-issues.yml, and by any other workflow that needs the
+# same refinement step (issue-413: this replaced the refine-issues composite
+# action so the refine job can leave the Blacksmith runner).
+name: Refine issues (reusable)
 
 on:
   workflow_call:
     inputs:
-      available-models:
-        description: Newline-separated available model IDs from the model-availability action
-        required: true
+      issue-repository:
+        description: >-
+          Repository (owner/name) whose open issues are refined. Empty means
+          the repository that called this workflow.
         type: string
+        required: false
+        default: ""
+      model-availability-cache-issue:
+        description: Issue number storing the model-availability cache
+        type: string
+        required: false
+        default: ""
+    secrets:
+      BACLUC_AGENT_GITHUB_TOKEN:
+        description: PAT used for the checkout and all gh calls
+        required: true
+      OPENCODE_GO_API_KEY:
+        description: API key of the first OpenCode Go provider
+        required: false
+      OPENCODE_GO_2_API_KEY:
+        description: API key of the second OpenCode Go provider
+        required: false
+      OPENROUTER_API_KEY:
+        description: API key of OpenRouter, gating openrouter/* models
+        required: false
+      BRAVE_API_KEY:
+        description: Brave search key for the opencode MCP server
+        required: false
+      OPENCODE_AUTH_JSON:
+        description: opencode auth.json content (ChatGPT OAuth)
+        required: false
 
 permissions:
   contents: read
@@ -23,8 +55,9 @@ jobs:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON }}
-      ISSUE_REPOSITORY: ${{ vars.ISSUE_REPOSITORY || github.repository }}
-      MODEL_AVAILABILITY_CACHE_ISSUE: ${{ vars.MODEL_AVAILABILITY_CACHE_ISSUE }}
+      ISSUE_REPOSITORY: ${{ inputs.issue-repository || github.repository }}
+      MODEL_AVAILABILITY_CACHE_ISSUE: ${{ inputs.model-availability-cache-issue }}
+
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -38,12 +71,16 @@ jobs:
         shell: bash
         run: scripts/wait_for_opencode.sh
 
+      - name: Check model availability
+        id: model-availability
+        timeout-minutes: 10
+        uses: ./.github/actions/model-availability
+
       - name: Refine issues
         id: refine
-        timeout-minutes: 22
         shell: bash
         env:
-          AVAILABLE_MODELS: ${{ inputs.available-models }}
+          AVAILABLE_MODELS: ${{ steps.model-availability.outputs.available-models }}
         run: |
           set -Eeuo pipefail
 

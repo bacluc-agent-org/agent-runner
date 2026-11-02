@@ -1633,15 +1633,24 @@ class TestRefineIssuesRunsOnGitHubHosted:
 
     def test_dispatcher_forwards_all_called_workflow_secrets(self):
         content = REFINE_ISSUES_DISPATCHER.read_text()
-        for name in (
+        names = (
             "BACLUC_AGENT_GITHUB_TOKEN",
             "OPENCODE_GO_API_KEY",
             "OPENCODE_GO_2_API_KEY",
             "OPENROUTER_API_KEY",
             "BRAVE_API_KEY",
             "OPENCODE_AUTH_JSON",
-        ):
-            assert f"{name}: ${{{{ secrets.{name} }}}}" in content
+        )
+        if "secrets: inherit" in content:
+            # inherit forwards every caller secret, so the six-secret set is
+            # pinned at the reusable workflow's on.workflow_call.secrets: block
+            reusable = REFINE_ISSUES_WORKFLOW.read_text()
+            block = reusable[reusable.index("    secrets:") : reusable.index("permissions:")]
+            for name in names:
+                assert f"\n      {name}:" in block
+        else:
+            for name in names:
+                assert f"{name}: ${{{{ secrets.{name} }}}}" in content
 
     def test_refine_step_has_no_step_timeout(self):
         # A step cap below the 18*60 self-budget plus one in-flight

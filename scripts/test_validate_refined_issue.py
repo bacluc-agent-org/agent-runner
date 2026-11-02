@@ -7,6 +7,8 @@ import pytest
 
 import validate_refined_issue
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 VALID_BODY = (
     "## Goal\n"
     "Add a bounded evaluator loop to the refine workflow.\n"
@@ -206,7 +208,5 @@ def _reasons_from_case_file(path: str) -> set[str]:
 class TestReasonTokenDrift:
     def test_workflow_case_matches_validator(self):
         assert _reasons_from_case_file(
-            ".github/workflows/refine-issues.yml"
+            str(REPO_ROOT / ".github/workflows/refine-issues-action.yml")
         ) == _validator_reasons()
-
-

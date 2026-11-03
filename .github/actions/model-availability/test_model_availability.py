@@ -9,6 +9,9 @@ import pytest
 
 import model_availability
 
+REPO_ROOT = Path(__file__).parents[3]
+REFINE_ISSUES_WORKFLOW = REPO_ROOT / ".github/workflows/refine-issues-reusable.yml"
+REFINE_ISSUES_DISPATCHER = REPO_ROOT / ".github/workflows/refine-issues.yml"
 
 CONFIG = {
     "provider": {
@@ -1517,7 +1520,7 @@ class TestDiscoveryTimeout:
 
 
 class TestRefineIssuesExitCode:
-    WORKFLOW = Path(__file__).parents[3] / ".github/workflows/refine-issues.yml"
+    WORKFLOW = REFINE_ISSUES_WORKFLOW
 
     @classmethod
     def _completion_tail(cls):
@@ -1547,7 +1550,7 @@ class TestRefineIssuesExitCode:
 
 
 class TestRefineIssuesNoCandidates:
-    WORKFLOW = Path(__file__).parents[3] / ".github/workflows/refine-issues.yml"
+    WORKFLOW = REFINE_ISSUES_WORKFLOW
 
     @classmethod
     def _no_candidates_block(cls):
@@ -1593,7 +1596,7 @@ class TestWorkflowOpenRouterSelection:
     WORKFLOWS = [
         ".github/workflows/opencode.yml",
         ".github/workflows/hourly-issue.yml",
-        ".github/workflows/refine-issues.yml",
+        ".github/workflows/refine-issues-reusable.yml",
     ]
 
     def test_workflows_select_openrouter_and_exclude_weak_free_models(self):
@@ -1835,6 +1838,9 @@ class TestRefineIssuesRunsOnGitHubHosted:
             "OPENROUTER_API_KEY",
             "BRAVE_API_KEY",
             "OPENCODE_AUTH_JSON",
+            "CHATGPT_ACCESS_TOKEN",
+            "CHATGPT_REFRESH_TOKEN",
+            "OPENAI_OAUTH_CLIENT_ID",
         )
         if "secrets: inherit" in content:
             # inherit forwards every caller secret, so the six-secret set is

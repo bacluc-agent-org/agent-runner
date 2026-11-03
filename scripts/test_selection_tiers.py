@@ -124,17 +124,29 @@ def test_issue_selection_and_refinement_can_choose_verified_openai_oauth_models(
     root = Path(__file__).parents[1]
     for workflow_name, empty_message in (
         ("hourly-issue.yml", "No issue-selection model is available"),
-        ("refine-issues.yml", "No refinement model is available"),
+        ("refine-issues-reusable.yml", "No refinement model is available"),
     ):
         content = (root / ".github/workflows" / workflow_name).read_text()
         assert "OPENAI_REFRESH_TOKEN: ${{ secrets.CHATGPT_REFRESH_TOKEN }}" in content
         assert "mapfile -t openai_models < <(grep -E '^openai/'" in content
         assert '"${openai_models[@]}"' in content
         assert "openai/*)" in content
-        assert '[[ -z "${AISIX_PROXY_URL:-}" || -z "${AISIX_CALLER_KEY:-}" ]]' in content
+        assert any(
+            guard in content
+            for guard in (
+                '[[ -z "${AISIX_PROXY_URL:-}" || -z "${AISIX_CALLER_KEY:-}" ]]',
+                '[[ -n "${AISIX_PROXY_URL:-}" && -n "${AISIX_CALLER_KEY:-}" ]]',
+            )
+        )
         assert empty_message in content
         assert 'configure_openai_model "$selection_model"' in content
-        assert 'if [[ "$selection_model" == openai/* ]]; then' in content
+        assert any(
+            statement in content
+            for statement in (
+                '[[ "$selection_model" != openai/* ]] || standalone_args+=(--standalone)',
+                'if [[ "$selection_model" == openai/* ]]; then',
+            )
+        )
         assert 'opencode run "${standalone_args[@]}" --agent' in content
 
     opencode = (root / ".github/workflows/opencode.yml").read_text()

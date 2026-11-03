@@ -65,7 +65,13 @@ def test_workflow_fetches_all_search_pages_and_passes_all_tiers():
     workflow = WORKFLOW.read_text()
     assert 'gh api --paginate --slurp "search/issues?' in workflow
     assert '> "$search_json.pages"' in workflow
-    assert 'jq \'[.[] | .items[]]\' "$search_json.pages" > "$search_json"' in workflow
+    assert any(
+        expression in workflow
+        for expression in (
+            'jq \'[.[] | .items[]]\' "$search_json.pages" > "$search_json"',
+            'jq \'[.[] | .items[] | select(([.labels[]?.name] | any(startswith("agent-running:"))) | not)]\' "$search_json.pages" > "$search_json"',
+        )
+    )
     assert "--jq" not in next(
         line for line in workflow.splitlines() if "search/issues?" in line
     )
@@ -92,7 +98,13 @@ def test_hourly_selection_uses_candidate_metadata_without_preselection_research(
     assert 'gh issue view "$num"' not in content
     assert 'gh pr view "$pr_number"' not in content
     assert 'gh api --paginate --slurp "repos/$pr_repo/pulls/$pr_number/commits"' not in content
-    assert 'gh issue edit "$issue_number" -R "$ISSUE_REPOSITORY" --add-label agent-running,agent-attempted' in content
+    assert any(
+        claim in content
+        for claim in (
+            'gh issue edit "$issue_number" -R "$ISSUE_REPOSITORY" --add-label agent-running,agent-attempted',
+            'gh issue edit "$issue_number" -R "$ISSUE_REPOSITORY" --add-label "agent-running:${CURRENT_RUN_ID}",agent-attempted',
+        )
+    )
     selector = (Path(__file__).parent / "selection_tiers.py").read_text()
     assert "issue_runs = [run for candidate, run in runs if candidate == number]" in selector
     assert "[PR:" not in selector

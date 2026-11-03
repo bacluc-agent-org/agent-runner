@@ -1393,8 +1393,8 @@ class TestModelAvailabilityAction:
         setup = (root / ".github/actions/setup-opencode/action.yml").read_text()
         assert "umask 077" in setup
         assert "python3 scripts/refresh-token.py" in setup
-        assert "# renovate: datasource=docker depName=ghcr.io/api7/aisix\n        AISIX_IMAGE=1.8.0" in setup
-        assert 'AISIX_IMAGE="ghcr.io/api7/aisix:$AISIX_IMAGE"' in setup
+        assert "# renovate: datasource=docker depName=ghcr.io/api7/aisix\n        AISIX_VERSION=1.8.0" in setup
+        assert 'AISIX_IMAGE="ghcr.io/api7/aisix:$AISIX_VERSION"' in setup
         assert "CHATGPT_ACCESS_TOKEN" in setup
         assert "CHATGPT_REFRESH_TOKEN" in setup
         assert "~/.local/share/opencode/auth.json" not in setup

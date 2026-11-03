@@ -74,6 +74,10 @@ class TestDiscoverModels:
                 "apiKey": "{env:OTHER_KEY}",
             }
         }
+    @pytest.fixture(autouse=True)
+    def _fake_home(self, monkeypatch, tmp_path):
+        """Keep OAuth model discovery hermetic: no real auth.json, no real network."""
+        monkeypatch.setenv("HOME", str(tmp_path))
 
     def test_discovers_probeable_openai_oauth_models(self, monkeypatch, tmp_path):
         captured = {}

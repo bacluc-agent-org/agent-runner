@@ -131,7 +131,6 @@ jobs:
           search_json="$RUNNER_TEMP/candidates.json"
           lookup_started=$SECONDS
           gh api --paginate --slurp "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:ready-for-implementation&per_page=100" \
-
             > "$search_json.pages"
           jq '[.[] | .items[] | select(([.labels[]?.name] | any(. == "agent-running" or startswith("agent-running:"))) | not)]' "$search_json.pages" > "$search_json"
           rm "$search_json.pages"

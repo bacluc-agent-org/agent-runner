@@ -65,12 +65,19 @@ tar -C .opencode --exclude=./node_modules -cf - . | tar -C "$opencode_check/tree
 ln -s ../node/node_modules "$opencode_check/tree/node_modules"
 check 'opencode plugin tests (node --test)' node --test "$opencode_check/tree/plugin/*.test.mjs"
 check 'opencode tool tests (node --test)' node --test "$opencode_check/tree/tool/*.test.mjs"
+# The pytest suite (model-availability) reads ~/.local/share/opencode/auth.json
+# via fetch_openai_oauth_model_ids; on a runner holding a real OpenAI OAuth
+# login that fetches the live catalog and leaks unmocked models into tests.
+# Run pytest with HOME isolated from the ambient opencode login.
+pytest_home="${RUNNER_TEMP:-$(mktemp -d)}/pytest-home"
+rm -rf "$pytest_home"
+mkdir -p "$pytest_home"
 if command -v uv > /dev/null 2>&1; then
-  check 'pytest (scripts tests)' uv run --group dev python -m pytest -q
+  check 'pytest (scripts tests)' env HOME="$pytest_home" uv run --group dev python -m pytest -q
 elif command -v pytest > /dev/null 2>&1; then
-  check 'pytest (scripts tests)' pytest -q
+  check 'pytest (scripts tests)' env HOME="$pytest_home" pytest -q
 else
-  check 'pytest (scripts tests)' bash -c 'python3 -m pip install --quiet pytest && python3 -m pytest -q'
+  check 'pytest (scripts tests)' env HOME="$pytest_home" bash -c 'python3 -m pip install --quiet pytest && python3 -m pytest -q'
 fi
 
 if [ "$status" != "0" ]; then

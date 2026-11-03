@@ -53,12 +53,18 @@ else
   check 'formatting (prettier --check .)' bash -c 'npm install --quiet prettier && npx prettier --ignore-path "$prettier_ignore" --check .'
 fi
 check 'actionlint (workflows + used actions)' docker run --rm "${mount[@]}" "rhysd/actionlint:${ACTIONLINT_VERSION}" -color
-# Always install: the opencode runtime installs its own plugin version into
-# .opencode/node_modules, so an existing directory can hold a tree the tool
-# tests cannot import from.
-check 'opencode node dependencies (npm ci)' npm ci --prefix .opencode
-check 'opencode plugin tests (node --test)' node --test ".opencode/plugin/*.test.mjs"
-check 'opencode tool tests (node --test)' node --test ".opencode/tool/*.test.mjs"
+# The running opencode session owns .opencode/node_modules and rewrites it while
+# this script runs (observed: dist/index.js present, then gone seconds later), so
+# npm ci there never leaves a tree the tool tests can import. Test a private copy.
+opencode_check="${RUNNER_TEMP:-$(mktemp -d)}/opencode-completion-check"
+rm -rf "$opencode_check"
+mkdir -p "$opencode_check/node" "$opencode_check/tree"
+cp .opencode/package.json .opencode/package-lock.json "$opencode_check/node/"
+check 'opencode node dependencies (npm ci)' npm ci --prefix "$opencode_check/node"
+tar -C .opencode --exclude=./node_modules -cf - . | tar -C "$opencode_check/tree" -xf -
+ln -s ../node/node_modules "$opencode_check/tree/node_modules"
+check 'opencode plugin tests (node --test)' node --test "$opencode_check/tree/plugin/*.test.mjs"
+check 'opencode tool tests (node --test)' node --test "$opencode_check/tree/tool/*.test.mjs"
 if command -v uv > /dev/null 2>&1; then
   check 'pytest (scripts tests)' uv run --group dev python -m pytest -q
 elif command -v pytest > /dev/null 2>&1; then

@@ -1,6 +1,9 @@
 name: Invite owner to repositories
 
 on:
+  push:
+    paths:
+      - ".github/workflows/invite-owner.yml"
   schedule:
     - cron: "23 4 * * *"
   workflow_dispatch:
@@ -15,7 +18,6 @@ jobs:
     env:
       GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
       INVITE_USER: ${{ vars.FORK_INVITE_USER }}
-      REPOSITORY_OWNER: bacluc-agent
     steps:
       - name: Sweep repositories for the owner collaborator invitation
         run: |
@@ -24,7 +26,10 @@ jobs:
             echo "invite-sweep: skip (FORK_INVITE_USER unset)"
             exit 0
           fi
+          repositories=0
+          invited=0
           while read -r repository; do
+            repositories=$((repositories + 1))
             if gh api "repos/${repository}/collaborators/${INVITE_USER}" --silent > /dev/null 2>&1; then
               echo "ok: ${repository}"
             else
@@ -33,6 +38,7 @@ jobs:
                 -X PUT \
                 -f permission=push \
                 > /dev/null 2>&1; then
+                invited=$((invited + 1))
                 echo "invited: ${repository}"
               else
                 echo "WARNING: invite failed for ${repository}"
@@ -40,7 +46,8 @@ jobs:
             fi
           done < <(
             gh api \
-              "users/${REPOSITORY_OWNER}/repos?per_page=100&sort=full_name" \
+              "user/repos?type=owner&per_page=100&sort=full_name" \
               --paginate \
               --jq '.[].full_name'
           )
+          echo "checked ${repositories} repositories, invited ${invited}"

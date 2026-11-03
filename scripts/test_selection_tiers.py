@@ -228,3 +228,45 @@ def test_pr_body_reference_negative_cases():
     assert _match_for([_pr(103, "Closes bacluc-agent/agent-todo#999")], 364) == ""
     assert _match_for([_pr(104, "Fixes #364")], 364) == ""
     assert _match_for([_pr(106, "See https://github.com/bacluc-agent/agent-todo/issues/3645")], 364) == ""
+
+
+def test_workflow_logs_enrichment_progress_and_budget():
+    content = WORKFLOW.read_text()
+    assert "for num in \"${candidate_nums[@]}\"; do" in content
+    assert "printf 'Listing agent PRs in %s ... ' \"$repo\"" in content
+    assert "printf 'Enriching candidate #%s ... ' \"$num\"" in content
+    assert "printf 'done (%ss, %s)\\n' \"$(( SECONDS - cand_start ))\" \"$pr_info\"" in content
+    assert 'enrichment_budget="${ENRICHMENT_BUDGET_SECONDS:-1200}"' in content
+    assert "::warning::enrichment budget" in content
+    assert "exhausted after %s of %s candidates" in content
+    budget_check = content.index("if (( SECONDS - enrich_start >= enrichment_budget ))")
+    enriching = content.index("printf 'Enriching candidate #%s ... ' \"$num\"")
+    append = content.index("jq -nc --arg num")
+    assert budget_check < enriching < append
+
+
+def _join_final_rows(issues):
+    import json
+
+    join_line = next(
+        line.strip()
+        for line in WORKFLOW.read_text().splitlines()
+        if line.strip().startswith("jq -n --slurpfile issues")
+    )
+    with TemporaryDirectory() as directory:
+        d = Path(directory)
+        (d / "candidates.json").write_text(json.dumps(issues))
+        (d / "enrichment.jsonl").write_text("")
+        script = (
+            f"RUNNER_TEMP={str(d)!r}\n"
+            "enriched=\"$RUNNER_TEMP/candidates.json\"\n"
+            f"{join_line}\n"
+        )
+        result = run(["bash", "-Eeuo", "pipefail", "-c", script], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        return json.loads((d / "candidates.final.json").read_text())
+
+
+def test_enrichment_join_tolerates_unenriched_candidates():
+    issues = [{"number": 1, "title": "a"}, {"number": 2, "title": "b"}]
+    assert _join_final_rows(issues) == issues

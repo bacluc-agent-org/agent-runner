@@ -228,13 +228,28 @@ jobs:
           mkdir -p "$pr_lookup_dir"
           for repo in "${repo_list[@]}"; do
             key="$(echo "$repo" | tr '/' '_')"
+            repo_start="$SECONDS"
+            printf 'Listing agent PRs in %s ... ' "$repo"
             gh pr list -R "$repo" --state all --limit 200 --json number,createdAt,updatedAt,headRefName,state,title,body \
               --jq '.[] | "\(.headRefName)|#\(.number)|\(.createdAt)|\(.updatedAt)|\(.state)|\(.title)|\(.body // "" | gsub("[\r\n|]"; " "))"' 2>/dev/null \
               | sort -t'|' -k4 -r > "$pr_lookup_dir/$key.lookup" || true
+            printf 'done (%ss)\n' "$(( SECONDS - repo_start ))"
           done
 
           # Shuffle candidates so enrichment order (and the debug dump) is random.
-          while IFS= read -r num; do
+          mapfile -t candidate_nums < <(shuf "$candidates")
+          total="${#candidate_nums[@]}"
+          enrich_start="$SECONDS"
+          # shortcut: candidates past the budget surface as PR: none to the selector, upgrade to a smarter cap if that misfires
+          enrichment_budget="${ENRICHMENT_BUDGET_SECONDS:-1200}"
+          enriched_count=0
+          for num in "${candidate_nums[@]}"; do
+            if (( SECONDS - enrich_start >= enrichment_budget )); then
+              printf '::warning::enrichment budget (%ss) exhausted after %s of %s candidates; remaining candidates left unenriched\n' "$enrichment_budget" "$enriched_count" "$total"
+              break
+            fi
+            cand_start="$SECONDS"
+            printf 'Enriching candidate #%s ... ' "$num"
             pr_info="none"
             pr_repo=""
             pr_number=""
@@ -263,7 +278,9 @@ jobs:
             fi
             issue_human_ts="$(gh issue view "$num" -R "$ISSUE_REPOSITORY" --json comments --jq '[.comments[] | select(.author.login != "bacluc-agent")] | max_by(.createdAt) | .createdAt // "none"' 2>/dev/null || echo "none")"
             jq -nc --arg num "$num" --arg pr "$pr_info" --arg a "$issue_human_ts" --arg b "$pr_human_ts" '{number:($num|tonumber),pr_info:$pr,last_human_comment_at:([$a,$b]|map(select(test("^[0-9]")))|max // null)}' >> "$RUNNER_TEMP/enrichment.jsonl"
-          done < <(shuf "$candidates")
+            enriched_count=$((enriched_count + 1))
+            printf 'done (%ss, %s)\n' "$(( SECONDS - cand_start ))" "$pr_info"
+          done
           jq -n --slurpfile issues "$enriched" --slurpfile enrichment "$RUNNER_TEMP/enrichment.jsonl" '$issues[0] | map(. as $issue | ($enrichment | map(select(.number == $issue.number)) | .[0]) as $e | if $e then . + {last_human_comment_at:$e.last_human_comment_at, pr_state:($e.pr_info|split(" ")[0]), pr_number:(if $e.pr_info == "none" then null else ($e.pr_info|split("#")[1]|split(" ")[0]|tonumber) end), pr_last_commit_at:(if $e.pr_info == "none" then null else ($e.pr_info|split("last-commit:")[1]) end)} else . end)' > "$RUNNER_TEMP/candidates.final.json"
           cp "$RUNNER_TEMP/candidates.final.json" "$enriched"
 

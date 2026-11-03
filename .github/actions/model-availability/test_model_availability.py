@@ -27,6 +27,13 @@ def _provider_api_keys(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-or-key")
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_home(monkeypatch, tmp_path):
+    # Without an isolated HOME the runner's real OpenCode OAuth credentials make
+    # live ChatGPT/Codex model discovery succeed inside mocked tests.
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+
 def fake_run(args, *a, **kw):
     if args == ["opencode", "models"]:
         return types.SimpleNamespace(stdout="opencode/a-free\n")

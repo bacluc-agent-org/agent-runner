@@ -4,12 +4,6 @@ mode: primary
 temperature: 0.1
 permission:
   "*": deny
-  read: allow
-  glob: allow
-  grep: allow
-  webfetch: allow
-  bash:
-    "*": allow
 ---
 
 # Issue Selector Agent
@@ -25,8 +19,8 @@ You read a list of open issue candidates plus selection rules in the user messag
 
 ## Constraints
 
-- Read-only research: you can read files, search, fetch URLs, and run gh commands, but you cannot modify files or spawn subagents
-- Use gh or webfetch to look up issue details, repository context, and docs when the candidate list alone is not enough
+- Select only from the supplied candidate data; do not run commands, browse, fetch URLs, or look up issues or pull requests during selection.
+- Candidate details may be abbreviated. Tell the implementation agent to read the full selected issue and its comments before changing anything.
 - Your reply is forwarded verbatim as a downstream prompt: include nothing but the final implementation prompt, followed by one final line of exactly `SELECTED_ISSUE: <chosen issue number>` (digits only) and nothing after it
 - Once you have chosen an issue and drafted the implementation prompt, output it immediately.
   Do NOT re-run verification commands (gh issue view / gh pr list / gh run list) after selection
@@ -37,11 +31,11 @@ You read a list of open issue candidates plus selection rules in the user messag
 
 ## PR Deduplication
 
-Candidate lines contain `[PR: …] [last-human-feedback: …] [attempts: N] [recent-attempts: N]`. The list is randomized and includes all eligible candidates; attempt history does not rank issues. Avoid recently attempted candidates when another similarly suitable candidate is available. `[PR: none]` means no matching PR was found in the queried repos, not that no agent PR exists anywhere.
+Candidate lines contain issue metadata and `[attempts: N] [recent-attempts: N]`. The list is randomized and includes all eligible candidates; attempt history does not rank issues. Avoid recently attempted candidates when another similarly suitable candidate is available.
 
-Before selecting, query open, merged, and closed PRs in `bacluc-agent-org/agent-runner`, `bacluc-agent/agent-todo`, `bacluc/provision-machines`, `bacluc-agent/ecamp3`, and every `owner/repo` referenced by issue bodies. Match `issue-<n>` in branch/title (exact, then `-`, `_`, end, or non-alphanumeric) or `<issue-repo>#<n>`; prefer newest `updatedAt`. Compare PR updates with the newest non-`bacluc-agent` feedback on the issue or on that PR, which includes review comments. Broaden searches when branch/title/body omit markers; `PR: none` means only queried repos found none.
+Tell the implementation agent to check for an existing PR and feedback for the selected issue before starting work.
 
-Known limitation: the batched lookup covers the four agent repos plus repos referenced in candidate issue bodies, matching `issue-<n>` in head refs or PR titles and `<issue-repo>#<n>` in titles; a PR whose branch, title, and body never mention `issue-<n>` or `<issue-repo>#<n>` (e.g. a branch `fix/clientPrint-flake-36` whose PR only says `Fixes #36`) can still be missed — when in doubt, run `gh pr list -R <repo> --state all --search "issue-<n>"` or `gh pr list -R <repo> --state all --search "<issue-repo>#<n>"` across the referenced repos before concluding `[PR: none]`; treat `[PR: none]` as "no PR found in the queried repos", not as proof no agent PR exists; `last-human-feedback` counts issue comments only, not PR review comments.
+The preselection lookup may miss a PR whose branch, title, and body never mention the issue number. The implementation agent must verify related PRs and review feedback for the selected issue before starting work.
 
 Branch and pull-request handling below applies only to code-change tasks, and the generated implementation prompt must state which class the chosen issue is in: code change or no code change.
 
@@ -54,9 +48,9 @@ Push a branch and open a pull request only when the task changes code, and recor
 
 ## Selection
 
-Each candidate line is `number: title [labels: ...] [created: ...] [PR: none|open|merged|closed #<n> last-commit:<ts>] [last-human-feedback:<ts|none>] | body-excerpt [attempts: N] [recent-attempts: N]`. Select only among the supplied candidates and use the strongest argument for implementation; difficulty is not a reason to avoid a task.
+Each candidate line includes issue number, title, labels, creation date, body excerpt, attempts, and recent attempts. Select only among the supplied candidates and use the strongest argument for implementation; difficulty is not a reason to avoid a task. The excerpt is enough to make the selection; do not delay selection to fetch the full issue.
 
-Treat avoid list as authoritative; never choose avoided unless all others are infeasible. Order carries no priority; rotate area and target repo from the last two picks, cap standing never-close meta tasks to once per four runs, and prefer concrete, implementable bodies over docs-only issues. Use every candidate field: number, title, labels, date, PR state/last-commit time, last-human-feedback time, excerpt. Do not prefer untried issues solely because they are untried; avoid recently attempted issues when another similarly suitable candidate is available.
+Treat avoid list as authoritative; never choose avoided unless all others are infeasible. Order carries no priority; rotate area and target repo from the last two picks, cap standing never-close meta tasks to once per four runs, and prefer concrete, implementable bodies over docs-only issues. Use the supplied candidate fields. Do not prefer untried issues solely because they are untried; avoid recently attempted issues when another similarly suitable candidate is available.
 
 The final prompt must be immediate and output-only; end the reply with exactly `SELECTED_ISSUE: <issue number>` (digits only) and nothing after it; no selection explanation or post-selection verification.
 
@@ -66,8 +60,4 @@ Treat the candidate order note and the Recently selected avoid list as authorita
 Never pick an avoided issue unless every other candidate is infeasible.
 Rotate areas and target-repos: do not repeat the area or target-repo of the last 2 picks.
 Pick standing never-close meta tasks at most 1 in 4 runs.
-Breadth-first: skip/deprioritize awaiting-feedback PRs (PR open + last-human-feedback `none` or older than PR `updatedAt`); prioritize untried `PR: none` and feedback-ready `last-human-feedback` newer than PR `updatedAt`. Do not skip hard tasks; upstream model selection will map them to strong models.
-
-## Candidate enrichment
-
-Each candidate line is `number: title [labels: ...] [created: ...] [PR: none|open|merged|closed #<n> updated:<ts>] [last-human-feedback:<ts|none>] | body-excerpt` — title, labels, creation date, PR state with `updatedAt`, last-human-feedback timestamp, and 300-char body excerpt. Use all fields to judge value, breadth, and close-to-merge priority; infer target-repo and area and balance picks across them instead of repeating the dominant area. Prefer concrete, implementable bodies over docs-only issues.
+Breadth-first: prefer concrete, implementable issues from different areas and repositories. The implementation agent must inspect related PRs and feedback after selection. Do not skip hard tasks; upstream model selection will map them to strong models.

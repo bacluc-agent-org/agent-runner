@@ -38,17 +38,32 @@ PROBE_PROMPT = "Respond with exactly OK."
 CACHE_ISSUE_TITLE = "model-discovery cache"
 DISCOVERY_TIMEOUT_SECONDS = 120
 GITHUB_ISSUE_BODY_LIMIT = 65536
-OPENAI_CODEX_MODELS_URL = "https://chatgpt.com/backend-api/codex/models?client_version=2.1.4"
+OPENAI_CODEX_MODELS_URL = "https://chatgpt.com/backend-api/codex/models?client_version=2.2.5"
 
 
 def run_gh(*args: str) -> str:
     return subprocess.run(["gh", *args], check=True, capture_output=True, text=True).stdout
 
 
-def opencode_env() -> dict[str, str]:
+def opencode_env(model_id: str | None = None) -> dict[str, str]:
     env = dict(os.environ)
-    env["OPENCODE_DISABLE_DEFAULT_PLUGINS"] = "true"
-    env["OPENCODE_CONFIG_CONTENT"] = '{"plugin":[]}'
+    env.pop("OPENAI_ACCESS_TOKEN", None)
+    env.pop("OPENAI_ACCESS_TOKEN_FILE", None)
+    env.pop("OPENAI_REFRESH_TOKEN", None)
+    env.pop("OPENCODE_AUTH_CONTENT", None)
+    config = {"plugin": []}
+    proxy_url = os.environ.get("AISIX_PROXY_URL")
+    caller_key = os.environ.get("AISIX_CALLER_KEY")
+    if proxy_url and caller_key:
+        config["provider"] = {
+            "openai": {"options": {"baseURL": proxy_url, "apiKey": caller_key}}
+        }
+    if model_id and model_id.startswith("openai/"):
+        model = model_id.removeprefix("openai/")
+        config.setdefault("provider", {}).setdefault("openai", {})["models"] = {
+            model: {"name": model}
+        }
+    env["OPENCODE_CONFIG_CONTENT"] = json.dumps(config, separators=(",", ":"))
     return env
 
 
@@ -135,6 +150,46 @@ def parse_go_model_ids(models_json: str) -> list[str]:
         return []
 
 
+def strip_jsonc(text: str) -> str:
+    lines = []
+    for line in text.splitlines():
+        out = []
+        in_string = False
+        i = 0
+        while i < len(line):
+            char = line[i]
+            if in_string:
+                if char == "\\":
+                    out.append(line[i : i + 2])
+                    i += 2
+                    continue
+                if char == '"':
+                    in_string = False
+            elif char == '"':
+                in_string = True
+            elif char == "/" and line[i + 1 : i + 2] == "/":
+                break
+            out.append(char)
+            i += 1
+        lines.append("".join(out))
+    return re.sub(r",(\s*[}\]])", r"\1", "\n".join(lines))
+
+
+def providers_from_raw_config(config: object) -> dict[str, dict[str, str | None]]:
+    providers = config.get("provider") if isinstance(config, dict) else None
+    if not isinstance(providers, dict):
+        return {}
+    result = {}
+    for name, provider in providers.items():
+        if not isinstance(provider, dict):
+            continue
+        options = provider.get("options", {})
+        if not isinstance(options, dict):
+            continue
+        result[name] = {"baseURL": options.get("baseURL"), "apiKey": options.get("apiKey")}
+    return result
+
+
 def load_provider_config() -> dict[str, dict[str, str | None]]:
     """{provider: {"baseURL": str, "apiKey": str | None}} from `opencode debug config`."""
     tmp_path = None
@@ -162,17 +217,48 @@ def load_provider_config() -> dict[str, dict[str, str | None]]:
                 os.unlink(tmp_path)
             except OSError:
                 pass
-    providers = config.get("provider", {}) if isinstance(config, dict) else {}
-    if not isinstance(providers, dict):
+    if isinstance(config, dict):
+        return providers_from_raw_config(config)
+    if not isinstance(config, list):
         return {}
+
     result = {}
-    for name, provider in providers.items():
-        if not isinstance(provider, dict):
+
+    def merge_config(source: object) -> None:
+        for name, options in providers_from_raw_config(source).items():
+            current = result.setdefault(name, {"baseURL": None, "apiKey": None})
+            for key, value in options.items():
+                if value is not None:
+                    current[key] = value
+
+    for document in config:
+        path = document.get("path") if isinstance(document, dict) else None
+        if not isinstance(path, str) or not os.path.isfile(path):
             continue
-        options = provider.get("options", {})
-        if not isinstance(options, dict):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                merge_config(json.loads(strip_jsonc(fh.read())))
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"warning: failed to parse config file {path}: {e}", file=sys.stderr)
+    try:
+        merge_config(json.loads(opencode_env()["OPENCODE_CONFIG_CONTENT"]))
+    except (KeyError, json.JSONDecodeError):
+        pass
+    if result:
+        return result
+    for document in config:
+        info = document.get("info") if isinstance(document, dict) else None
+        providers = info.get("providers") if isinstance(info, dict) else None
+        if not isinstance(providers, dict):
             continue
-        result[name] = {"baseURL": options.get("baseURL"), "apiKey": options.get("apiKey")}
+        for name, provider in providers.items():
+            settings = provider.get("settings") if isinstance(provider, dict) else None
+            if isinstance(settings, dict):
+                key = settings.get("apiKey")
+                result[name] = {
+                    "baseURL": settings.get("baseURL"),
+                    "apiKey": key if isinstance(key, str) and key != "***" else None,
+                }
     return result
 
 
@@ -204,6 +290,10 @@ def provider_probeable(model_id: str, provider_config: dict, env: dict) -> bool:
     api_key = info.get("apiKey")
     if isinstance(api_key, str) and api_key.startswith("{env:") and api_key.endswith("}"):
         return bool(env.get(api_key[5:-1]))
+    if api_key == "***" or api_key is None:
+        key_env = next((key for name, key in PROVIDERS if name == provider), None)
+        if key_env:
+            return bool(env.get(key_env))
     return bool(api_key)
 
 
@@ -238,15 +328,20 @@ def fetch_model_ids(endpoint: str, api_key: str | None = None) -> list[str]:
 
 
 def fetch_openai_oauth_model_ids() -> list[str]:
-    """Fetch the account's ChatGPT/Codex model catalog using OpenCode's OAuth credential."""
-    try:
-        with (Path.home() / ".local/share/opencode/auth.json").open(encoding="utf-8") as auth_file:
-            auth = json.load(auth_file)
-        openai_auth = auth.get("openai", {})
-        access_token = openai_auth.get("access") if openai_auth.get("type") == "oauth" else None
-        if not isinstance(access_token, str) or not access_token:
-            return []
-    except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+    """Fetch the account's ChatGPT/Codex model catalog with the standalone OAuth token."""
+    access_token = os.environ.get("OPENAI_ACCESS_TOKEN")
+    token_file = os.environ.get("OPENAI_ACCESS_TOKEN_FILE")
+    if token_file:
+        try:
+            access_token = Path(token_file).read_text(encoding="utf-8")
+        except OSError:
+            access_token = None
+        finally:
+            try:
+                Path(token_file).unlink()
+            except OSError:
+                pass
+    if not access_token:
         return []
 
     request = urllib.request.Request(
@@ -381,7 +476,7 @@ def candidate_priority(candidate: str) -> int:
     if provider == "opencode":
         return 2 if free else 4
     if provider == "openai":
-        return 4
+        return 1
     if re.search(r"gpt", model, re.IGNORECASE):
         return 2 if provider in ("opencode-go-openai", "opencode-go-openai-2") else 6
     if provider == "openrouter":
@@ -425,19 +520,15 @@ def probe_model(
     log_path = os.path.join(work_dir, "model-probes", "probe-" + candidate.replace("/", "-") + ".log")
     # noinspection broad-exception
     try:
+        command = ["opencode", "run"]
+        command.extend(["--model", candidate, PROBE_PROMPT])
         result = subprocess.run(
-            [
-                "opencode",
-                "run",
-                "--model",
-                candidate,
-                PROBE_PROMPT,
-            ],
+            command,
             cwd=probe_dir,
             capture_output=True,
             text=True,
             timeout=timeout,
-            env=opencode_env(),
+            env=opencode_env(candidate),
         )
     except Exception as e:
         _write_probe_log(log_path, f"ERROR: {e}\n")
@@ -469,6 +560,25 @@ def merge_results(cache: dict, results: dict[str, bool], checked: str) -> dict:
     for candidate, ok in results.items():
         merged[candidate] = {"ok": ok, "checked": checked}
     return merged
+
+
+def log_failed_openai_probes(results: dict[str, bool], work_dir: str) -> None:
+    secrets = [
+        value
+        for value in (os.environ.get("OPENAI_ACCESS_TOKEN"), os.environ.get("AISIX_CALLER_KEY"))
+        if value
+    ]
+    for candidate, success in results.items():
+        if not candidate.startswith("openai/") or success:
+            continue
+        log_path = os.path.join(work_dir, "model-probes", "probe-" + candidate.replace("/", "-") + ".log")
+        try:
+            diagnostic = Path(log_path).read_text()
+        except OSError:
+            continue
+        for secret in secrets:
+            diagnostic = diagnostic.replace(secret, "[REDACTED]")
+        print(f"OpenAI OAuth probe failed ({candidate}):\n{diagnostic}", file=sys.stderr)
 
 
 def available_models(
@@ -538,6 +648,7 @@ def main() -> int:
         )
     work_dir = os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()
     results = probe_candidates(pending, work_dir) if pending else {}
+    log_failed_openai_probes(results, work_dir)
     ok = sum(1 for v in results.values() if v)
     if pending:
         print(f"probe results: {len(results)} checked, {ok} ok, {len(results) - ok} failed")

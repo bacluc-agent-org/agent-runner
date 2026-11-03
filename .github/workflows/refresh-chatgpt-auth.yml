@@ -46,17 +46,19 @@ jobs:
         if: ${{ !inputs.force_fallback }}
         continue-on-error: true
         env:
+          OPENAI_REFRESH_TOKEN: ${{ secrets.CHATGPT_REFRESH_TOKEN }}
+          OPENAI_OAUTH_CLIENT_ID: ${{ secrets.OPENAI_OAUTH_CLIENT_ID }}
           OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON }}
         run: |
           set -Eeuo pipefail
           set +e
-          uv run scripts/refresh-token.py > "$RUNNER_TEMP/auth.json" 2> "$RUNNER_TEMP/refresh-token.stderr"
+          uv run scripts/refresh-token.py > "$RUNNER_TEMP/chatgpt-oauth.json" 2> "$RUNNER_TEMP/refresh-token.stderr"
           status=$?
           set -e
           if (( status == 0 )); then
-            auth_json=$(cat "$RUNNER_TEMP/auth.json")
-            [[ -n "${auth_json:-}" ]] && printf '::add-mask::%s\n' "$auth_json"
-            printf '%s\n' "$auth_json" | jq -e '.openai.type == "oauth" and .openai.access != "" and .openai.refresh != "" and (.openai.expires | type == "number")' >/dev/null
+            tokens=$(cat "$RUNNER_TEMP/chatgpt-oauth.json")
+            [[ -n "${tokens:-}" ]] && printf '::add-mask::%s\n' "$tokens"
+            printf '%s\n' "$tokens" | jq -e '.access_token != "" and .refresh_token != "" and (.expires_at | type == "number")' >/dev/null
             echo "refreshed=true" >> "$GITHUB_OUTPUT"
             printf 'Auth candidate produced via refresh token, validating with opencode\n'
           else
@@ -65,56 +67,18 @@ jobs:
             printf '::stop-commands::%s\n' "$stop_token"
             cat "$RUNNER_TEMP/refresh-token.stderr" >&2
             printf '::%s::\n' "$stop_token"
-            printf 'Refresh token invalid, falling back to browser login\n'
+            printf 'Refresh token unavailable, falling back to browser login\n'
           fi
-
-      - name: Validate refreshed token with opencode
-        id: validate
-        continue-on-error: true
-        if: steps.refresh.outputs.refreshed == 'true'
-        env:
-          OPENCODE_CONFIG_CONTENT: '{"plugin":[]}'
-        run: |
-          set -Eeuo pipefail
-          npm install --global --force opencode-ai@1.18.32
-          mkdir -p ~/.local/share/opencode
-          cp "$RUNNER_TEMP/auth.json" ~/.local/share/opencode/auth.json
-          set +e
-          opencode run --model openai/gpt-5.6-luna "Respond with exactly OK." > "$RUNNER_TEMP/opencode-validate.log" 2>&1
-          status=$?
-          set -e
-          if (( status != 0 )); then
-            stop_token="$(openssl rand -hex 32)"
-            : "${stop_token:?stop-commands fence token generation failed}"
-            printf '::stop-commands::%s\n' "$stop_token"
-            cat "$RUNNER_TEMP/opencode-validate.log"
-            printf '::%s::\n' "$stop_token"
-            echo "refreshed=false" >> "$GITHUB_OUTPUT"
-            printf 'Refreshed token rejected by opencode, falling back to browser login\n'
-            exit 1
-          else
-            printf 'Refreshed token accepted by opencode\n'
-          fi
-
-      - name: Set secret (refreshed token)
-        continue-on-error: true
-        if: steps.refresh.outputs.refreshed == 'true' && steps.validate.outcome == 'success'
-        run: |
-          set -Eeuo pipefail
-          auth_json=$(cat "$RUNNER_TEMP/auth.json")
-          [[ -n "${auth_json:-}" ]] && printf '::add-mask::%s\n' "$auth_json"
-          GH_TOKEN="$BACLUC_AGENT_GITHUB_TOKEN" gh secret set OPENCODE_AUTH_JSON --repo "$GITHUB_REPOSITORY" --body "$auth_json"
-          touch "$RUNNER_TEMP/refresh-chatgpt-auth.ok"
-          printf 'Auth refreshed via refresh token\n'
 
       - name: Browser login (fallback)
         id: browser-login
         continue-on-error: true
-        if: steps.refresh.outputs.refreshed != 'true' || steps.validate.outcome != 'success'
+        if: steps.refresh.outputs.refreshed != 'true'
         env:
           OPENAI_USERNAME: ${{ secrets.OPENAI_USERNAME }}
           OPENAI_PASSWORD: ${{ secrets.OPENAI_PASSWORD }}
           OPENAI_2FA_KEY: ${{ secrets.OPENAI_2FA_KEY }}
+          OPENAI_OAUTH_CLIENT_ID: ${{ secrets.OPENAI_OAUTH_CLIENT_ID }}
           CHATGPT_DEBUG_DIR: ${{ runner.temp }}/chatgpt-auth-debug
         run: |
           set -Eeuo pipefail
@@ -137,9 +101,9 @@ jobs:
           auth_json=$(grep -v '^\[chatgpt-login\]' "$RUNNER_TEMP/auth.json")
           [[ -n "${auth_json:-}" ]] && printf '::add-mask::%s\n' "$auth_json"
           printf '%s\n' "$auth_json" | jq -e '.openai.type == "oauth" and .openai.access != "" and .openai.refresh != "" and (.openai.expires | type == "number")' >/dev/null
-          GH_TOKEN="$BACLUC_AGENT_GITHUB_TOKEN" gh secret set OPENCODE_AUTH_JSON --repo "$GITHUB_REPOSITORY" --body "$auth_json"
-          touch "$RUNNER_TEMP/refresh-chatgpt-auth.ok"
-          printf 'Auth refreshed via browser login\n'
+          jq -cn --arg access "$(jq -r '.openai.access' <<<"$auth_json")" --arg refresh "$(jq -r '.openai.refresh' <<<"$auth_json")" --argjson expires "$(jq -r '.openai.expires' <<<"$auth_json")" '{access_token:$access,refresh_token:$refresh,expires_at:$expires}' > "$RUNNER_TEMP/chatgpt-oauth.json"
+          echo 'usable=true' >> "$GITHUB_OUTPUT"
+          printf 'OAuth tokens received from browser login\n'
 
       - name: Agent-usable primitives fallback (start/status/step)
         id: primitives
@@ -150,6 +114,7 @@ jobs:
           OPENAI_USERNAME: ${{ secrets.OPENAI_USERNAME }}
           OPENAI_PASSWORD: ${{ secrets.OPENAI_PASSWORD }}
           OPENAI_2FA_KEY: ${{ secrets.OPENAI_2FA_KEY }}
+          OPENAI_OAUTH_CLIENT_ID: ${{ secrets.OPENAI_OAUTH_CLIENT_ID }}
           CHATGPT_DEBUG_DIR: ${{ runner.temp }}/chatgpt-auth-debug
         run: |
           set -Eeuo pipefail
@@ -221,9 +186,22 @@ jobs:
           auth_json="$(cat "$HOME/.local/share/opencode/auth.json")"
           [[ -n "${auth_json:-}" ]] && printf '::add-mask::%s\n' "$auth_json"
           printf '%s\n' "$auth_json" | jq -e '.openai.type == "oauth" and .openai.access != "" and .openai.refresh != "" and (.openai.expires | type == "number")' >/dev/null
-          GH_TOKEN="$BACLUC_AGENT_GITHUB_TOKEN" gh secret set OPENCODE_AUTH_JSON --repo "$GITHUB_REPOSITORY" --body "$auth_json"
+          jq -cn --arg access "$(jq -r '.openai.access' <<<"$auth_json")" --arg refresh "$(jq -r '.openai.refresh' <<<"$auth_json")" --argjson expires "$(jq -r '.openai.expires' <<<"$auth_json")" '{access_token:$access,refresh_token:$refresh,expires_at:$expires}' > "$RUNNER_TEMP/chatgpt-oauth.json"
+          echo 'usable=true' >> "$GITHUB_OUTPUT"
+          printf 'OAuth tokens received from agent primitives\n'
+
+      - name: Set independent OAuth token secrets
+        if: steps.refresh.outputs.refreshed == 'true' || steps.browser-login.outputs.usable == 'true' || steps.primitives.outputs.usable == 'true'
+        run: |
+          set -Eeuo pipefail
+          access_token="$(jq -er '.access_token' "$RUNNER_TEMP/chatgpt-oauth.json")"
+          refresh_token="$(jq -er '.refresh_token' "$RUNNER_TEMP/chatgpt-oauth.json")"
+          printf '::add-mask::%s\n' "$access_token"
+          printf '::add-mask::%s\n' "$refresh_token"
+          printf '%s' "$access_token" | GH_TOKEN="$BACLUC_AGENT_GITHUB_TOKEN" gh secret set CHATGPT_ACCESS_TOKEN --repo "$GITHUB_REPOSITORY"
+          printf '%s' "$refresh_token" | GH_TOKEN="$BACLUC_AGENT_GITHUB_TOKEN" gh secret set CHATGPT_REFRESH_TOKEN --repo "$GITHUB_REPOSITORY"
           touch "$RUNNER_TEMP/refresh-chatgpt-auth.ok"
-          printf 'Auth refreshed via agent primitives\n'
+          printf 'Access and refresh token secrets updated\n'
 
       - name: Upload ChatGPT auth debug artifacts
         if: ${{ always() }}
@@ -239,8 +217,8 @@ jobs:
         run: |
           set -Eeuo pipefail
           if [[ -f "$RUNNER_TEMP/refresh-chatgpt-auth.ok" ]]; then
-            printf 'A credential path set OPENCODE_AUTH_JSON\n'
+            printf 'A credential path set the ChatGPT OAuth token secrets\n'
           else
-            printf '::error::No path produced a usable OPENCODE_AUTH_JSON\n'
+            printf '::error::No path produced usable ChatGPT OAuth token secrets\n'
             exit 1
           fi

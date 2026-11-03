@@ -384,7 +384,7 @@ def _authorize_url(verifier: str, state: str) -> str:
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     params = {
         "response_type": "code",
-        "client_id": CLIENT_ID,
+        "client_id": os.environ.get("OPENAI_OAUTH_CLIENT_ID") or CLIENT_ID,
         "redirect_uri": REDIRECT_URI,
         "scope": SCOPE,
         "code_challenge": challenge,
@@ -458,7 +458,7 @@ def _exchange_code(code: str, verifier: str) -> dict:
         "grant_type": "authorization_code",
         "code": code,
         "redirect_uri": REDIRECT_URI,
-        "client_id": CLIENT_ID,
+        "client_id": os.environ.get("OPENAI_OAUTH_CLIENT_ID") or CLIENT_ID,
         "code_verifier": verifier,
     }).encode()
     req = urllib.request.Request(

@@ -27,6 +27,13 @@ def _provider_api_keys(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-or-key")
 
 
+@pytest.fixture(autouse=True)
+def _isolated_home(monkeypatch, tmp_path):
+    """Hide the machine's ~/.local/share/opencode/auth.json: a real OpenAI OAuth login
+    makes discovery fetch the live catalog, so tests see models they never mocked."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+
 def fake_run(args, *a, **kw):
     if args == ["opencode", "models"]:
         return types.SimpleNamespace(stdout="opencode/a-free\n")

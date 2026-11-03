@@ -1148,6 +1148,25 @@ class TestProbeModelLogging:
         assert "--standalone" not in captured["args"]
         assert captured["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugin":[]}'
 
+    def test_failed_openai_probe_logs_diagnostics_without_secrets(self, tmp_path, monkeypatch, capsys):
+        probe_dir = tmp_path / "model-probes"
+        probe_dir.mkdir()
+        (probe_dir / "probe-openai-gpt-6-luna.log").write_text(
+            "ECONNRESET token caller-key"
+        )
+        monkeypatch.setenv("OPENAI_ACCESS_TOKEN", "token")
+        monkeypatch.setenv("AISIX_CALLER_KEY", "caller-key")
+
+        model_availability.log_failed_openai_probes(
+            {"openai/gpt-6-luna": False, "opencode/a-free": False}, str(tmp_path)
+        )
+
+        diagnostic = capsys.readouterr().err
+        assert "ECONNRESET" in diagnostic
+        assert "[REDACTED]" in diagnostic
+        assert "token" not in diagnostic
+        assert "caller-key" not in diagnostic
+
     def test_oauth_probe_registers_the_catalog_model_in_opencode_config(self, tmp_path, monkeypatch):
         captured = {}
 
@@ -1166,7 +1185,6 @@ class TestProbeModelLogging:
         assert captured["args"] == [
             "opencode",
             "run",
-            "--standalone",
             "--model",
             "openai/gpt-6-luna",
             model_availability.PROBE_PROMPT,
@@ -1375,7 +1393,8 @@ class TestModelAvailabilityAction:
         setup = (root / ".github/actions/setup-opencode/action.yml").read_text()
         assert "umask 077" in setup
         assert "python3 scripts/refresh-token.py" in setup
-        assert "ghcr.io/api7/aisix:1.8.0" in setup
+        assert "# renovate: datasource=docker depName=ghcr.io/api7/aisix\n        AISIX_VERSION=1.8.0" in setup
+        assert 'AISIX_IMAGE="ghcr.io/api7/aisix:$AISIX_VERSION"' in setup
         assert "CHATGPT_ACCESS_TOKEN" in setup
         assert "CHATGPT_REFRESH_TOKEN" in setup
         assert "~/.local/share/opencode/auth.json" not in setup

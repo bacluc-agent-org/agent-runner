@@ -521,8 +521,6 @@ def probe_model(
     # noinspection broad-exception
     try:
         command = ["opencode", "run"]
-        if candidate.startswith("openai/"):
-            command.append("--standalone")
         command.extend(["--model", candidate, PROBE_PROMPT])
         result = subprocess.run(
             command,
@@ -562,6 +560,25 @@ def merge_results(cache: dict, results: dict[str, bool], checked: str) -> dict:
     for candidate, ok in results.items():
         merged[candidate] = {"ok": ok, "checked": checked}
     return merged
+
+
+def log_failed_openai_probes(results: dict[str, bool], work_dir: str) -> None:
+    secrets = [
+        value
+        for value in (os.environ.get("OPENAI_ACCESS_TOKEN"), os.environ.get("AISIX_CALLER_KEY"))
+        if value
+    ]
+    for candidate, success in results.items():
+        if not candidate.startswith("openai/") or success:
+            continue
+        log_path = os.path.join(work_dir, "model-probes", "probe-" + candidate.replace("/", "-") + ".log")
+        try:
+            diagnostic = Path(log_path).read_text()
+        except OSError:
+            continue
+        for secret in secrets:
+            diagnostic = diagnostic.replace(secret, "[REDACTED]")
+        print(f"OpenAI OAuth probe failed ({candidate}):\n{diagnostic}", file=sys.stderr)
 
 
 def available_models(
@@ -631,6 +648,7 @@ def main() -> int:
         )
     work_dir = os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()
     results = probe_candidates(pending, work_dir) if pending else {}
+    log_failed_openai_probes(results, work_dir)
     ok = sum(1 for v in results.values() if v)
     if pending:
         print(f"probe results: {len(results)} checked, {ok} ok, {len(results) - ok} failed")

@@ -1,0 +1,46 @@
+name: Invite owner to repositories
+
+on:
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  invite:
+    runs-on: blacksmith-2vcpu-ubuntu-2404-arm
+    timeout-minutes: 10
+    env:
+      GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
+      INVITE_USER: ${{ vars.FORK_INVITE_USER }}
+      REPOSITORY_OWNER: bacluc-agent
+    steps:
+      - name: Sweep repositories for the owner collaborator invitation
+        run: |
+          set -Eeuo pipefail
+          if [ -z "$INVITE_USER" ]; then
+            echo "invite-sweep: skip (FORK_INVITE_USER unset)"
+            exit 0
+          fi
+          while read -r repository; do
+            if gh api "repos/${repository}/collaborators/${INVITE_USER}" --silent > /dev/null 2>&1; then
+              echo "ok: ${repository}"
+            else
+              if gh api \
+                "repos/${repository}/collaborators/${INVITE_USER}" \
+                -X PUT \
+                -f permission=push \
+                > /dev/null 2>&1; then
+                echo "invited: ${repository}"
+              else
+                echo "WARNING: invite failed for ${repository}"
+              fi
+            fi
+          done < <(
+            gh api \
+              "users/${REPOSITORY_OWNER}/repos?per_page=100&sort=full_name" \
+              --paginate \
+              --jq '.[].full_name'
+          )

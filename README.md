@@ -75,6 +75,7 @@ idea (issue in agent-todo)
 | `opencode.yml`                 | called by the other workflows               | The core runner: checks model availability, selects a model, runs the coordinator agent, pushes the work, keeps one structured progress comment on the issue, and only short replies to human comments. |
 | `review-fixes.yml`             | every 4 hours at minute 32                  | Finds open pull requests with review comments and re-dispatches the agent to apply them.                                                                                                                |
 | `refresh-chatgpt-auth.yml`     | 1st and 15th of each month                  | Keeps the OpenAI login working by refreshing the OAuth token (browser login as fallback).                                                                                                               |
+| `invite-owner.yml`             | daily at minute 23 after 04:00 UTC          | Invites the `FORK_INVITE_USER` GitHub user with `push` permission to every `bacluc-agent` repository that does not already have them as collaborator.                                                   |
 | `renew-interaction-limits.yml` | 1st of each month                           | Renews the repository interaction limit so collaborators can keep working.                                                                                                                              |
 
 ### Actions (reusable building blocks)
@@ -159,12 +160,12 @@ and verifies forwarding and historical denial in a later step outside the checko
 
 Set these in Settings → Secrets and variables → Actions → Variables:
 
-| Variable                         | Description                                                                                                                                | Default                   |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------- |
-| `ISSUE_REPOSITORY`               | Repository for issue tracking and cache (format: `owner/repo`)                                                                             | `github.repository`       |
-| `MODEL_AVAILABILITY_CACHE_ISSUE` | Issue number used as the model-availability cache                                                                                          | auto-detected             |
-| `FORK_INVITE_USER`               | GitHub user invited with `push` on every new fork (exposed to the `github-fork-invite` skill as `GITHUB_FORK_INVITE_USER`; empty disables) | unset (skill no-op)       |
-| `REVIEW_FIXES_OWNER`             | GitHub account (organization or user) whose authored pull requests the _review-fixes_ workflow searches for review comments                | `github.repository_owner` |
+| Variable                         | Description                                                                                                                                                                                                                           | Default                   |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| `ISSUE_REPOSITORY`               | Repository for issue tracking and cache (format: `owner/repo`)                                                                                                                                                                        | `github.repository`       |
+| `MODEL_AVAILABILITY_CACHE_ISSUE` | Issue number used as the model-availability cache                                                                                                                                                                                     | auto-detected             |
+| `FORK_INVITE_USER`               | GitHub user invited with `push` on every new fork and swept as collaborator onto every `bacluc-agent` repository daily by `invite-owner.yml` (exposed to the `github-fork-invite` skill as `GITHUB_FORK_INVITE_USER`; empty disables) | unset (skill no-op)       |
+| `REVIEW_FIXES_OWNER`             | GitHub account (organization or user) whose authored pull requests the _review-fixes_ workflow searches for review comments                                                                                                           | `github.repository_owner` |
 
 ## Secrets
 

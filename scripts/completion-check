@@ -66,7 +66,7 @@ cleanup_test_deps() {
   rm -f .opencode/tool/node_modules .opencode/plugin/node_modules
   rm -rf "$OPENCODE_TEST_DEPS"
 }
-trap cleanup_test_deps EXIT
+trap 'rm -f "$prettier_ignore"; cleanup_test_deps' EXIT
 check 'opencode test deps (npm install)' npm install --prefix "$OPENCODE_TEST_DEPS" --no-audit --no-fund --ignore-scripts --loglevel=error
 ln -sfn "$OPENCODE_TEST_DEPS/node_modules" .opencode/tool/node_modules
 ln -sfn "$OPENCODE_TEST_DEPS/node_modules" .opencode/plugin/node_modules

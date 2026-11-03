@@ -21,6 +21,50 @@ def test_build_auth_json_shape():
     }
 
 
+def test_step_for_nested_consent_route():
+    assert chatgpt_login._step_for_path("/sign-in-with-chatgpt/codex/consent") == "consent"
+
+
+def test_debug_text_redacts_credentials_and_authorization_query(monkeypatch):
+    monkeypatch.setenv("OPENAI_PASSWORD", "private-password")
+    result = chatgpt_login._redact_debug_text(
+        "private-password user@example.com https://auth.openai.com/?code=private-code"
+    )
+    assert "private-password" not in result
+    assert "user@example.com" not in result
+    assert "private-code" not in result
+    assert "[redacted]" in result
+
+
+def test_stop_removes_stale_login_state(tmp_path, monkeypatch, capsys):
+    state_file = tmp_path / "state.json"
+    state_file.write_text("{}")
+    monkeypatch.setattr(chatgpt_login, "STATE_FILE", state_file)
+    assert chatgpt_login.cmd_stop() == 0
+    assert not state_file.exists()
+    assert "No active ChatGPT login session" in capsys.readouterr().out
+
+
+def test_debug_screenshot_skips_unusually_long_page_text(tmp_path, monkeypatch):
+    class Page:
+        url = "https://auth.openai.com/sign-in"
+
+        def title(self):
+            return "Sign in"
+
+        def inner_text(self, selector):
+            return "x" * 1201
+
+        def evaluate(self, script):
+            raise AssertionError("screenshot should be skipped")
+
+    monkeypatch.setenv("CHATGPT_DEBUG_DIR", str(tmp_path))
+    chatgpt_login._capture_debug(Page(), "browser", "authorize", "blocked")
+    report = json.loads((tmp_path / "browser-authorize.json").read_text())
+    assert report["screenshot_skipped"] == "page text exceeds safe capture limit"
+    assert not (tmp_path / "browser-authorize.png").exists()
+
+
 def test_build_auth_json_rejects_empty_access():
     with pytest.raises(ValueError):
         chatgpt_login.build_auth_json("", "ref", 1)
@@ -262,21 +306,15 @@ def test_primitives_loop_sleeps_and_continues_when_blocked():
 _OPENAI_ERROR_BODY = "<html><body><h1>Oops, an error occurred!</h1></body></html>"
 
 
-def test_validate_step_keeps_default_plugins_and_only_the_chatgpt_model():
+def test_refresh_workflow_uses_generic_oauth_tokens_without_opencode_validation():
     workflow = (
         Path(__file__).parents[1] / ".github/workflows/refresh-chatgpt-auth.yml"
     ).read_text(encoding="utf-8")
-    validation = workflow[
-        workflow.index("- name: Validate refreshed token with opencode") : workflow.index(
-            "- name: Set secret (refreshed token)"
-        )
-    ]
-    assert "OPENCODE_DISABLE_DEFAULT_PLUGINS" not in validation
-    assert "openai/gpt-5.6-luna" in validation
-    assert "openai/gpt-5.5" not in validation
-    assert "openai/gpt-5.4" not in validation
-    assert "openai/gpt-5.4-mini" not in validation
-    assert "printf '::stop-commands::%s\\n' \"$stop_token\"" in validation
+    assert "OPENAI_REFRESH_TOKEN: ${{ secrets.CHATGPT_REFRESH_TOKEN }}" in workflow
+    assert "access_token:$access" in workflow
+    assert "CHATGPT_ACCESS_TOKEN" in workflow
+    assert "CHATGPT_REFRESH_TOKEN" in workflow
+    assert "Validate refreshed token with opencode" not in workflow
 
 
 def test_force_fallback_input_gates_the_refresh_step():
@@ -286,7 +324,7 @@ def test_force_fallback_input_gates_the_refresh_step():
     assert "force_fallback:" in workflow
     refresh = workflow[
         workflow.index("- name: Try token refresh (no browser)") : workflow.index(
-            "- name: Validate refreshed token with opencode"
+            "- name: Browser login (fallback)"
         )
     ]
     assert "if: ${{ !inputs.force_fallback }}" in refresh

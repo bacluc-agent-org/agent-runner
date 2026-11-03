@@ -2,7 +2,7 @@ from pathlib import Path
 from subprocess import run
 from tempfile import TemporaryDirectory
 
-from selection_tiers import Candidate, is_standing, parse_branches, render_prompt, select_tier, tier
+from selection_tiers import Candidate, parse_branches, render_prompt
 
 WORKFLOW = Path(__file__).parents[1] / ".github/workflows/hourly-issue.yml"
 
@@ -13,13 +13,8 @@ def candidate(number=1, **values):
         title="Issue",
         labels=[],
         created_at="2026-01-01T00:00:00Z",
-        pr_state="none",
-        pr_number=None,
-        pr_last_commit_at=None,
-        last_human_comment_at=None,
         attempts=0,
         recent_attempts=0,
-        is_standing=False,
     )
     defaults.update(values)
     return Candidate(**defaults)
@@ -29,9 +24,8 @@ def test_branch_history_and_recent_repeat():
     branches = ["agent-run/330-37135909176", "issue-2-37135909177", "invalid"]
     assert parse_branches(branches) == [(2, 37135909177), (330, 37135909176)]
     assert not any(__import__("re").search(r"issue-[0-9]+", branch) for branch in branches[:1])
-    assert tier(candidate(330, attempts=1)) == 2
-    assert tier(candidate(9, attempts=3, recent_attempts=1)) == 3
-    assert tier(candidate(76, title="Standing research", attempts=14, recent_attempts=1, is_standing=True)) == 3
+    assert candidate(330, attempts=1).attempts == 1
+    assert candidate(9, attempts=3, recent_attempts=1).recent_attempts == 1
 
 
 def test_durable_attempt_label_counts_as_history_without_branch():
@@ -49,93 +43,144 @@ def test_durable_attempt_label_counts_as_history_without_branch():
         tail.write_text("Choose\n")
         result = run(["python3", "scripts/selection_tiers.py", "--candidates", str(candidates), "--branches", str(branches), "--tail-file", str(tail)], check=True, capture_output=True, text=True)
     assert "attempts for 42: 1" in result.stderr
-    assert "Candidate tiers: 0=0 1=0 2=1 3=0" in result.stderr
-    assert "[attempts: 1] [tier: 2]" in result.stdout
+    assert "[attempts: 1] [recent-attempts: 0]" in result.stdout
 
 
-def test_tiers_cover_feedback_history_and_finished_work():
-    assert tier(candidate(pr_state="open", pr_last_commit_at="2026-01-01T00:00:00Z", last_human_comment_at="2026-01-02T00:00:00Z")) == 0
-    assert tier(candidate(pr_state="open")) == 3
-    assert tier(candidate(pr_state="open", pr_last_commit_at="2026-01-02T00:00:00Z", last_human_comment_at="2026-01-01T00:00:00Z")) == 3
-    assert tier(candidate(pr_state="open", pr_last_commit_at="2026-01-02T00:00:00Z", last_human_comment_at="2026-01-02T00:00:00Z")) == 3
-    assert tier(candidate(pr_state="merged")) == 2
-    assert tier(candidate(pr_state="closed")) == 2
-    assert tier(candidate()) == 1
-    assert is_standing("Standing project")
-    assert is_standing("Some task", ["meta: standing"])
-
-
-def test_select_best_available_and_render_only_that_tier():
-    better, awaiting = candidate(2), candidate(3, pr_state="open")
-    assert select_tier([awaiting, better]) == 1
-    assert select_tier([awaiting]) == 3
+def test_render_prompt_randomizes_all_candidates(monkeypatch):
+    better, awaiting = candidate(2), candidate(3)
     big = candidate(4)
     big.body = "x" * 3000
     big.labels = ["many", "labels"]
-    assert tier(big) == tier(candidate(5))
-    prompt = render_prompt([better, awaiting], 1, "Reply\nSELECTED_ISSUE: <number>")
-    assert "2: Issue" in prompt and "3: Issue" not in prompt
-    assert "[attempts: 0] [tier: 1]" in prompt
+    import random
+
+    monkeypatch.setattr(random, "shuffle", lambda items: items.reverse())
+    prompt = render_prompt([better, awaiting], "Reply\nSELECTED_ISSUE: <number>")
+    assert prompt.index("3: Issue") < prompt.index("2: Issue")
+    assert "[attempts: 0] [recent-attempts: 0]" in prompt
     assert "avoid" not in prompt.lower()
     assert prompt.rstrip().endswith("SELECTED_ISSUE: <number>")
 
 
-def _enrichment_line():
-    return next(
-        line.strip()
-        for line in WORKFLOW.read_text().splitlines()
-        if line.strip().startswith("jq -nc --arg num") and "enrichment.jsonl" in line
+def test_workflow_fetches_all_search_pages_and_passes_all_tiers():
+    workflow = WORKFLOW.read_text()
+    assert 'gh api --paginate --slurp "search/issues?' in workflow
+    assert '> "$search_json.pages"' in workflow
+    assert 'jq \'[.[] | .items[]]\' "$search_json.pages" > "$search_json"' in workflow
+    assert "--jq" not in next(
+        line for line in workflow.splitlines() if "search/issues?" in line
     )
-
-
-def _enrich(issue_ts, pr_ts):
-    import json
-
-    with TemporaryDirectory() as directory:
-        script = (
-            f"num=364; pr_info=none; issue_human_ts={issue_ts!r}; pr_human_ts={pr_ts!r}\n"
-            f"RUNNER_TEMP={directory!r}\n"
-            f"{_enrichment_line()}\n"
-        )
-        result = run(["bash", "-Eeuo", "pipefail", "-c", script], capture_output=True, text=True)
-        assert result.returncode == 0, result.stderr
-        return json.loads((Path(directory) / "enrichment.jsonl").read_text())["last_human_comment_at"]
-
-
-def test_enrichment_counts_pr_review_feedback_and_never_yields_a_broken_timestamp():
-    stamp = "2026-01-09T00:00:00Z"
-    # PR review feedback counts even when the issue itself has none.
-    assert _enrich("none", stamp) == stamp
-    # Newer issue feedback still wins over older PR feedback.
-    assert _enrich("2026-02-01T00:00:00Z", stamp) == "2026-02-01T00:00:00Z"
-    # gh's empty-result sentinels and failed lookups degrade to JSON null, never a
-    # non-timestamp string that would crash _newer()'s datetime.fromisoformat.
-    for issue_ts, pr_ts in [("none", "none"), ("null", "none"), ("", ""), ("null", stamp)]:
-        assert _enrich(issue_ts, pr_ts) == ("2026-01-09T00:00:00Z" if pr_ts == stamp else None)
-
-
-def test_pr_lookup_variables_are_initialised_before_the_pr_feedback_lookup():
-    content = WORKFLOW.read_text()
-    assert content.index('pr_number=""') < content.index('gh pr view "$pr_number"')
-    assert content.index('pr_repo=""') < content.index('gh pr view "$pr_number"')
-
-
-def test_workflow_uses_latest_commit_and_created_at_when_pr_has_no_commits():
-    content = WORKFLOW.read_text()
-    assert "--json number,createdAt,updatedAt,headRefName,state,title" in content
-    assert "sort -t'|' -k4 -r" in content
-    assert 'gh api --paginate --slurp "repos/$pr_repo/pulls/$pr_number/commits" | jq -er --arg fallback "$pr_created"' in content
-    assert '([.[][] | .commit.committer.date] | max) // $fallback' in content
-    assert 'pr_last_commit_at:(' in content
-    assert 'map(select(test("^[0-9]")))|max // null' in content
-
-
-def test_selection_tail_keeps_contract_and_research_budget():
+    assert "&per_page=100\"" in workflow
+    assert "sort:created-asc" not in workflow
     tail = (Path(__file__).parents[1] / "scripts/issue-selection-tail.txt").read_text()
+    assert "includes all eligible issues" in tail
+    assert "do not favor new issues solely because they are unattempted" in tail
+
+
+def test_hourly_workflow_logs_lookup_and_selector_durations():
+    content = WORKFLOW.read_text()
+    for label in (
+        "GitHub lookup duration: candidate search and collection",
+        "GitHub lookup duration: repository branches",
+        "Issue selector duration:",
+    ):
+        assert label in content
+
+
+def test_hourly_selection_uses_candidate_metadata_without_preselection_research():
+    content = WORKFLOW.read_text()
+    assert "gh pr list -R" not in content
+    assert 'gh issue view "$num"' not in content
+    assert 'gh pr view "$pr_number"' not in content
+    assert 'gh api --paginate --slurp "repos/$pr_repo/pulls/$pr_number/commits"' not in content
+    assert 'gh issue edit "$issue_number" -R "$ISSUE_REPOSITORY" --add-label agent-running,agent-attempted' in content
+    selector = (Path(__file__).parent / "selection_tiers.py").read_text()
+    assert "issue_runs = [run for candidate, run in runs if candidate == number]" in selector
+    assert "[PR:" not in selector
+    assert "[last-human-feedback:" not in selector
+
+
+def test_selector_retries_invocation_failures_on_distinct_eligible_models_only():
+    content = WORKFLOW.read_text()
+    retry = content[content.index('selection="$RUNNER_TEMP/selection.out"'):content.index("if ! grep -q '[^[:space:]]' \"$selection\"")]
+    assert "while (( selection_status != 0 && selection_retry_count < 2 ))" in retry
+    assert "((selection_retry_count+=1))" in retry
+    assert "((selection_retry_count++))" not in retry
+    assert "retry_candidates=(" in retry
+    assert '[[ "$candidate" == "$selection_model" ]] && continue' in retry
+    assert 'grep -Fxq "$candidate" "$available_models_file"' in retry
+    assert '[[ -n "$OPENROUTER_API_KEY" ]] || continue' in retry
+    assert "grep -Ev -f scripts/model-deny-list.txt" in retry
+    assert '[[ -n "$OPENCODE_GO_API_KEY" ]] || continue' in retry
+    assert '[[ -n "$OPENCODE_GO_2_API_KEY" ]] || continue' in retry
+    assert "selection_status != 0" in retry
+    assert 'if (( selection_status == 0 )) && [[ -f "$RUNNER_TEMP/opencode-fatal.json" ]]; then' in retry
+    assert "! grep -Eq '^SELECTED_ISSUE:" in retry
+    assert 'sleep 0.1' in retry
+    assert "selection_status=1" in retry
+    assert content.index("if ! grep -q '[^[:space:]]' \"$selection\"") > content.index("if (( selection_status != 0 )); then")
+
+
+def test_issue_selection_and_refinement_can_choose_verified_openai_oauth_models():
+    root = Path(__file__).parents[1]
+    for workflow_name, empty_message in (
+        ("hourly-issue.yml", "No issue-selection model is available"),
+        ("refine-issues.yml", "No refinement model is available"),
+    ):
+        content = (root / ".github/workflows" / workflow_name).read_text()
+        assert "OPENAI_REFRESH_TOKEN: ${{ secrets.CHATGPT_REFRESH_TOKEN }}" in content
+        assert "mapfile -t openai_models < <(grep -E '^openai/'" in content
+        assert '"${openai_models[@]}"' in content
+        assert "openai/*)" in content
+        assert '[[ -z "${AISIX_PROXY_URL:-}" || -z "${AISIX_CALLER_KEY:-}" ]]' in content
+        assert empty_message in content
+        assert 'configure_openai_model "$selection_model"' in content
+        assert 'if [[ "$selection_model" == openai/* ]]; then' in content
+        assert 'opencode run "${standalone_args[@]}" --agent' in content
+
+    opencode = (root / ".github/workflows/opencode.yml").read_text()
+    assert "OPENAI_REFRESH_TOKEN: ${{ secrets.CHATGPT_REFRESH_TOKEN }}" in opencode
+    assert "mapfile -t openai_models < <(grep -E '^openai/'" in opencode
+    assert '"${openai_models[@]}"' in opencode
+    assert "openai/*)" in opencode
+    assert "--agent model-discovery" in opencode
+    assert 'configure_openai_model "$fallback_model"' in opencode
+    assert 'configure_openai_model "$model"' in opencode
+    assert 'if [[ "$fallback_model" == openai/* ]]; then' in opencode
+    assert 'opencode run "${discovery_standalone_args[@]}" --agent model-discovery' in opencode
+    assert 'if [[ "$MODEL" == openai/* ]]; then' in opencode
+    assert 'opencode run "${coordinator_standalone_args[@]}" --agent coordinator' in opencode
+    assert "export OPENCODE_DB=" not in opencode
+    assert 'unset OPENAI_ACCESS_TOKEN OPENAI_REFRESH_TOKEN OPENCODE_AUTH_CONTENT' in opencode
+    assert 'baseURL:$baseURL,apiKey:$apiKey' in opencode
+    oauth_selection = opencode[opencode.index('if [[ "$model" == openai/* ]] && [[ -n') :]
+    assert oauth_selection.index('configure_openai_model "$model"') < oauth_selection.index('exit 0')
+    assert oauth_selection.index('OPENCODE_CONFIG_CONTENT=%s') < oauth_selection.index('exit 0')
+
+
+def test_setup_opencode_pins_cli_version_verified_with_chatgpt_oauth():
+    root = Path(__file__).parents[1]
+    setup = (root / ".github/actions/setup-opencode/action.yml").read_text()
+    assert "npm install --global @opencode/cli@2.2.5" in setup
+
+
+def test_setup_opencode_refreshes_tokens_outside_opencode_and_starts_aisix():
+    root = Path(__file__).parents[1]
+    setup = (root / ".github/actions/setup-opencode/action.yml").read_text()
+    assert "python3 scripts/refresh-token.py" in setup
+    assert "# renovate: datasource=docker depName=ghcr.io/api7/aisix\n        AISIX_VERSION=1.8.0" in setup
+    assert 'AISIX_IMAGE="ghcr.io/api7/aisix:$AISIX_VERSION"' in setup
+    assert "CHATGPT_ACCESS_TOKEN" in setup
+    assert "CHATGPT_REFRESH_TOKEN" in setup
+    assert "Materialize OpenCode auth" not in setup
+
+
+def test_selection_tail_requires_fast_tool_free_selection():
+    tail = (Path(__file__).parents[1] / "scripts/issue-selection-tail.txt").read_text()
+    agent = (Path(__file__).parents[1] / ".opencode/agent/issue-selector.md").read_text()
     assert "End with the exact final line: SELECTED_ISSUE: <number>" in tail
     assert "No text may follow that line." in tail
-    assert "read each candidate at most once" in tail
-    assert "stop investigating, even if undecided" in tail
-    assert "choosing the best-so-far candidate" in tail
-    assert 'must not be cut by this budget' in tail
+    assert "Do not use tools or perform research." in tail
+    assert '  "*": deny' in agent
+    assert "do not run commands, browse, fetch URLs, or look up issues or pull requests during selection" in agent
+    assert "choose the best-so-far candidate" in tail
     assert 'note the doubt inside the implementation prompt' in tail

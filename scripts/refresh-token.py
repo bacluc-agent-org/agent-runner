@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Renew the opencode OpenAI (ChatGPT) OAuth credential via the refresh token.
+"""Renew a ChatGPT OAuth token pair without OpenCode.
 
 No browser needed: POST grant_type=refresh_token to auth.openai.com/oauth/token
-and write the rotated tokens to ~/.local/share/opencode/auth.json.
+and print a JSON object containing the rotated access and refresh tokens.
 
-The current credential is read from OPENCODE_AUTH_CONTENT (the workflow passes
-the OPENCODE_AUTH_JSON secret) or from the auth.json file.
+The refresh token is read from OPENAI_REFRESH_TOKEN or the legacy
+OPENCODE_AUTH_CONTENT value during migration.
 
 Exit codes: 0 success, 1 refresh failed (caller should fall back to a full
 browser login).
@@ -24,8 +24,6 @@ from opencode_auth import (
     SCOPE,
     TOKEN_PATH,
     USER_AGENT,
-    build_auth_json,
-    write_auth_file,
 )
 
 
@@ -43,11 +41,22 @@ def _current_auth() -> dict | None:
         return None
 
 
+def current_refresh_token() -> str | None:
+    refresh = os.environ.get("OPENAI_REFRESH_TOKEN")
+    if refresh:
+        return refresh
+    auth = _current_auth()
+    if not auth or not isinstance(auth.get("openai"), dict):
+        return None
+    refresh = auth["openai"].get("refresh")
+    return refresh if isinstance(refresh, str) and refresh else None
+
+
 def refresh_tokens(refresh_token: str) -> dict:
     body = urllib.parse.urlencode({
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
-        "client_id": CLIENT_ID,
+        "client_id": os.environ.get("OPENAI_OAUTH_CLIENT_ID") or CLIENT_ID,
         "scope": SCOPE,
     }).encode()
     req = urllib.request.Request(
@@ -64,11 +73,7 @@ def refresh_tokens(refresh_token: str) -> dict:
 
 
 def main() -> int:
-    auth = _current_auth()
-    if not auth or not isinstance(auth.get("openai"), dict):
-        print("No current OpenAI credential found (OPENCODE_AUTH_CONTENT or auth.json)", file=sys.stderr)
-        return 1
-    refresh = auth["openai"].get("refresh")
+    refresh = current_refresh_token()
     if not refresh:
         print("No refresh token in current credential", file=sys.stderr)
         return 1
@@ -107,14 +112,14 @@ def main() -> int:
         print("Token refresh returned no refresh token and none was preserved", file=sys.stderr)
         return 1
 
-    try:
-        auth = build_auth_json(access, refresh_token_to_use, int(time.time() * 1000) + int(expires_in) * 1000)
-    except ValueError as e:
-        print(str(e), file=sys.stderr)
-        return 1
-
-    write_auth_file(auth)
-    json.dump(auth, sys.stdout)
+    json.dump(
+        {
+            "access_token": access,
+            "refresh_token": refresh_token_to_use,
+            "expires_at": int(time.time() * 1000) + expires_in * 1000,
+        },
+        sys.stdout,
+    )
     sys.stdout.write("\n")
     return 0
 

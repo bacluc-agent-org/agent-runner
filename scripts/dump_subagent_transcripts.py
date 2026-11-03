@@ -166,7 +166,7 @@ def main() -> int:
     try:
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
             root_tmp_path = tmp.name
-        run_opencode_to_file("export", root_id, path=root_tmp_path)
+        run_opencode_to_file("session", "export", root_id, path=root_tmp_path)
         root_export_size = os.path.getsize(root_tmp_path)
         with open(root_tmp_path) as f:
             root_export = json.load(f)
@@ -268,7 +268,7 @@ def main() -> int:
             try:
                 with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
                     child_tmp_path = tmp.name
-                run_opencode_to_file("export", child_id, path=child_tmp_path)
+                run_opencode_to_file("session", "export", child_id, path=child_tmp_path)
                 with open(child_tmp_path) as f:
                     child_export = json.load(f)
                 for line in render_transcript(child_export, child_id):

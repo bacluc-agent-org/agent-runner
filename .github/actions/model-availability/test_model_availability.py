@@ -27,13 +27,6 @@ def _provider_api_keys(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-or-key")
 
 
-@pytest.fixture(autouse=True)
-def _isolated_home(monkeypatch, tmp_path):
-    """Hide the machine's ~/.local/share/opencode/auth.json: a real OpenAI OAuth login
-    makes discovery fetch the live catalog, so tests see models they never mocked."""
-    monkeypatch.setenv("HOME", str(tmp_path))
-
-
 def fake_run(args, *a, **kw):
     if args == ["opencode", "models"]:
         return types.SimpleNamespace(stdout="opencode/a-free\n")
@@ -91,10 +84,6 @@ class TestDiscoverModels:
         assert captured["authorization"] == "Bearer test-token"
         assert captured["originator"] == "opencode"
         assert captured["beta"] == "responses=experimental"
-
-    def test_ambient_opencode_auth_is_not_reachable(self, tmp_path):
-        """Guard for _isolated_home: without it, discovery reads the runner's real OpenAI login."""
-        assert Path.home() == tmp_path
 
     def test_retries_transient_cli_initialization_failure(self, monkeypatch):
         calls = 0

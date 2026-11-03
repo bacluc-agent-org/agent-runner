@@ -37,6 +37,105 @@ def fake_run(args, *a, **kw):
 
 
 class TestDiscoverModels:
+    def test_provider_config_reads_urls_from_array_shaped_debug_output(self, monkeypatch, tmp_path):
+        config_path = tmp_path / "opencode.jsonc"
+        config_path.write_text(
+            '{\n// provider URL and environment key\n"provider":{"openrouter":{"options":{'
+            '"baseURL":"https://openrouter.ai/api/v1","apiKey":"{env:OPENROUTER_API_KEY}",'
+            '},},},\n}'
+        )
+        override_path = tmp_path / "override.jsonc"
+        override_path.write_text(
+            '{"provider":{"openrouter":{"options":{"apiKey":"{env:OTHER_KEY}"}}}}'
+        )
+
+        def fake_run(args, *a, **kw):
+            assert args == ["opencode", "debug", "config"]
+            kw["stdout"].write(
+                json.dumps(
+                    [
+                        {
+                            "type": "document",
+                            "path": str(config_path),
+                            "info": {"providers": {"openrouter": {"settings": {}}}},
+                        },
+                        {"type": "document", "path": str(override_path)},
+                        {"type": "directory", "path": str(tmp_path)},
+                        {"type": "document", "info": {"plugins": []}},
+                    ]
+                )
+            )
+            return types.SimpleNamespace(stdout="")
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+        assert model_availability.load_provider_config() == {
+            "openrouter": {
+                "baseURL": "https://openrouter.ai/api/v1",
+                "apiKey": "{env:OTHER_KEY}",
+            }
+        }
+
+    def test_discovers_probeable_openai_oauth_models(self, monkeypatch, tmp_path):
+        captured = {}
+        monkeypatch.setenv("OPENAI_ACCESS_TOKEN", "test-token")
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"models": [{"slug": "gpt-5.6-luna", "supported_in_api": true}, {"slug": "gpt-5.6-sol", "supported_in_api": false}]}'
+
+        def fake_urlopen(request, timeout=30):
+            if request.full_url.startswith("https://chatgpt.com/backend-api/codex/models"):
+                captured["url"] = request.full_url
+                captured["authorization"] = request.get_header("Authorization")
+                captured["originator"] = request.get_header("Originator")
+                captured["beta"] = request.get_header("Openai-beta")
+            return FakeResponse()
+
+        def fake_run_with_openai_provider(args, *a, **kw):
+            if args == ["opencode", "debug", "config"]:
+                config = json.loads(json.dumps(CONFIG))
+                config["provider"]["openai"] = {"options": {}}
+                kw["stdout"].write(json.dumps(config))
+                return types.SimpleNamespace(stdout="")
+            return fake_run(args, *a, **kw)
+
+        monkeypatch.setattr(model_availability.urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run_with_openai_provider)
+
+        models, _ = model_availability.discover_models()
+
+        assert "openai/gpt-5.6-luna" in models
+        assert "openai/gpt-5.6-sol" not in models
+        assert model_availability.available_models(
+            {"openai/gpt-5.6-luna": {"ok": True}}, models, {}
+        ) == ["openai/gpt-5.6-luna"]
+        assert captured["url"].startswith("https://chatgpt.com/backend-api/codex/models?")
+        assert captured["authorization"] == "Bearer test-token"
+        assert captured["originator"] == "opencode"
+        assert captured["beta"] == "responses=experimental"
+
+    def test_oauth_probe_uses_aisix_and_keeps_bearer_out_of_opencode_env(self, monkeypatch):
+        monkeypatch.setenv("AISIX_PROXY_URL", "http://127.0.0.1:3000/v1")
+        monkeypatch.setenv("AISIX_CALLER_KEY", "aisix-caller")
+        monkeypatch.setenv("OPENAI_ACCESS_TOKEN", "upstream-bearer")
+        monkeypatch.setenv("OPENAI_REFRESH_TOKEN", "refresh-secret")
+
+        env = model_availability.opencode_env("openai/gpt-6-luna")
+        config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+
+        assert config["provider"]["openai"]["options"] == {
+            "baseURL": "http://127.0.0.1:3000/v1",
+            "apiKey": "aisix-caller",
+        }
+        assert "OPENAI_ACCESS_TOKEN" not in env
+        assert "OPENAI_REFRESH_TOKEN" not in env
+
     def test_retries_transient_cli_initialization_failure(self, monkeypatch):
         calls = 0
 
@@ -71,8 +170,9 @@ class TestDiscoverModels:
         assert error.value.returncode == 17
         assert captured["args"] == ["opencode", "models"]
         assert captured["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugin":[]}'
+        assert "OPENCODE_DISABLE_DEFAULT_PLUGINS" not in captured["env"]
 
-    def test_debug_config_uses_plugin_safe_environment(self, monkeypatch):
+    def test_debug_config_preserves_builtin_providers_in_plugin_safe_environment(self, monkeypatch):
         captured = {}
 
         def fake_config(args, *a, **kw):
@@ -90,6 +190,7 @@ class TestDiscoverModels:
             "openrouter": {"baseURL": "https://openrouter.ai/api/v1", "apiKey": None},
         }
         assert captured["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugin":[]}'
+        assert "OPENCODE_DISABLE_DEFAULT_PLUGINS" not in captured["env"]
 
     def test_discovers_models_per_provider(self, monkeypatch):
         captured = {}
@@ -437,6 +538,12 @@ class TestProviderProbeable:
         )
         assert not model_availability.provider_probeable("openrouter/foo:free", config, {})
 
+    def test_masked_debug_key_uses_known_provider_environment_key(self):
+        config = {"openrouter": {"baseURL": "https://openrouter.ai/api/v1", "apiKey": "***"}}
+        assert model_availability.provider_probeable(
+            "openrouter/foo:free", config, {"OPENROUTER_API_KEY": "test-key"}
+        )
+
     def test_unknown_provider_passes(self):
         assert model_availability.provider_probeable("opencode/a-free", {}, {})
 
@@ -691,9 +798,9 @@ class TestCandidatePriority:
         assert model_availability.candidate_priority("opencode/paid-model") == 4
 
     def test_openai_models(self):
-        assert model_availability.candidate_priority("openai/gpt-5.6-luna") == 4
-        assert model_availability.candidate_priority("openai/gpt-6-luna") == 4
-        assert model_availability.candidate_priority("openai/gpt-5.4") == 4
+        assert model_availability.candidate_priority("openai/gpt-5.6-luna") == 1
+        assert model_availability.candidate_priority("openai/gpt-6-luna") == 1
+        assert model_availability.candidate_priority("openai/gpt-5.4") == 1
 
     def test_go_openai_providers(self):
         assert model_availability.candidate_priority("opencode-go-openai/glm-5.3") == 5
@@ -714,7 +821,7 @@ class TestCandidatePriority:
         assert model_availability.candidate_priority("opencode-go-openai-2/glm-5.3") == 5
 
     def test_openai_non_gpt_priority(self):
-        assert model_availability.candidate_priority("openai/other-model") == 4
+        assert model_availability.candidate_priority("openai/other-model") == 1
 
     def test_go_anthropic_providers(self):
         assert model_availability.candidate_priority("opencode-go-anthropic/glm-5.3") == 6
@@ -730,12 +837,14 @@ class TestPrioritizeCandidates:
         candidates = [
             "openrouter/anthropic/claude-sonnet-4.5",
             "opencode-go-openai/qwen3.8-flash",
+            "openai/gpt-6-luna",
             "opencode/a-free",
             "opencode/big-pickle",
         ]
         assert model_availability.prioritize_candidates(candidates) == [
             "opencode/big-pickle",
             "opencode-go-openai/qwen3.8-flash",
+            "openai/gpt-6-luna",
             "opencode/a-free",
             "openrouter/anthropic/claude-sonnet-4.5",
         ]
@@ -1030,12 +1139,60 @@ class TestProbeModelLogging:
             stderr = ""
 
         def fake_run(*args, **kwargs):
+            captured["args"] = args[0]
             captured["env"] = kwargs["env"]
             return FakeResult()
 
         monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
         assert model_availability.probe_model("opencode/a-free", str(tmp_path))
+        assert "--standalone" not in captured["args"]
         assert captured["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugin":[]}'
+
+    def test_failed_openai_probe_logs_diagnostics_without_secrets(self, tmp_path, monkeypatch, capsys):
+        probe_dir = tmp_path / "model-probes"
+        probe_dir.mkdir()
+        (probe_dir / "probe-openai-gpt-6-luna.log").write_text(
+            "ECONNRESET token caller-key"
+        )
+        monkeypatch.setenv("OPENAI_ACCESS_TOKEN", "token")
+        monkeypatch.setenv("AISIX_CALLER_KEY", "caller-key")
+
+        model_availability.log_failed_openai_probes(
+            {"openai/gpt-6-luna": False, "opencode/a-free": False}, str(tmp_path)
+        )
+
+        diagnostic = capsys.readouterr().err
+        assert "ECONNRESET" in diagnostic
+        assert "[REDACTED]" in diagnostic
+        assert "token" not in diagnostic
+        assert "caller-key" not in diagnostic
+
+    def test_oauth_probe_registers_the_catalog_model_in_opencode_config(self, tmp_path, monkeypatch):
+        captured = {}
+
+        class FakeResult:
+            returncode = 0
+            stdout = "OK\n"
+            stderr = ""
+
+        def fake_run(*args, **kwargs):
+            captured["args"] = args[0]
+            captured["env"] = kwargs["env"]
+            return FakeResult()
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+        assert model_availability.probe_model("openai/gpt-6-luna", str(tmp_path))
+        assert captured["args"] == [
+            "opencode",
+            "run",
+            "--model",
+            "openai/gpt-6-luna",
+            model_availability.PROBE_PROMPT,
+        ]
+        config = json.loads(captured["env"]["OPENCODE_CONFIG_CONTENT"])
+        assert config["provider"]["openai"]["models"]["gpt-6-luna"] == {
+            "name": "gpt-6-luna"
+        }
 
     def test_writes_probe_log_with_stdout_and_stderr(self, tmp_path, monkeypatch):
         class FakeResult:
@@ -1231,32 +1388,45 @@ class TestOpencodeWhitelist:
 
 
 class TestModelAvailabilityAction:
-    def test_auth_materialized_by_setup_opencode_not_here(self):
+    def test_oauth_is_refreshed_outside_opencode_and_routed_through_aisix(self):
         root = Path(__file__).parents[3]
         setup = (root / ".github/actions/setup-opencode/action.yml").read_text()
         assert "umask 077" in setup
-        assert (
-            "printf '%s' \"$OPENCODE_AUTH_CONTENT\" > ~/.local/share/opencode/auth.json"
-            in setup
-        )
-        assert "printf '%s\\n' \"$OPENCODE_AUTH_CONTENT\"" not in setup
+        assert "python3 scripts/refresh-token.py" in setup
+        assert "# renovate: datasource=docker depName=ghcr.io/api7/aisix\n        AISIX_VERSION=1.8.0" in setup
+        assert 'AISIX_IMAGE="ghcr.io/api7/aisix:$AISIX_VERSION"' in setup
+        assert "CHATGPT_ACCESS_TOKEN" in setup
+        assert "CHATGPT_REFRESH_TOKEN" in setup
+        assert "~/.local/share/opencode/auth.json" not in setup
         action = Path(__file__).with_name("action.yml").read_text()
         assert "OPENCODE_AUTH_CONTENT" not in action
         assert "auth.json" not in action
         assert "python3" in action
 
-    def test_standalone_opencode_workflow_keeps_the_openai_catalog_available(self):
-        # The validate step talks to the openai (ChatGPT OAuth) provider, whose
-        # model catalog comes from opencode's default plugins. Disabling them
-        # there makes every probe fail with "Provider not found: openai".
-        workflow = (Path(__file__).parents[3] / ".github/workflows/refresh-chatgpt-auth.yml").read_text()
-        validation = workflow[
-            workflow.index("- name: Validate refreshed token with opencode") : workflow.index(
-                "- name: Set secret (refreshed token)"
-            )
-        ]
-        assert "OPENCODE_DISABLE_DEFAULT_PLUGINS" not in validation
-        assert "OPENCODE_CONFIG_CONTENT: '{\"plugin\":[]}'" in validation
+    def test_model_discovery_reads_oauth_token_file_without_passing_it_to_opencode(self, tmp_path, monkeypatch):
+        token_file = tmp_path / "access-token"
+        token_file.write_text("test-token")
+        monkeypatch.setenv("OPENAI_ACCESS_TOKEN_FILE", str(token_file))
+        monkeypatch.delenv("OPENAI_ACCESS_TOKEN", raising=False)
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"models":[{"slug":"gpt-6-luna"}]}'
+
+        monkeypatch.setattr(
+            model_availability.urllib.request,
+            "urlopen",
+            lambda request, timeout=30: Response(),
+        )
+        assert model_availability.fetch_openai_oauth_model_ids() == ["gpt-6-luna"]
+        assert not token_file.exists()
+        assert "OPENAI_ACCESS_TOKEN_FILE" not in model_availability.opencode_env()
 
 
     def test_uses_fresh_cache_when_cli_discovery_is_unavailable(self, monkeypatch):
@@ -1427,7 +1597,40 @@ class TestWorkflowOpenRouterSelection:
             assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in content
             assert "model-deny-list.txt" in content
 
-    def test_last_resort_is_deny_list_filtered_and_fails_closed(self):
+    def test_hourly_issue_prefers_qwen_before_free_fallbacks(self):
+        content = Path(".github/workflows/hourly-issue.yml").read_text()
+        start = content.index("for candidate in \\")
+        end = content.index("; do", start)
+        candidates = content[start:end]
+        assert candidates.index("'opencode-go-openai/qwen3.8-flash'") < candidates.index(
+            '"${free_models[@]}"'
+        )
+        assert candidates.index("'opencode-go-openai-2/qwen3.8-flash'") < candidates.index(
+            '"${free_models[@]}"'
+        )
+        assert candidates.index("'opencode-go-openai/qwen3.8-flash'") < candidates.index(
+            "'opencode-go-openai-2/qwen3.8-flash'"
+        )
+
+    def test_hourly_issue_retries_nonzero_selector_invocations_on_other_eligible_models(self):
+        content = Path(".github/workflows/hourly-issue.yml").read_text()
+        assert 'selection_retry_count < 2' in content
+        assert '"${free_models[@]}"' in content
+        assert "while (( selection_status != 0 && selection_retry_count < 2 ))" in content
+        assert '[[ "$candidate" == "$selection_model" ]] && continue' in content
+        assert '[[ " ${attempted_selection_models[*]} " == *" $candidate "* ]] && continue' in content
+        assert '[[ -n "$OPENCODE_GO_API_KEY" ]] || continue' in content
+        assert '[[ -n "$OPENCODE_GO_2_API_KEY" ]] || continue' in content
+        assert '[[ -n "$OPENROUTER_API_KEY" ]] || continue' in content
+        assert "mapfile -t allowed_models < <(grep -Ev -f scripts/model-deny-list.txt" in content
+
+    def test_hourly_issue_uses_weak_free_model_only_as_last_resort(self):
+        content = Path(".github/workflows/hourly-issue.yml").read_text()
+        assert "mapfile -t all_free_models" in content
+        assert '"${all_free_models[@]}"' in content
+        assert "last resort (known-weak free)" in content
+
+    def test_last_resort_filters_deny_list_before_free_fallback(self):
         for path in self.WORKFLOWS:
             content = Path(path).read_text()
             mapfile = content.index("mapfile -t free_models")

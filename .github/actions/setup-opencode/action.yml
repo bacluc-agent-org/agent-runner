@@ -130,7 +130,9 @@ runs:
         chmod 600 "$RUNNER_TEMP/chatgpt-access-token"
         python3 scripts/aisix_oauth.py
         AISIX_DIR="$RUNNER_TEMP/aisix-oauth"
-        AISIX_IMAGE=ghcr.io/api7/aisix:1.8.0
+        # renovate: datasource=docker depName=ghcr.io/api7/aisix
+        AISIX_IMAGE=1.8.0
+        AISIX_IMAGE="ghcr.io/api7/aisix:$AISIX_IMAGE"
         docker pull "$AISIX_IMAGE" >/dev/null
         docker run --rm --user "$(id -u):$(id -g)" --entrypoint aisix \
           -v "$AISIX_DIR/config.yaml:/etc/aisix/config.yaml:ro" \

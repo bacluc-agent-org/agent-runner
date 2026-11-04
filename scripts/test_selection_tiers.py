@@ -226,3 +226,12 @@ def test_selection_cli_never_forwards_conflicting_selector_prompt(tmp_path):
     run(["python3", "scripts/selection_tiers.py", "--candidates", str(candidates), "--branches", str(branches), "--tail-file", str(tail), "--validate", str(selection), "--fallback-repository", "org/todo"], check=True)
     assert "issue 220" not in selection.read_text()
     assert "https://github.com/org/todo/issues/219" in selection.read_text()
+
+
+def test_fallback_breaks_recent_ties_by_total_attempts(monkeypatch):
+    import random
+    from selection_tiers import fallback_candidate
+
+    monkeypatch.setattr(random, "choice", lambda candidates: candidates[0])
+    assert fallback_candidate([candidate(1, attempts=1), candidate(2, attempts=0)]).number == 2
+    assert fallback_candidate([candidate(3, attempts=5), candidate(4, attempts=0, recent_attempts=1)]).number == 3

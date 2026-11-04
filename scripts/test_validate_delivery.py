@@ -76,3 +76,24 @@ def test_human_feedback_compared_before_progress_update():
     report = workflow[workflow.index("      - name: Post run-result comment"):]
     assert report.index("bot_comment_updated=$(gh api") < report.index('scripts/update_progress_comment.py"')
     assert report.index("last_human_comment=$(gh issue view") < report.index('scripts/update_progress_comment.py"')
+
+
+def test_issue_lookup_failure_does_not_become_no_target(tmp_path):
+    import os
+    import subprocess
+    import textwrap
+    from pathlib import Path
+
+    workflow = (Path(__file__).parents[1] / ".github/workflows/opencode.yml").read_text()
+    step = workflow.split("      - name: Extract target issue number\n", 1)[1].split("      - name: Ensure progress comment\n", 1)[0]
+    assert "continue-on-error: true" not in step
+    script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    gh = tmp_path / "gh"
+    gh.write_text("#!/bin/sh\nexit 1\n")
+    gh.chmod(0o755)
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "INPUT_ISSUE_NUMBER": "42", "PROMPT": "", "ISSUE_REPOSITORY": "org/todo", "GITHUB_OUTPUT": str(tmp_path / "output")}
+    failed = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+    assert failed.returncode != 0
+    env["INPUT_ISSUE_NUMBER"] = ""
+    idle = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+    assert idle.returncode == 0

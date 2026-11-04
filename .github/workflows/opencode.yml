@@ -446,7 +446,6 @@ jobs:
       - name: Extract target issue number
         id: target-issue
         if: steps.select-model.outcome == 'success'
-        continue-on-error: true
         shell: bash
         env:
           INPUT_ISSUE_NUMBER: ${{ inputs.issue_number }}
@@ -460,7 +459,8 @@ jobs:
               echo "issue_number=${issue_num}" >> "$GITHUB_OUTPUT"
               printf 'Target issue: #%s\n' "$issue_num"
             else
-              printf 'Target issue #%s does not exist in %s; skipping progress-tracking steps.\n' "$issue_num" "$ISSUE_REPOSITORY"
+              printf '::error::Could not verify target issue %s in %s; not dispatching.\n' "$issue_num" "$ISSUE_REPOSITORY" >&2
+              exit 1
             fi
           else
             printf 'No target issue found in prompt; skipping progress-tracking steps.\n'

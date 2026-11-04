@@ -71,8 +71,8 @@ def implementation_prompt(repository: str, number: int) -> str:
 def fallback_candidate(candidates: list[Candidate]) -> Candidate | None:
     if not candidates:
         return None
-    least_recent = min(candidate.recent_attempts for candidate in candidates)
-    return random.choice([candidate for candidate in candidates if candidate.recent_attempts == least_recent])
+    best = min((candidate.recent_attempts, candidate.attempts) for candidate in candidates)
+    return random.choice([candidate for candidate in candidates if (candidate.recent_attempts, candidate.attempts) == best])
 
 def main() -> None:
     parser = argparse.ArgumentParser()

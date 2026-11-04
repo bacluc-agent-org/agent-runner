@@ -118,12 +118,12 @@ jobs:
           printf 'GitHub lookup duration: candidate search and collection %ss\n' "$((SECONDS - lookup_started))"
 
           candidates="$RUNNER_TEMP/candidate-numbers.txt"
-          jq -r '.[].number | tostring' "$search_json" | shuf -n 50 > "$candidates"
+          jq -r '.[].number | tostring' "$search_json" | shuf > "$candidates"
           if [[ ! -s "$candidates" ]]; then
             printf '%s\n' 'No unclaimed open issues; nothing to do.'
             exit 0
           fi
-          printf 'Randomized sample of up to 50 eligible issues:\n'
+          printf 'Randomized eligible issues:\n'
           cat "$candidates"
           printf '\n\n\n\n\n\n'
           printf 'Selecting model...\n'
@@ -172,8 +172,6 @@ jobs:
             break
           done
           if [[ -z "$selection_model" ]]; then
-            selection_model="$(grep -Ev -f scripts/model-deny-list.txt "$available_models_file" | head -n1 || true)"
-            selection_source='last resort (deny-list filtered)'
             if [[ -z "$selection_model" ]]; then
               for candidate in "${all_free_models[@]}"; do
                 case "$candidate" in
@@ -189,8 +187,7 @@ jobs:
               done
             fi
             if [[ -z "$selection_model" ]]; then
-              printf '%s\n' 'No issue-selection model is available; not dispatching.' >&2
-              exit 1
+              printf '%s\n' 'No issue-selection model is available; using degraded selection.' >&2
             fi
             printf '%s\n' "Using fallback model: $selection_model" >&2
           fi
@@ -262,9 +259,17 @@ jobs:
               selection_status=1
               fatal_marker=1
             fi
+            if (( selection_status == 0 )) && ! python3 scripts/selection_tiers.py --candidates "$enriched" --branches "$RUNNER_TEMP/branches.txt" --tail-file "$RUNNER_TEMP/tail.txt" --validate "$selection"; then
+              selection_status=1
+            fi
             printf 'Issue selector duration: model=%s seconds=%s exit=%s fatal_marker=%s\n' "$selection_model" "$((SECONDS - selection_started))" "$selection_command_status" "$fatal_marker"
           }
-          run_selection
+          if [[ -n "$selection_model" ]]; then
+            run_selection
+          else
+            selection_status=1
+            selection_tee_status=0
+          fi
           printf 'Model selection statuses: opencode=%s tee=%s\n' "$selection_status" "$selection_tee_status"
           if (( selection_tee_status != 0 )); then
             exit "$selection_tee_status"
@@ -290,6 +295,10 @@ jobs:
                   ;;
                 opencode-go-openai-2/*)
                   grep -Fxq "$candidate" "$available_models_file" && [[ -n "$OPENCODE_GO_2_API_KEY" ]] || continue
+                  ;;
+                openai/*)
+                  grep -Fxq "$candidate" "$available_models_file" || continue
+                  [[ -n "${AISIX_PROXY_URL:-}" && -n "${AISIX_CALLER_KEY:-}" ]] || continue
                   ;;
                 opencode-go-*) continue ;;
                 opencode/*)
@@ -319,9 +328,8 @@ jobs:
           done
           printf 'Model selection statuses: opencode=%s tee=%s\n' "$selection_status" "$selection_tee_status"
           if (( selection_status != 0 )); then
-            printf 'Selection failed (opencode=%s); not dispatching.\n' "$selection_status" >&2
-            ((selection_status == 124)) && printf '::error::issue selection exceeded the %sm limit (opencode exit %s)\n' "$SELECTION_TIMEOUT_MINUTES" "$selection_status"
-            exit 1
+            printf '::warning::Selector attempts exhausted; using degraded mechanical selection.\n'
+            python3 scripts/selection_tiers.py --candidates "$enriched" --branches "$RUNNER_TEMP/branches.txt" --tail-file "$RUNNER_TEMP/tail.txt" --fallback-repository "$ISSUE_REPOSITORY" > "$selection"
           fi
           if ! grep -q '[^[:space:]]' "$selection"; then
             printf '%s\n' 'Selection produced no output; not dispatching.' >&2

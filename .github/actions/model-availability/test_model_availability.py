@@ -1388,15 +1388,16 @@ class TestOpencodeWhitelist:
 
 
 class TestModelAvailabilityAction:
-    def test_oauth_is_refreshed_outside_opencode_and_routed_through_aisix(self):
+    def test_stored_oauth_is_routed_through_aisix_without_refresh(self):
         root = Path(__file__).parents[3]
         setup = (root / ".github/actions/setup-opencode/action.yml").read_text()
         assert "umask 077" in setup
-        assert "python3 scripts/refresh-token.py" in setup
+        assert "python3 scripts/refresh-token.py" not in setup
+        assert "gh secret set CHATGPT_ACCESS_TOKEN" not in setup
+        assert "gh secret set CHATGPT_REFRESH_TOKEN" not in setup
         assert "# renovate: datasource=docker depName=ghcr.io/api7/aisix\n        AISIX_VERSION=1.8.0" in setup
         assert 'AISIX_IMAGE="ghcr.io/api7/aisix:$AISIX_VERSION"' in setup
-        assert "CHATGPT_ACCESS_TOKEN" in setup
-        assert "CHATGPT_REFRESH_TOKEN" in setup
+        assert "OPENAI_ACCESS_TOKEN" in setup
         assert "~/.local/share/opencode/auth.json" not in setup
         action = Path(__file__).with_name("action.yml").read_text()
         assert "OPENCODE_AUTH_CONTENT" not in action

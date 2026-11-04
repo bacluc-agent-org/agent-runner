@@ -849,7 +849,7 @@ jobs:
           import sys
           from pathlib import Path
           entries = [json.loads(line) for line in Path(sys.argv[1]).read_text().splitlines()]
-          assert any(entry["host"] == "example.com" and entry["method"] == "GET" for entry in entries)
+          assert any(entry["host"] == "example.com" and entry["method"] == "CONNECT" for entry in entries)
           PY
           export PATH="$original_path"
           cleanup_probe

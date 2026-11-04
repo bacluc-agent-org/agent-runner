@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from urllib.parse import urlparse
 
-from http_guard import check_request
+from http_guard import check_request, parse_nono_diagnostic
 
 
 class HttpGuardTest(unittest.TestCase):
@@ -80,6 +80,14 @@ class HttpGuardTest(unittest.TestCase):
                     "reason": reason,
                 },
             )
+
+    def test_parse_nono_connect_denial(self):
+        entry = parse_nono_diagnostic(
+            "  deny connect example.com:443 (host example.com:443 is not in the allowlist)\n"
+        )
+        self.assertEqual(entry["method"], "CONNECT")
+        self.assertEqual(entry["host"], "example.com")
+        self.assertEqual(entry["path"], "")
 
 
 if __name__ == "__main__":

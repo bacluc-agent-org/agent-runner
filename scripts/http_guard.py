@@ -17,6 +17,7 @@ NONO_DENIAL = re.compile(
 NONO_DENIAL_TARGET = re.compile(
     r"(?i)(?P<method>GET|HEAD|OPTIONS|POST|PUT|PATCH|DELETE|CONNECT)\s+(?P<target>https?://\S+|/\S+)"
 )
+NONO_CONNECT_DENIAL = re.compile(r"(?i)\bdeny connect (?P<host>[^\s:]+)(?::\d+)?")
 
 
 def _deny(method, url, reason):
@@ -57,6 +58,15 @@ def parse_nono_diagnostic(line):
     if not re.search(r"(?i)\bden(?:y|ied|ial)\b", line):
         return None
     match = NONO_DENIAL.search(line) or NONO_DENIAL_TARGET.search(line)
+    connect_match = NONO_CONNECT_DENIAL.search(line)
+    if connect_match:
+        return {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "method": "CONNECT",
+            "host": connect_match.group("host").lower(),
+            "path": "",
+            "reason": line.rstrip("\n"),
+        }
     if not match:
         return None
     target = match.group("target").rstrip(".,;)")

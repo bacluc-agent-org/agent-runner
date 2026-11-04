@@ -226,7 +226,10 @@ Agents start OpenCode through `scripts/run-agent-sandboxed.sh`, which requires
 `NONO_PROFILE` and runs `nono run --profile "$NONO_PROFILE" --allow-cwd` with
 the required runtime grants. The wrapper leaves stdout and stderr visible and
 appends nono's stderr (including proxy denial diagnostics) to
-`$RUNNER_TEMP/nono-proxy.log` without changing the command's exit status.
+`$RUNNER_TEMP/nono-proxy.log` without changing the command's exit status. A
+stderr sidecar also parses nono denial diagnostics into JSONL at
+`$RUNNER_TEMP/http-guard-denials.jsonl`; the original diagnostic remains visible
+and is retained verbatim in the proxy log.
 Review this log for recurring denials before proposing allowlist additions;
 only allow a host or endpoint when the agent workflow needs it. Avoid copying
 unreviewed log contents into prompts or committing them.
@@ -258,10 +261,12 @@ isolation boundary.
 `scripts/http_guard.py` remains an advisory, importable policy helper
 (`check_request`) for callers that want to pre-screen a request and log denials;
 nono is the enforcement boundary, so the helper is intentionally not wired into
-the wrapper installer (defense-in-depth, not the boundary). When callers use
-`check_request`, structured denial records are appended to
-`$RUNNER_TEMP/http-guard-denials.jsonl` (falling back to `/tmp` when
-`RUNNER_TEMP` is unset).
+the wrapper installer (defense-in-depth, not the boundary). `check_request`
+retains unconditional `GET`, `HEAD`, and `OPTIONS` read semantics and the
+sanctioned `POST /repos/*/*/forks` exception. Both direct helper denials and
+parsed nono diagnostics use structured records in
+`$RUNNER_TEMP/http-guard-denials.jsonl` (falling back to `/tmp` when `RUNNER_TEMP`
+is unset).
 
 Regression tests use a fake backend and never create forbidden PRs. Run
 `python3 -m unittest discover -s scripts -p test_gh_cli_wrapper.py` and

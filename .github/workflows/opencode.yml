@@ -658,6 +658,24 @@ jobs:
           fi
           printf '::%s::\n' "$stop_token"
 
+      - name: Validate delivery
+        id: delivery
+        if: always() && steps.select-model.outcome == 'success'
+        shell: bash
+        env:
+          ISSUE_NUMBER: ${{ steps.target-issue.outputs.issue_number }}
+          PUSHED_REPOS: ${{ steps.push-work.outputs.pushed_repos }}
+          COORDINATOR_OUTCOME: ${{ steps.coordinator.outcome }}
+          PUSH_OUTCOME: ${{ steps.push-work.outcome }}
+          FATAL_REASON: ${{ steps.fatal-guard.outputs.fatal-reason }}
+          GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
+        run: |
+          if [[ "$COORDINATOR_OUTCOME" != success || "$PUSH_OUTCOME" == failure || -n "$FATAL_REASON" || -f "$RUNNER_TEMP/opencode-fatal.json" ]]; then
+            printf '::error::Coordinator failed or encountered a fatal provider error; delivery is incomplete.\n'
+            exit 1
+          fi
+          python3 "$RUNNER_TEMP/agent-runner/scripts/validate_delivery.py"
+
       - name: Emit loop-termination metrics
         if: always()
         id: loop-metrics
@@ -685,6 +703,8 @@ jobs:
           COMMENT_ID: ${{ steps.run-start-comment.outputs.comment_id }}
           MODEL: ${{ steps.select-model.outputs.model }}
           COORDINATOR_OUTCOME: ${{ steps.coordinator.outcome }}
+          DELIVERY_OUTCOME: ${{ steps.delivery.outcome }}
+          DELIVERY_PR_URL: ${{ steps.delivery.outputs.pr_url }}
           FATAL_REASON: ${{ steps.fatal-guard.outputs.fatal-reason }}
           BRANCH: ${{ steps.push-work.outputs.branch_name }}
           PUSHED_REPOS: ${{ steps.push-work.outputs.pushed_repos }}
@@ -696,17 +716,19 @@ jobs:
           RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
           # Determine status
-          if [[ "${COORDINATOR_OUTCOME:-}" == "success" ]]; then
-            STATUS="✅ completed"
-          elif [[ -n "${FATAL_REASON:-}" ]]; then
+          if [[ -n "${FATAL_REASON:-}" ]]; then
             STATUS="❌ fatal error: $FATAL_REASON"
-          else
+          elif [[ "${COORDINATOR_OUTCOME:-}" != "success" ]]; then
             STATUS="⚠️ failed (coordinator exit ${COORDINATOR_OUTCOME:-})"
+          elif [[ "${DELIVERY_OUTCOME:-}" == "success" ]]; then
+            STATUS="✅ completed"
+          else
+            STATUS="⚠️ incomplete (delivery not validated)"
           fi
 
           # Check for existing PRs in every repo this run pushed to, not just this one.
           # ponytail: 34 repos scanned per run, cache the repo list in an artifact if this shows up in run times
-          PR_URL=""
+          PR_URL="${DELIVERY_PR_URL:-}"
           if [[ -n "${BRANCH:-}" ]]; then
             if [[ -n "${PUSHED_SLUGS:-}" ]]; then
               SLUGS="$PUSHED_SLUGS"
@@ -721,7 +743,7 @@ jobs:
                 URLS="${URLS:+$URLS$'\n'}$url"
               fi
             done < <(printf '%s\n' "$GITHUB_REPOSITORY" "$SLUGS" | sort -u)
-            PR_URL="${URLS//$'\n'/ }"
+            PR_URL="${PR_URL:+$PR_URL }${URLS//$'\n'/ }"
           fi
 
           if [[ -n "${BRANCH:-}" ]]; then

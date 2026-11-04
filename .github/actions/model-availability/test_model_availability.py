@@ -1607,6 +1607,17 @@ class TestWorkflowOpenRouterSelection:
             assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in content
             assert "model-deny-list.txt" in content
 
+    def test_refiner_is_a_hosted_reusable_workflow(self):
+        content = REFINE_ISSUES_WORKFLOW.read_text()
+        assert "workflow_call:" in content
+        assert "runs-on: ubuntu-latest" in content
+
+    def test_refiner_dispatcher_calls_reusable_workflow(self):
+        content = REFINE_ISSUES_DISPATCHER.read_text()
+        assert "workflow_dispatch:" in content
+        assert "uses: ./.github/workflows/refine-issues-reusable.yml" in content
+        assert "secrets: inherit" in content
+
     def test_hourly_issue_prefers_qwen_before_free_fallbacks(self):
         content = Path(".github/workflows/hourly-issue.yml").read_text()
         start = content.index("for candidate in \\")

@@ -22,6 +22,13 @@ CONFIG = {
 @pytest.fixture(autouse=True)
 def _provider_api_keys(monkeypatch):
     """Provider discovery tests exercise the real PROVIDERS loop; provide the keys."""
+    for name in (
+        "AISIX_CALLER_KEY",
+        "AISIX_PROXY_URL",
+        "OPENAI_ACCESS_TOKEN_FILE",
+        "OPENCODE_CONFIG_CONTENT",
+    ):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("OPENCODE_GO_API_KEY", "test-go-key")
     monkeypatch.setenv("OPENCODE_GO_2_API_KEY", "test-go-2-key")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-or-key")

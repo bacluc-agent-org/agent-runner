@@ -186,3 +186,27 @@ def test_selection_tail_requires_fast_tool_free_selection():
     assert "do not run commands, browse, fetch URLs, or look up issues or pull requests during selection" in agent
     assert "choose the best-so-far candidate" in tail
     assert 'note the doubt inside the implementation prompt' in tail
+
+
+def test_validate_selection_accepts_unambiguous_inline_marker_and_all_candidates():
+    from selection_tiers import validate_selection
+
+    normalized, number = validate_selection("Implement the issue. SELECTED_ISSUE: 61", set(range(1, 101)))
+    assert number == 61
+    assert normalized.endswith("\nSELECTED_ISSUE: 61\n")
+
+
+def test_validate_selection_rejects_invalid_or_empty_prompts():
+    import pytest
+    from selection_tiers import validate_selection
+
+    for text in ("", "SELECTED_ISSUE: 1", "do work", "work SELECTED_ISSUE: 2", "work SELECTED_ISSUE: 1 SELECTED_ISSUE: 2", "work SELECTED_ISSUE: 1 SELECTED_ISSUE: 1"):
+        with pytest.raises(ValueError):
+            validate_selection(text, {1})
+
+
+def test_fallback_avoids_recent_and_uses_only_candidates():
+    from selection_tiers import fallback_candidate
+
+    assert fallback_candidate([candidate(1, recent_attempts=1), candidate(2)]).number == 2
+    assert fallback_candidate([]) is None

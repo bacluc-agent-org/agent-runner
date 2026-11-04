@@ -210,3 +210,19 @@ def test_fallback_avoids_recent_and_uses_only_candidates():
 
     assert fallback_candidate([candidate(1, recent_attempts=1), candidate(2)]).number == 2
     assert fallback_candidate([]) is None
+
+
+def test_selection_cli_never_forwards_conflicting_selector_prompt(tmp_path):
+    import json
+
+    candidates = tmp_path / "candidates.json"
+    branches = tmp_path / "branches.txt"
+    tail = tmp_path / "tail.txt"
+    selection = tmp_path / "selection.txt"
+    candidates.write_text(json.dumps([{"number": 219}, {"number": 220}]))
+    branches.write_text("")
+    tail.write_text("")
+    selection.write_text("Implement issue 220. SELECTED_ISSUE: 219")
+    run(["python3", "scripts/selection_tiers.py", "--candidates", str(candidates), "--branches", str(branches), "--tail-file", str(tail), "--validate", str(selection), "--fallback-repository", "org/todo"], check=True)
+    assert "issue 220" not in selection.read_text()
+    assert "https://github.com/org/todo/issues/219" in selection.read_text()

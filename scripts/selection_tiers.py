@@ -63,6 +63,11 @@ def validate_selection(text: str, numbers: set[int]) -> tuple[str, int]:
     return f"{prompt}\nSELECTED_ISSUE: {number}\n", number
 
 
+def implementation_prompt(repository: str, number: int) -> str:
+    url = f"https://github.com/{repository}/issues/{number}"
+    return f"Implement {url}. Read the full issue body and related pull requests before working. Follow repository instructions and report the outcome.\nSELECTED_ISSUE: {number}\n"
+
+
 def fallback_candidate(candidates: list[Candidate]) -> Candidate | None:
     if not candidates:
         return None
@@ -98,7 +103,9 @@ def main() -> None:
         candidates.append(candidate)
     if args.validate:
         try:
-            normalized, _ = validate_selection(Path(args.validate).read_text(), {candidate.number for candidate in candidates})
+            normalized, number = validate_selection(Path(args.validate).read_text(), {candidate.number for candidate in candidates})
+            if args.fallback_repository:
+                normalized = implementation_prompt(args.fallback_repository, number)
         except ValueError as error:
             print(error, file=sys.stderr)
             sys.exit(1)
@@ -108,8 +115,7 @@ def main() -> None:
         candidate = fallback_candidate(candidates)
         if candidate is None:
             sys.exit(1)
-        url = f"https://github.com/{args.fallback_repository}/issues/{candidate.number}"
-        print(f"Implement {url}. Read the full issue body and related pull requests before working. Follow repository instructions and report the outcome.\nSELECTED_ISSUE: {candidate.number}")
+        print(implementation_prompt(args.fallback_repository, candidate.number), end="")
         return
     for candidate in candidates:
         print(f"attempts for {candidate.number}: {candidate.attempts}", file=sys.stderr)

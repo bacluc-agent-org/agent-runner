@@ -24,8 +24,8 @@ def validate_delivery(output, issue_url, run_url, comment, pushed, fetch):
     summary = record.get("summary")
     if not isinstance(summary, str) or len(summary.strip()) < 40 or len(summary.split()) < 7:
         raise ValueError("outcome summary is not substantive")
-    if re.search(r"\b(?:placeholder|todo|tbd|lorem ipsum)\b", summary, re.I):
-        raise ValueError("outcome summary contains placeholder text")
+    if re.fullmatch(r"(?i)(?:\s*(?:placeholder|todo|tbd|lorem|ipsum)[\s.,;:!?-]*)+", summary):
+        raise ValueError("outcome summary is a placeholder")
     kind = record.get("kind")
     if kind == "report":
         if pushed:
@@ -37,6 +37,8 @@ def validate_delivery(output, issue_url, run_url, comment, pushed, fetch):
         return ""
     if kind != "code":
         raise ValueError("outcome must identify code or report delivery")
+    if pushed:
+        raise ValueError("a recovery branch is not a delivered pull request")
     url = record.get("url")
     if not isinstance(url, str):
         raise ValueError("missing pull request URL")
@@ -46,8 +48,10 @@ def validate_delivery(output, issue_url, run_url, comment, pushed, fetch):
     pr = fetch(f"repos/{match.group(1)}/pulls/{match.group(2)}")
     if pr.get("state") != "open" or not isinstance(pr.get("changed_files"), int) or pr["changed_files"] < 1:
         raise ValueError("pull request is not open or has no changes")
-    if (issue_url or run_url) not in (pr.get("body") or ""):
-        raise ValueError("pull request does not reference this task")
+    body = pr.get("body") or ""
+    for required_url in (issue_url, run_url):
+        if required_url and not re.search(re.escape(required_url) + r"(?![A-Za-z0-9_/-])", body):
+            raise ValueError("pull request does not reference this task and run")
     return url
 
 

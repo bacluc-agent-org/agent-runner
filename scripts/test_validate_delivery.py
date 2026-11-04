@@ -16,7 +16,7 @@ def output(kind="report", summary=SUMMARY, url=""):
 
 def fetch(path):
     assert path == "repos/org/repo/pulls/5"
-    return {"state": "open", "changed_files": 2, "body": f"Fixes {ISSUE}"}
+    return {"state": "open", "changed_files": 2, "body": f"Fixes {ISSUE} in {RUN}"}
 
 
 def test_code_requires_matching_nonempty_real_pr():
@@ -41,6 +41,8 @@ def test_incomplete_placeholder_duplicate_and_branch_only_fail():
             validate_delivery(text, ISSUE, RUN, "", False, fetch)
     with pytest.raises(ValueError):
         validate_delivery(output(), "", RUN, "", True, fetch)
+    with pytest.raises(ValueError):
+        validate_delivery(output(summary="placeholder " * 8), "", RUN, "", False, fetch)
 
 
 def test_workflow_rejects_fatal_and_recovery_failures_before_delivery():
@@ -53,3 +55,24 @@ def test_workflow_rejects_fatal_and_recovery_failures_before_delivery():
     assert '-f "$RUNNER_TEMP/opencode-fatal.json"' in gate
     assert "steps.delivery.outcome" in workflow
     assert "ref: ${{ github.repository == 'bacluc-agent-org/agent-runner' && github.sha || '' }}" in workflow
+
+
+def test_code_must_be_this_run_and_not_recovery_branch():
+    valid = {"state": "open", "changed_files": 1, "body": f"{ISSUE}\n{RUN}"}
+    assert validate_delivery(output("code", url=PR), ISSUE, RUN, "", False, lambda _: valid) == PR
+    for body, pushed in ((f"{ISSUE}\n{RUN}", True), (ISSUE, False), (f"{ISSUE}0\n{RUN}", False), (f"{ISSUE}\n{RUN}4", False)):
+        with pytest.raises(ValueError):
+            validate_delivery(output("code", url=PR), ISSUE, RUN, "", pushed, lambda _: {**valid, "body": body})
+
+
+def test_report_can_name_todo_repository():
+    summary = "Investigated bacluc-agent/agent-todo and identified provider authentication failures affecting scheduled runs."
+    assert validate_delivery(output(summary=summary), "", RUN, "", False, fetch) == ""
+
+
+def test_human_feedback_compared_before_progress_update():
+    from pathlib import Path
+    workflow = (Path(__file__).parents[1] / ".github/workflows/opencode.yml").read_text()
+    report = workflow[workflow.index("      - name: Post run-result comment"):]
+    assert report.index("bot_comment_updated=$(gh api") < report.index('scripts/update_progress_comment.py"')
+    assert report.index("last_human_comment=$(gh issue view") < report.index('scripts/update_progress_comment.py"')

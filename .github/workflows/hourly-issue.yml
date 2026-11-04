@@ -259,7 +259,7 @@ jobs:
               selection_status=1
               fatal_marker=1
             fi
-            if (( selection_status == 0 )) && ! python3 scripts/selection_tiers.py --candidates "$enriched" --branches "$RUNNER_TEMP/branches.txt" --tail-file "$RUNNER_TEMP/tail.txt" --validate "$selection"; then
+            if (( selection_status == 0 )) && ! python3 scripts/selection_tiers.py --candidates "$enriched" --branches "$RUNNER_TEMP/branches.txt" --tail-file "$RUNNER_TEMP/tail.txt" --validate "$selection" --fallback-repository "$ISSUE_REPOSITORY"; then
               selection_status=1
             fi
             printf 'Issue selector duration: model=%s seconds=%s exit=%s fatal_marker=%s\n' "$selection_model" "$((SECONDS - selection_started))" "$selection_command_status" "$fatal_marker"

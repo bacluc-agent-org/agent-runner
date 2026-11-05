@@ -7,6 +7,10 @@ from selection_tiers import Candidate, parse_branches, render_prompt
 WORKFLOW = Path(__file__).parents[1] / ".github/workflows/hourly-issue.yml"
 
 
+def test_issue_runner_is_scheduled_hourly():
+    assert '    - cron: "37 * * * *"' in WORKFLOW.read_text()
+
+
 def candidate(number=1, **values):
     defaults = dict(
         number=number,
@@ -163,14 +167,16 @@ def test_setup_opencode_pins_cli_version_verified_with_chatgpt_oauth():
     assert "npm install --global @opencode/cli@2.2.5" in setup
 
 
-def test_setup_opencode_refreshes_tokens_outside_opencode_and_starts_aisix():
+def test_setup_opencode_uses_stored_token_without_refresh_and_starts_aisix():
     root = Path(__file__).parents[1]
     setup = (root / ".github/actions/setup-opencode/action.yml").read_text()
-    assert "python3 scripts/refresh-token.py" in setup
+    assert "python3 scripts/refresh-token.py" not in setup
+    assert "gh secret set CHATGPT_ACCESS_TOKEN" not in setup
+    assert "gh secret set CHATGPT_REFRESH_TOKEN" not in setup
+    assert 'if [[ -z "${OPENAI_ACCESS_TOKEN:-}" ]]' in setup
     assert "# renovate: datasource=docker depName=ghcr.io/api7/aisix\n        AISIX_VERSION=1.8.0" in setup
     assert 'AISIX_IMAGE="ghcr.io/api7/aisix:$AISIX_VERSION"' in setup
-    assert "CHATGPT_ACCESS_TOKEN" in setup
-    assert "CHATGPT_REFRESH_TOKEN" in setup
+    assert "OPENAI_ACCESS_TOKEN" in setup
     assert "Materialize OpenCode auth" not in setup
 
 
@@ -184,3 +190,52 @@ def test_selection_tail_requires_fast_tool_free_selection():
     assert "do not run commands, browse, fetch URLs, or look up issues or pull requests during selection" in agent
     assert "choose the best-so-far candidate" in tail
     assert 'note the doubt inside the implementation prompt' in tail
+
+
+def test_validate_selection_accepts_unambiguous_inline_marker_and_all_candidates():
+    from selection_tiers import validate_selection
+
+    normalized, number = validate_selection("Implement the issue. SELECTED_ISSUE: 61", set(range(1, 101)))
+    assert number == 61
+    assert normalized.endswith("\nSELECTED_ISSUE: 61\n")
+
+
+def test_validate_selection_rejects_invalid_or_empty_prompts():
+    import pytest
+    from selection_tiers import validate_selection
+
+    for text in ("", "SELECTED_ISSUE: 1", "do work", "work SELECTED_ISSUE: 2", "work SELECTED_ISSUE: 1 SELECTED_ISSUE: 2", "work SELECTED_ISSUE: 1 SELECTED_ISSUE: 1"):
+        with pytest.raises(ValueError):
+            validate_selection(text, {1})
+
+
+def test_fallback_avoids_recent_and_uses_only_candidates():
+    from selection_tiers import fallback_candidate
+
+    assert fallback_candidate([candidate(1, recent_attempts=1), candidate(2)]).number == 2
+    assert fallback_candidate([]) is None
+
+
+def test_selection_cli_never_forwards_conflicting_selector_prompt(tmp_path):
+    import json
+
+    candidates = tmp_path / "candidates.json"
+    branches = tmp_path / "branches.txt"
+    tail = tmp_path / "tail.txt"
+    selection = tmp_path / "selection.txt"
+    candidates.write_text(json.dumps([{"number": 219}, {"number": 220}]))
+    branches.write_text("")
+    tail.write_text("")
+    selection.write_text("Implement issue 220. SELECTED_ISSUE: 219")
+    run(["python3", "scripts/selection_tiers.py", "--candidates", str(candidates), "--branches", str(branches), "--tail-file", str(tail), "--validate", str(selection), "--fallback-repository", "org/todo"], check=True)
+    assert "issue 220" not in selection.read_text()
+    assert "https://github.com/org/todo/issues/219" in selection.read_text()
+
+
+def test_fallback_breaks_recent_ties_by_total_attempts(monkeypatch):
+    import random
+    from selection_tiers import fallback_candidate
+
+    monkeypatch.setattr(random, "choice", lambda candidates: candidates[0])
+    assert fallback_candidate([candidate(1, attempts=1), candidate(2, attempts=0)]).number == 2
+    assert fallback_candidate([candidate(3, attempts=5), candidate(4, attempts=0, recent_attempts=1)]).number == 3

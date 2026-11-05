@@ -315,6 +315,8 @@ def test_refresh_workflow_uses_generic_oauth_tokens_without_opencode_validation(
     assert "CHATGPT_ACCESS_TOKEN" in workflow
     assert "CHATGPT_REFRESH_TOKEN" in workflow
     assert "Validate refreshed token with opencode" not in workflow
+    assert '- cron: "0,30 * * * *"' in workflow
+    assert "concurrency:\n  group: chatgpt-oauth-refresh\n  cancel-in-progress: false" in workflow
 
 
 def test_force_fallback_input_gates_the_refresh_step():

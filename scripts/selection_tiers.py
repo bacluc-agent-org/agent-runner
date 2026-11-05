@@ -50,11 +50,37 @@ def render_prompt(candidates: list[Candidate], tail_text: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+
+def validate_selection(text: str, numbers: set[int]) -> tuple[str, int]:
+    matches = list(re.finditer(r"\bSELECTED_ISSUE:\s*(\d+)\b", text))
+    if len(matches) != 1 or len(re.findall(r"\bSELECTED_ISSUE:", text)) != 1:
+        raise ValueError("expected exactly one issue marker")
+    match = matches[0]
+    number = int(match.group(1))
+    prompt = (text[:match.start()] + text[match.end():]).strip()
+    if number not in numbers or not prompt:
+        raise ValueError("selection must contain a prompt and an eligible issue")
+    return f"{prompt}\nSELECTED_ISSUE: {number}\n", number
+
+
+def implementation_prompt(repository: str, number: int) -> str:
+    url = f"https://github.com/{repository}/issues/{number}"
+    return f"Implement {url}. Read the full issue body and related pull requests before working. Follow repository instructions and report the outcome.\nSELECTED_ISSUE: {number}\n"
+
+
+def fallback_candidate(candidates: list[Candidate]) -> Candidate | None:
+    if not candidates:
+        return None
+    best = min((candidate.recent_attempts, candidate.attempts) for candidate in candidates)
+    return random.choice([candidate for candidate in candidates if (candidate.recent_attempts, candidate.attempts) == best])
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--candidates", required=True)
     parser.add_argument("--branches", required=True)
     parser.add_argument("--tail-file", required=True)
+    parser.add_argument("--validate")
+    parser.add_argument("--fallback-repository")
     args = parser.parse_args()
     issues = json.loads(Path(args.candidates).read_text())
     runs = parse_branches(Path(args.branches).read_text().splitlines())
@@ -75,6 +101,22 @@ def main() -> None:
             body=issue.get("body") or "",
         )
         candidates.append(candidate)
+    if args.validate:
+        try:
+            normalized, number = validate_selection(Path(args.validate).read_text(), {candidate.number for candidate in candidates})
+            if args.fallback_repository:
+                normalized = implementation_prompt(args.fallback_repository, number)
+        except ValueError as error:
+            print(error, file=sys.stderr)
+            sys.exit(1)
+        Path(args.validate).write_text(normalized)
+        return
+    if args.fallback_repository:
+        candidate = fallback_candidate(candidates)
+        if candidate is None:
+            sys.exit(1)
+        print(implementation_prompt(args.fallback_repository, candidate.number), end="")
+        return
     for candidate in candidates:
         print(f"attempts for {candidate.number}: {candidate.attempts}", file=sys.stderr)
     print(render_prompt(candidates, Path(args.tail_file).read_text()), end="")

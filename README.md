@@ -34,7 +34,7 @@ anything.
 2. **The issue is refined** (hourly, at minute 7). The _issue-refiner_ agent
    rewrites the issue body into two clear sections — `## Goal` and
    `## How to implement` — and labels it `ready-for-implementation`.
-3. **An issue is selected** (hourly, at minute 24). The _issue-selector_
+3. **An issue is selected** (hourly, at minute 37). The _issue-selector_
    agent picks one ready issue, claims it with `agent-running` for the run, and
    writes the implementation prompt for the next step. The claim is removed
    when the run ends.
@@ -56,7 +56,7 @@ anything.
 ```text
 idea (issue in agent-todo)
   → refine (hourly :07)
-  → select (hourly :24)
+  → select (hourly :37)
   → implement (coordinator agent)
   → pull request (opened by the agent, when code changed)
   → review comments → fixes (every 4 h)
@@ -71,18 +71,18 @@ idea (issue in agent-todo)
 | ------------------------------ | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ci.yml`                       | every push to `main` and every pull request | Quality gate: runs the completion check (formatting, workflow lint, tests). Nothing merges if this fails.                                                                                               |
 | `refine-issues.yml`            | hourly at minute 7                          | Rewrites vague issues into `## Goal` + `## How to implement` and labels them `ready-for-implementation`.                                                                                                |
-| `hourly-issue.yml`             | hourly at minute 24                         | Picks one ready issue, claims it with `agent-running` for the run, and starts the implementation.                                                                                                       |
+| `hourly-issue.yml`             | hourly at minute 37                         | Picks one ready issue, claims it with `agent-running` for the run, and starts the implementation.                                                                                                       |
 | `opencode.yml`                 | called by the other workflows               | The core runner: checks model availability, selects a model, runs the coordinator agent, pushes the work, keeps one structured progress comment on the issue, and only short replies to human comments. |
 | `review-fixes.yml`             | every 4 hours at minute 32                  | Finds open pull requests with review comments and re-dispatches the agent to apply them.                                                                                                                |
-| `refresh-chatgpt-auth.yml`     | 1st and 15th of each month                  | Keeps the OpenAI login working by refreshing the OAuth token (browser login as fallback).                                                                                                               |
+| `refresh-chatgpt-auth.yml`     | Every 30 minutes                            | Sole workflow that refreshes and stores the OAuth tokens (browser login as fallback); refresh runs are serialized.                                                                                      |
 | `invite-owner.yml`             | daily at minute 23 after 04:00 UTC          | Invites the `FORK_INVITE_USER` GitHub user with `push` permission to every `bacluc-agent` repository that does not already have them as collaborator.                                                   |
 | `renew-interaction-limits.yml` | 1st of each month                           | Renews the repository interaction limit so collaborators can keep working.                                                                                                                              |
 
 ### Actions (reusable building blocks)
 
 - `setup-opencode` — installs the OpenCode CLI, copies shared agent
-  configuration from `bacluc/provision-machines`, refreshes ChatGPT OAuth
-  outside OpenCode, and routes OpenAI requests through per-job AISIX.
+  configuration from `bacluc/provision-machines`, and routes the stored
+  ChatGPT access token through per-job AISIX without rotating tokens.
 - `model-availability` — probes which AI models currently work and stores the
   result in a cache issue in the todo repository. It discovers ChatGPT/Codex
   models with the standalone OAuth bearer token and probes them through AISIX.
@@ -172,17 +172,17 @@ Set these in Settings → Secrets and variables → Actions → Variables:
 Secrets are stored in Settings → Secrets and variables → Actions → Secrets.
 Never print their values.
 
-| Group                           | Secret                                                                     | Used for                                                                       |
-| ------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| GitHub access                   | `BACLUC_AGENT_GITHUB_TOKEN`                                                | All issue, PR, and workflow operations                                         |
-| GitHub access                   | `FORK_INVITE_USER`                                                         | Fallback for the `FORK_INVITE_USER` variable (variable wins when both are set) |
-| AI providers                    | `OPENCODE_GO_API_KEY`, `OPENCODE_GO_2_API_KEY`, `OPENROUTER_API_KEY`       | API keys for the AI model providers                                            |
-| ChatGPT OAuth                   | `CHATGPT_ACCESS_TOKEN`, `CHATGPT_REFRESH_TOKEN`                            | Independent bearer and rotating refresh tokens, updated by agent workflows     |
-| ChatGPT OAuth                   | `OPENAI_OAUTH_CLIENT_ID`                                                   | Optional client-ID override; defaults to the OpenCode public client ID         |
-| Legacy migration                | `OPENCODE_AUTH_JSON`                                                       | Bootstrap source until the independent token secrets are set                   |
-| Web search                      | `BRAVE_API_KEY`                                                            | API key for the `brave-search` MCP server (optional)                           |
-| OpenAI login (ChatGPT fallback) | `CHATGPT_EMAIL`, `CHATGPT_PASSWORD`, `CHATGPT_2FA_KEY`, `CHATGPT_TOTP_KEY` | Browser login fallback with a ChatGPT account                                  |
-| OpenAI login (OpenAI fallback)  | `OPENAI_USERNAME`, `OPENAI_PASSWORD`, `OPENAI_2FA_KEY`                     | Browser login fallback with an OpenAI account                                  |
+| Group                           | Secret                                                                     | Used for                                                                                   |
+| ------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| GitHub access                   | `BACLUC_AGENT_GITHUB_TOKEN`                                                | All issue, PR, and workflow operations                                                     |
+| GitHub access                   | `FORK_INVITE_USER`                                                         | Fallback for the `FORK_INVITE_USER` variable (variable wins when both are set)             |
+| AI providers                    | `OPENCODE_GO_API_KEY`, `OPENCODE_GO_2_API_KEY`, `OPENROUTER_API_KEY`       | API keys for the AI model providers                                                        |
+| ChatGPT OAuth                   | `CHATGPT_ACCESS_TOKEN`, `CHATGPT_REFRESH_TOKEN`                            | Independent bearer and rotating refresh tokens, updated only by `refresh-chatgpt-auth.yml` |
+| ChatGPT OAuth                   | `OPENAI_OAUTH_CLIENT_ID`                                                   | Optional client-ID override; defaults to the OpenCode public client ID                     |
+| Legacy migration                | `OPENCODE_AUTH_JSON`                                                       | Bootstrap source until the independent token secrets are set                               |
+| Web search                      | `BRAVE_API_KEY`                                                            | API key for the `brave-search` MCP server (optional)                                       |
+| OpenAI login (ChatGPT fallback) | `CHATGPT_EMAIL`, `CHATGPT_PASSWORD`, `CHATGPT_2FA_KEY`, `CHATGPT_TOTP_KEY` | Browser login fallback with a ChatGPT account                                              |
+| OpenAI login (OpenAI fallback)  | `OPENAI_USERNAME`, `OPENAI_PASSWORD`, `OPENAI_2FA_KEY`                     | Browser login fallback with an OpenAI account                                              |
 
 ## Completion check
 

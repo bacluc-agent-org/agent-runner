@@ -14,12 +14,14 @@ on:
         type: boolean
         default: false
   schedule:
-    # Twice a month (~half of the refresh token lifetime). The refresh step
-    # rotates the token, so it never gets close to expiry.
-    - cron: "0 0 1,15 * *"
+    - cron: "0,30 * * * *"
 
 permissions:
   contents: read
+
+concurrency:
+  group: chatgpt-oauth-refresh
+  cancel-in-progress: false
 
 jobs:
   refresh:

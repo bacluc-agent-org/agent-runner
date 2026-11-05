@@ -1456,7 +1456,7 @@ class TestModelAvailabilityAction:
         assert "auth.json" not in action
         assert "python3" in action
 
-    def test_free_probe_uses_materialized_auth_without_raw_secret_environment(self, tmp_path, monkeypatch):
+    def test_free_probe_uses_materialized_auth_without_raw_secret_environment(self, tmp_path, monkeypatch, capsys):
         auth_file = tmp_path / ".local/share/opencode/auth.json"
         auth_file.parent.mkdir(parents=True)
         auth_file.write_text('{"openai":{"type":"oauth","access":"safe-access","refresh":"safe-refresh","expires":123}}')
@@ -1465,6 +1465,11 @@ class TestModelAvailabilityAction:
         env = model_availability.opencode_env("opencode/example-free")
         assert "OPENCODE_AUTH_CONTENT" not in env
         assert '"access":"safe-access"' in auth_file.read_text()
+        probe_logs = tmp_path / "model-probes"
+        probe_logs.mkdir()
+        (probe_logs / "probe-opencode-example-free.log").write_text("safe-access safe-refresh")
+        model_availability.log_failed_free_probes({"opencode/example-free": False}, str(tmp_path))
+        assert "safe-access" not in capsys.readouterr().err
 
     def test_model_discovery_reads_oauth_token_file_without_passing_it_to_opencode(self, tmp_path, monkeypatch):
         token_file = tmp_path / "access-token"

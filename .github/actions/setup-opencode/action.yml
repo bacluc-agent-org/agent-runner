@@ -114,7 +114,7 @@ runs:
         printf '::add-mask::%s\n' "${OPENAI_REFRESH_TOKEN:-}"
         printf '::add-mask::%s\n' "${OPENCODE_AUTH_CONTENT:-}"
         if [[ -n "${OPENCODE_AUTH_CONTENT:-}" ]]; then
-          OPENCODE_AUTH_CONTENT="$OPENCODE_AUTH_CONTENT" python3 -c 'import os; from opencode_auth import write_auth_content; write_auth_content(os.environ["OPENCODE_AUTH_CONTENT"])'
+          PYTHONPATH="$GITHUB_WORKSPACE/scripts" OPENCODE_AUTH_CONTENT="$OPENCODE_AUTH_CONTENT" python3 -c 'import os; from opencode_auth import write_auth_content; write_auth_content(os.environ["OPENCODE_AUTH_CONTENT"])'
         fi
         if [[ -z "${OPENAI_REFRESH_TOKEN:-}" && -z "${OPENCODE_AUTH_CONTENT:-}" ]]; then
           printf 'ChatGPT OAuth credentials are not configured; skipping AISIX startup\n'

@@ -816,16 +816,16 @@ class TestCandidatePriority:
         assert model_availability.candidate_priority("opencode-go-openai-2/qwen3.8-flash") == 1
 
     def test_opencode_free_before_openrouter_free(self):
-        assert model_availability.candidate_priority("opencode/a-free") == 2
+        assert model_availability.candidate_priority("opencode/a-free") == 1
         assert model_availability.candidate_priority("openrouter/zai/GLM-4.5:free") == 3
 
     def test_opencode_paid(self):
         assert model_availability.candidate_priority("opencode/paid-model") == 4
 
     def test_openai_models(self):
-        assert model_availability.candidate_priority("openai/gpt-5.6-luna") == 1
-        assert model_availability.candidate_priority("openai/gpt-6-luna") == 1
-        assert model_availability.candidate_priority("openai/gpt-5.4") == 1
+        assert model_availability.candidate_priority("openai/gpt-5.6-luna") == 2
+        assert model_availability.candidate_priority("openai/gpt-6-luna") == 2
+        assert model_availability.candidate_priority("openai/gpt-5.4") == 2
 
     def test_go_openai_providers(self):
         assert model_availability.candidate_priority("opencode-go-openai/glm-5.3") == 5
@@ -846,7 +846,7 @@ class TestCandidatePriority:
         assert model_availability.candidate_priority("opencode-go-openai-2/glm-5.3") == 5
 
     def test_openai_non_gpt_priority(self):
-        assert model_availability.candidate_priority("openai/other-model") == 1
+        assert model_availability.candidate_priority("openai/other-model") == 2
 
     def test_go_anthropic_providers(self):
         assert model_availability.candidate_priority("opencode-go-anthropic/glm-5.3") == 6
@@ -869,8 +869,8 @@ class TestPrioritizeCandidates:
         assert model_availability.prioritize_candidates(candidates) == [
             "opencode/big-pickle",
             "opencode-go-openai/qwen3.8-flash",
-            "openai/gpt-6-luna",
             "opencode/a-free",
+            "openai/gpt-6-luna",
             "openrouter/anthropic/claude-sonnet-4.5",
         ]
 
@@ -880,6 +880,17 @@ class TestPrioritizeCandidates:
 
 
 class TestSelectPending:
+    def test_free_opencode_candidates_fit_budget_before_many_openai_models(self):
+        now = datetime(2026, 9, 6, 15, 0, tzinfo=timezone.utc)
+        candidates = [f"openai/gpt-{i}" for i in range(model_availability.PROBE_BUDGET)]
+        candidates.extend(["opencode/free-a-free", "opencode/free-b-free"])
+
+        pending, skipped = model_availability.select_pending(candidates, {}, now)
+
+        assert pending[:2] == ["opencode/free-a-free", "opencode/free-b-free"]
+        assert len(pending) == model_availability.PROBE_BUDGET
+        assert skipped == 2
+
     def test_stale_highest_priority_first(self):
         now = datetime(2026, 9, 6, 15, 0, tzinfo=timezone.utc)
         cache = {

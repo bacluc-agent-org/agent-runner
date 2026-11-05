@@ -5,14 +5,8 @@ on:
     paths:
       - ".github/workflows/refresh-chatgpt-auth.yml"
       - "scripts/refresh-token.py"
-      - "scripts/chatgpt-login.py"
       - "scripts/opencode_auth.py"
   workflow_dispatch:
-    inputs:
-      force_fallback:
-        description: Skip the token-refresh path and exercise the browser/primitives fallbacks
-        type: boolean
-        default: false
   schedule:
     # Twice a month (~half of the refresh token lifetime). The refresh step
     # rotates the token, so it never gets close to expiry.
@@ -33,61 +27,42 @@ jobs:
         with:
           token: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
 
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-
-      - name: Install dependencies
-        run: uv sync --all-extras
-
-      - name: Install playwright browsers
-        run: uv run playwright install --with-deps chrome
-
       - name: Try token refresh (no browser)
         id: refresh
-        if: ${{ !inputs.force_fallback }}
-        continue-on-error: true
         env:
-          OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON }}
+          OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON_V1 }}
         run: |
           set -Eeuo pipefail
+          umask 077
           set +e
-          uv run scripts/refresh-token.py > "$RUNNER_TEMP/auth.json" 2> "$RUNNER_TEMP/refresh-token.stderr"
+          python3 scripts/refresh-token.py > "$RUNNER_TEMP/auth.json" 2> "$RUNNER_TEMP/refresh-token.stderr"
           status=$?
           set -e
-          if (( status == 0 )); then
-            auth_json=$(cat "$RUNNER_TEMP/auth.json")
-            [[ -n "${auth_json:-}" ]] && printf '::add-mask::%s\n' "$auth_json"
-            printf '%s\n' "$auth_json" | jq -e '.openai.type == "oauth" and .openai.access != "" and .openai.refresh != "" and (.openai.expires | type == "number")' >/dev/null
-            echo "refreshed=true" >> "$GITHUB_OUTPUT"
-            printf 'Auth candidate produced via refresh token, validating with opencode\n'
-          else
-            stop_token="$(openssl rand -hex 32)"
-            : "${stop_token:?stop-commands fence token generation failed}"
-            printf '::stop-commands::%s\n' "$stop_token"
-            cat "$RUNNER_TEMP/refresh-token.stderr" >&2
-            printf '::%s::\n' "$stop_token"
-            printf 'Refresh token invalid, falling back to browser login\n'
+          if (( status != 0 )); then
+            printf '::error::OpenCode v1 token refresh failed; the dedicated secret was not changed.\n' >&2
+            exit "$status"
           fi
+          auth_json=$(cat "$RUNNER_TEMP/auth.json")
+          [[ -n "${auth_json:-}" ]] && printf '::add-mask::%s\n' "$auth_json"
+          printf '%s\n' "$auth_json" | jq -e '.openai.type == "oauth" and .openai.access != "" and .openai.refresh != "" and (.openai.expires | type == "number")' >/dev/null
+          echo "refreshed=true" >> "$GITHUB_OUTPUT"
+          printf 'Auth candidate produced via refresh token, validating with OpenCode v1\n'
 
       - name: Validate refreshed token with opencode
         id: validate
         if: steps.refresh.outputs.refreshed == 'true'
         run: |
           set -Eeuo pipefail
+          umask 077
           npm install --global opencode-ai@1.18.32
-          mkdir -p ~/.local/share/opencode
-          cp "$RUNNER_TEMP/auth.json" ~/.local/share/opencode/auth.json
+          install -d -m 700 "$HOME/.local/share/opencode"
+          install -m 600 "$RUNNER_TEMP/auth.json" "$HOME/.local/share/opencode/auth.json"
           set +e
           opencode --pure run --model openai/gpt-5.6-luna "Respond with exactly OK." > "$RUNNER_TEMP/opencode-validate.log" 2>&1
           status=$?
           set -e
           if (( status != 0 )); then
-            stop_token="$(openssl rand -hex 32)"
-            : "${stop_token:?stop-commands fence token generation failed}"
-            printf '::stop-commands::%s\n' "$stop_token"
-            cat "$RUNNER_TEMP/opencode-validate.log"
-            printf '::%s::\n' "$stop_token"
-            echo "refreshed=false" >> "$GITHUB_OUTPUT"
-            printf 'Refreshed token rejected by opencode, falling back to browser login\n'
+            printf '::error::OpenCode v1 rejected the refreshed credential; the dedicated secret was not changed.\n' >&2
             exit 1
           else
             printf 'Refreshed token accepted by opencode\n'
@@ -99,54 +74,6 @@ jobs:
           set -Eeuo pipefail
           auth_json=$(cat "$RUNNER_TEMP/auth.json")
           [[ -n "${auth_json:-}" ]] && printf '::add-mask::%s\n' "$auth_json"
-          GH_TOKEN="$BACLUC_AGENT_GITHUB_TOKEN" gh secret set OPENCODE_AUTH_JSON --repo "$GITHUB_REPOSITORY" --body "$auth_json"
+          unset auth_json
+          GH_TOKEN="$BACLUC_AGENT_GITHUB_TOKEN" gh secret set OPENCODE_AUTH_JSON_V1 --repo "$GITHUB_REPOSITORY" < "$RUNNER_TEMP/auth.json"
           printf 'Auth refreshed via refresh token\n'
-
-      - name: Browser login (fallback)
-        id: browser-login
-        if: ${{ !cancelled() && (steps.refresh.outputs.refreshed != 'true' || steps.validate.outcome != 'success') }}
-        env:
-          OPENAI_USERNAME: ${{ secrets.OPENAI_USERNAME }}
-          OPENAI_PASSWORD: ${{ secrets.OPENAI_PASSWORD }}
-          OPENAI_2FA_KEY: ${{ secrets.OPENAI_2FA_KEY }}
-        run: |
-          set -Eeuo pipefail
-          set +e
-          xvfb-run -a uv run scripts/chatgpt-login.py > "$RUNNER_TEMP/auth.json" 2> "$RUNNER_TEMP/chatgpt-login.stderr"
-          status=$?
-          set -e
-          if (( status != 0 )); then
-            printf 'Browser login failed; authentication output suppressed.\n' >&2
-            exit "$status"
-          fi
-          # xvfb-run merges the script's stderr into stdout, so drop the
-          # [chatgpt-login] step-log lines before validating the JSON.
-          auth_json=$(grep -v '^\[chatgpt-login\]' "$RUNNER_TEMP/auth.json")
-          [[ -n "${auth_json:-}" ]] && printf '::add-mask::%s\n' "$auth_json"
-          printf '%s\n' "$auth_json" | jq -e '.openai.type == "oauth" and .openai.access != "" and .openai.refresh != "" and (.openai.expires | type == "number")' >/dev/null
-          GH_TOKEN="$BACLUC_AGENT_GITHUB_TOKEN" gh secret set OPENCODE_AUTH_JSON --repo "$GITHUB_REPOSITORY" --body "$auth_json"
-          printf 'Auth refreshed via browser login\n'
-
-      - name: Agent-usable primitives fallback (start/status/step)
-        if: ${{ !cancelled() && steps.browser-login.outcome == 'failure' }}
-        env:
-          CHATGPT_EMAIL: ${{ secrets.CHATGPT_EMAIL || secrets.OPENAI_USERNAME }}
-          CHATGPT_PASSWORD: ${{ secrets.CHATGPT_PASSWORD || secrets.OPENAI_PASSWORD }}
-          CHATGPT_2FA_KEY: ${{ secrets.CHATGPT_2FA_KEY || secrets.OPENAI_2FA_KEY }}
-          OPENAI_USERNAME: ${{ secrets.OPENAI_USERNAME }}
-          OPENAI_PASSWORD: ${{ secrets.OPENAI_PASSWORD }}
-          OPENAI_2FA_KEY: ${{ secrets.OPENAI_2FA_KEY }}
-          CHATGPT_TOTP_KEY: ${{ secrets.CHATGPT_TOTP_KEY }}
-        run: |
-          set -Eeuo pipefail
-          # Fallback: use agent-usable primitives to try login manually
-          # start launches Chrome with CDP, status reports step, step performs one action
-          echo "Agent fallback: attempting login via primitives..."
-          stop_token="$(openssl rand -hex 32)"
-          : "${stop_token:?stop-commands fence token generation failed}"
-          printf '::stop-commands::%s\n' "$stop_token"
-          uv run scripts/chatgpt-login.py start || true
-          uv run scripts/chatgpt-login.py status || true
-          uv run scripts/chatgpt-login.py step || true
-          printf '::%s::\n' "$stop_token"
-          printf 'Agent primitives fallback attempted\n'

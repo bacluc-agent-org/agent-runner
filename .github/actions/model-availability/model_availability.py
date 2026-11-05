@@ -9,8 +9,9 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
-from urllib.parse import urlsplit
 from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import urlsplit
 
 AVAILABLE_TTL_HOURS = 24
 # Trade-off: 1h re-probes failures twice as often, halving recovery latency for wrongly-marked models.
@@ -115,6 +116,25 @@ def parse_whitelisted_models(opencode_models_output: str) -> list[str]:
             continue
         (free if is_whitelisted(model_id or provider, FREE_PATTERNS) else rest).append(line)
     return sorted(set(free)) + sorted(set(rest))
+
+
+def has_valid_openai_auth() -> bool:
+    auth_path = Path.home() / ".local" / "share" / "opencode" / "auth.json"
+    try:
+        auth = json.loads(auth_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(auth, dict) or not isinstance(auth.get("openai"), dict):
+        return False
+    openai_auth = auth["openai"]
+    return (
+        openai_auth.get("type") == "oauth"
+        and isinstance(openai_auth.get("access"), str)
+        and bool(openai_auth["access"])
+        and isinstance(openai_auth.get("refresh"), str)
+        and bool(openai_auth["refresh"])
+        and type(openai_auth.get("expires")) in (int, float)
+    )
 
 
 def parse_go_model_ids(models_json: str) -> list[str]:
@@ -236,6 +256,10 @@ def discover_models() -> tuple[list[str], dict[str, list[str]]]:
     except OSError:
         pass
     whitelisted_models = parse_whitelisted_models(result.stdout)
+    if not has_valid_openai_auth():
+        whitelisted_models = [
+            model for model in whitelisted_models if not model.startswith("openai/")
+        ]
     provider_config = load_provider_config()
     base_urls = {
         name: info["baseURL"]

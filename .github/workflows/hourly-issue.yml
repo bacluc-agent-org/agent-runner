@@ -44,7 +44,6 @@ jobs:
       OPENCODE_GO_2_API_KEY: ${{ secrets.OPENCODE_GO_2_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
-      OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON }}
       ISSUE_REPOSITORY: ${{ vars.ISSUE_REPOSITORY || github.repository }}
       MODEL_AVAILABILITY_CACHE_ISSUE: ${{ vars.MODEL_AVAILABILITY_CACHE_ISSUE }}
       GITHUB_FORK_INVITE_USER: ${{ vars.FORK_INVITE_USER || secrets.FORK_INVITE_USER }}
@@ -87,7 +86,6 @@ jobs:
           printf '::add-mask::%s\n' "$GITHUB_TOKEN"
           printf '::add-mask::%s\n' "$OPENCODE_GO_API_KEY"
           printf '::add-mask::%s\n' "$OPENCODE_GO_2_API_KEY"
-          printf '::add-mask::%s\n' "$OPENCODE_AUTH_CONTENT"
 
           if ! gh label create agent-running -R "$ISSUE_REPOSITORY" \
             --color 0E8A16 --description 'Selected by the hourly issue runner' --force; then

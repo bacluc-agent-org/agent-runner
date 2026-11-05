@@ -5,6 +5,7 @@ Used by scripts/chatgpt-login.py (browser login) and scripts/refresh-token.py
 primary and fallback credential paths.
 """
 import json
+import os
 from pathlib import Path
 
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -27,5 +28,13 @@ def build_auth_json(access: str, refresh: str, expires: int) -> dict:
 def write_auth_file(auth: dict, path: Path | None = None) -> Path:
     dest = path or Path.home() / ".local" / "share" / "opencode" / "auth.json"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(json.dumps(auth), encoding="utf-8")
+    fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            fd = -1
+            stream.write(json.dumps(auth))
+    finally:
+        if fd != -1:
+            os.close(fd)
     return dest

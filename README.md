@@ -74,7 +74,7 @@ idea (issue in agent-todo)
 | `hourly-issue.yml`             | hourly at minute 24                         | Picks one ready issue, claims it with `agent-running` for the run, and starts the implementation.                                                                                                       |
 | `opencode.yml`                 | called by the other workflows               | The core runner: checks model availability, selects a model, runs the coordinator agent, pushes the work, keeps one structured progress comment on the issue, and only short replies to human comments. |
 | `review-fixes.yml`             | every 4 hours at minute 32                  | Finds open pull requests with review comments and re-dispatches the agent to apply them.                                                                                                                |
-| `refresh-chatgpt-auth.yml`     | 1st and 15th of each month                  | Keeps the OpenAI login working by refreshing the OAuth token (browser login as fallback).                                                                                                               |
+| `refresh-chatgpt-auth.yml`     | 1st and 15th of each month                  | Refreshes the dedicated OpenCode v1 OAuth secret after validating the rotated credential; it fails closed without browser or legacy-secret fallback.                                                    |
 | `renew-interaction-limits.yml` | 1st of each month                           | Renews the repository interaction limit so collaborators can keep working.                                                                                                                              |
 
 ### Actions (reusable building blocks)
@@ -167,15 +167,20 @@ Set these in Settings → Secrets and variables → Actions → Variables:
 Secrets are stored in Settings → Secrets and variables → Actions → Secrets.
 Never print their values.
 
-| Group                           | Secret                                                                     | Used for                                                                       |
-| ------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| GitHub access                   | `BACLUC_AGENT_GITHUB_TOKEN`                                                | All issue, PR, and workflow operations                                         |
-| GitHub access                   | `FORK_INVITE_USER`                                                         | Fallback for the `FORK_INVITE_USER` variable (variable wins when both are set) |
-| AI providers                    | `OPENCODE_GO_API_KEY`, `OPENCODE_GO_2_API_KEY`, `OPENROUTER_API_KEY`       | API keys for the AI model providers                                            |
-| OpenAI login                    | `OPENCODE_AUTH_JSON`                                                       | The OpenAI OAuth credential (refreshed automatically)                          |
-| Web search                      | `BRAVE_API_KEY`                                                            | API key for the `brave-search` MCP server (optional)                           |
-| OpenAI login (ChatGPT fallback) | `CHATGPT_EMAIL`, `CHATGPT_PASSWORD`, `CHATGPT_2FA_KEY`, `CHATGPT_TOTP_KEY` | Browser login fallback with a ChatGPT account                                  |
-| OpenAI login (OpenAI fallback)  | `OPENAI_USERNAME`, `OPENAI_PASSWORD`, `OPENAI_2FA_KEY`                     | Browser login fallback with an OpenAI account                                  |
+| Group                | Secret                                                               | Used for                                                                                    |
+| -------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| GitHub access        | `BACLUC_AGENT_GITHUB_TOKEN`                                          | All issue, PR, and workflow operations                                                      |
+| GitHub access        | `FORK_INVITE_USER`                                                   | Fallback for the `FORK_INVITE_USER` variable (variable wins when both are set)              |
+| AI providers         | `OPENCODE_GO_API_KEY`, `OPENCODE_GO_2_API_KEY`, `OPENROUTER_API_KEY` | API keys for the AI model providers                                                         |
+| OpenAI login         | `OPENCODE_AUTH_JSON_V1`                                              | Independently provisioned OpenCode v1 OAuth credential; refreshed after CLI validation      |
+| Web search           | `BRAVE_API_KEY`                                                      | API key for the `brave-search` MCP server (optional)                                        |
+| OpenAI login utility | `OPENAI_USERNAME`, `OPENAI_PASSWORD`, `OPENAI_2FA_KEY`               | Optional credentials for manually running `scripts/chatgpt-login.py`; not used by workflows |
+
+`OPENCODE_AUTH_JSON_V1` must be provisioned from a separate OAuth grant and must
+never reuse a rotating grant used by OpenCode v2. The runner does not read
+`OPENCODE_AUTH_JSON`, `CHATGPT_ACCESS_TOKEN`, or `CHATGPT_REFRESH_TOKEN`; an unset
+or invalid v1 secret disables OpenAI model probing, and the refresh workflow
+fails without changing any secret.
 
 ## Completion check
 

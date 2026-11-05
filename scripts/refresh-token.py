@@ -2,13 +2,13 @@
 """Renew the opencode OpenAI (ChatGPT) OAuth credential via the refresh token.
 
 No browser needed: POST grant_type=refresh_token to auth.openai.com/oauth/token
-and write the rotated tokens to ~/.local/share/opencode/auth.json.
+and print the rotated credential for the workflow to validate.
 
-The current credential is read from OPENCODE_AUTH_CONTENT (the workflow passes
-the OPENCODE_AUTH_JSON secret) or from the auth.json file.
+The current credential is read only from OPENCODE_AUTH_CONTENT, which the
+workflow sources from OPENCODE_AUTH_JSON_V1.
 
-Exit codes: 0 success, 1 refresh failed (caller should fall back to a full
-browser login).
+Exit codes: 0 success, 1 refresh failed; the dedicated v1 secret remains
+unchanged and must be repaired or reprovisioned separately.
 """
 import json
 import os
@@ -16,7 +16,6 @@ import sys
 import time
 import urllib.parse
 import urllib.request
-from pathlib import Path
 
 from opencode_auth import (
     CLIENT_ID,
@@ -25,7 +24,6 @@ from opencode_auth import (
     TOKEN_PATH,
     USER_AGENT,
     build_auth_json,
-    write_auth_file,
 )
 
 
@@ -36,11 +34,7 @@ def _current_auth() -> dict | None:
             return json.loads(content)
         except json.JSONDecodeError:
             return None
-    path = Path.home() / ".local" / "share" / "opencode" / "auth.json"
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    return None
 
 
 def refresh_tokens(refresh_token: str) -> dict:
@@ -65,11 +59,16 @@ def refresh_tokens(refresh_token: str) -> dict:
 
 def main() -> int:
     auth = _current_auth()
-    if not auth or not isinstance(auth.get("openai"), dict):
-        print("No current OpenAI credential found (OPENCODE_AUTH_CONTENT or auth.json)", file=sys.stderr)
+    if not isinstance(auth, dict) or not isinstance(auth.get("openai"), dict):
+        print("No dedicated OpenCode v1 OAuth credential found", file=sys.stderr)
         return 1
-    refresh = auth["openai"].get("refresh")
-    if not refresh:
+    openai_auth = auth["openai"]
+    refresh = openai_auth.get("refresh")
+    if (
+        openai_auth.get("type") != "oauth"
+        or not isinstance(refresh, str)
+        or not refresh
+    ):
         print("No refresh token in current credential", file=sys.stderr)
         return 1
 
@@ -113,7 +112,6 @@ def main() -> int:
         print(str(e), file=sys.stderr)
         return 1
 
-    write_auth_file(auth)
     json.dump(auth, sys.stdout)
     sys.stdout.write("\n")
     return 0

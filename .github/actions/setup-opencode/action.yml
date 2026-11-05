@@ -3,6 +3,11 @@ description: >-
   Installs the OpenCode CLI and prepares the shared OpenCode configuration
   from the provision-machines repository. Relies on the job-level
   GITHUB_TOKEN set by the caller.
+inputs:
+  auth-json-v1:
+    description: Dedicated OpenCode v1 OAuth credential JSON
+    required: false
+    default: ""
 runs:
   using: composite
   steps:
@@ -12,7 +17,10 @@ runs:
 
     - name: Install OpenCode
       shell: bash
-      run: npm install --global opencode-ai@1.18.32
+      run: |
+        npm install --global opencode-ai@1.18.32
+        printf '%s\n' 'OPENCODE_DISABLE_DEFAULT_PLUGINS=true' >> "$GITHUB_ENV"
+        printf '%s\n' 'OPENCODE_CONFIG_CONTENT={"plugin":[]}' >> "$GITHUB_ENV"
 
     - name: Fetch and prepare OpenCode configuration
       id: config
@@ -105,21 +113,8 @@ runs:
         rm -rf "$HOME/.config/opencode"
         cp -a "$config_dir" "$HOME/.config/opencode"
 
-    - name: Materialize OpenCode auth
+    - name: Materialize OpenCode v1 auth
       shell: bash
-      run: |
-        set -Eeuo pipefail
-        umask 077
-        if [[ -n "${OPENCODE_AUTH_CONTENT:-}" ]]; then
-          printf '::add-mask::%s\n' "$OPENCODE_AUTH_CONTENT"
-          printf '%s' "$OPENCODE_AUTH_CONTENT" | while IFS= read -r line || [[ -n "$line" ]]; do [[ -n "$line" ]] && printf '::add-mask::%s\n' "$line"; done
-          mkdir -p ~/.local/share/opencode
-          printf '%s' "$OPENCODE_AUTH_CONTENT" > ~/.local/share/opencode/auth.json
-          if ! jq -e '.openai.type == "oauth" and .openai.access != "" and .openai.refresh != "" and (.openai.expires | type == "number")' ~/.local/share/opencode/auth.json >/dev/null 2>&1; then
-            echo "::warning::OPENCODE_AUTH_CONTENT is not valid opencode auth JSON (expected {openai:{type:oauth,access,refresh,expires:number}}); removing auth.json and continuing without it" >&2
-            rm -f ~/.local/share/opencode/auth.json
-          elif command -v opencode >/dev/null 2>&1 && ! opencode --help >/dev/null 2>&1; then
-            echo "::warning::opencode config check failed with provided auth.json; removing auth.json and continuing" >&2
-            rm -f ~/.local/share/opencode/auth.json
-          fi
-        fi
+      env:
+        OPENCODE_AUTH_CONTENT: ${{ inputs.auth-json-v1 }}
+      run: bash "$GITHUB_ACTION_PATH/../../../scripts/materialize-opencode-auth.sh"

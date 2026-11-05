@@ -1,6 +1,7 @@
 import importlib.util
 import inspect
 import json
+import stat
 import types
 from pathlib import Path
 
@@ -88,6 +89,7 @@ def test_write_auth_file_explicit_path(tmp_path):
     assert chatgpt_login.write_auth_file(auth, dest) == dest
     assert dest.parent.is_dir()
     assert json.loads(dest.read_text(encoding="utf-8")) == auth
+    assert stat.S_IMODE(dest.stat().st_mode) == 0o600
 
 
 def test_write_auth_file_default_path(tmp_path, monkeypatch):
@@ -96,6 +98,7 @@ def test_write_auth_file_default_path(tmp_path, monkeypatch):
     dest = chatgpt_login.write_auth_file(auth)
     assert dest == tmp_path / ".local" / "share" / "opencode" / "auth.json"
     assert json.loads(dest.read_text(encoding="utf-8")) == auth
+    assert stat.S_IMODE(dest.stat().st_mode) == 0o600
 
 
 _CLOUDFLARE_BODY = """
@@ -255,38 +258,23 @@ def test_fill_first_visible_without_delay_uses_plain_fill():
     assert page.locator_instance.typed == []
 
 
-def test_refresh_workflow_suppresses_failed_auth_output_and_masks_stored_auth():
+def test_refresh_workflow_stores_only_validated_v1_auth():
     workflow = (
         Path(__file__).parents[1] / ".github/workflows/refresh-chatgpt-auth.yml"
     ).read_text(encoding="utf-8")
-    browser = workflow[
-        workflow.index("- name: Browser login (fallback)") : workflow.index(
-            "- name: Agent-usable primitives fallback"
+    refresh = workflow[
+        workflow.index("- name: Try token refresh (no browser)") : workflow.index(
+            "- name: Validate refreshed token with opencode"
         )
     ]
-    assert 'cat "$RUNNER_TEMP/auth.json" >&2' not in browser
-    assert 'cat "$RUNNER_TEMP/chatgpt-login.stderr" >&2' not in browser
-    assert "Browser login failed; authentication output suppressed." in browser
-    assert 'exit "$status"' in browser
-
-    for step in ("Set secret (refreshed token)", "Browser login (fallback)"):
-        start = workflow.index(f"- name: {step}")
-        end = workflow.find("\n      - name:", start + 1)
-        block = workflow[start : end if end >= 0 else len(workflow)]
-        assert 'printf \'::add-mask::%s\\n\' "$auth_json"' in block
-        assert 'gh secret set OPENCODE_AUTH_JSON' in block
-
-
-def test_primitives_fallback_runs_only_after_browser_login_failure():
-    workflow = (
-        Path(__file__).parents[1] / ".github/workflows/refresh-chatgpt-auth.yml"
-    ).read_text(encoding="utf-8")
-    primitives = workflow[
-        workflow.index("- name: Agent-usable primitives fallback") :
-    ]
-    assert "if: ${{ !cancelled() && steps.browser-login.outcome == 'failure' }}" in primitives
-    for command in ("start", "status", "step"):
-        assert f"uv run scripts/chatgpt-login.py {command} || true" in primitives
+    store = workflow[workflow.index("- name: Set secret (refreshed token)") :]
+    assert "OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON_V1 }}" in refresh
+    assert 'printf \'::add-mask::%s\\n\' "$auth_json"' in store
+    assert "gh secret set OPENCODE_AUTH_JSON_V1" in store
+    assert "gh secret set OPENCODE_AUTH_JSON --repo" not in workflow
+    assert "CHATGPT_ACCESS_TOKEN" not in workflow
+    assert "CHATGPT_REFRESH_TOKEN" not in workflow
+    assert "chatgpt-login.py" not in workflow
 
 
 _OPENAI_ERROR_BODY = "<html><body><h1>Oops, an error occurred!</h1></body></html>"
@@ -306,31 +294,27 @@ def test_refresh_workflow_uses_opencode_v1_auth_and_validates_before_storing():
             "- name: Set secret (refreshed token)"
         )
     ]
-    store = workflow[
-        workflow.index("- name: Set secret (refreshed token)") : workflow.index(
-            "- name: Browser login (fallback)"
-        )
-    ]
-    assert "OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON }}" in refresh
+    store = workflow[workflow.index("- name: Set secret (refreshed token)") :]
+    assert "OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON_V1 }}" in refresh
     assert "scripts/refresh-token.py" in refresh
     assert "npm install --global opencode-ai@1.18.32" in validate
     assert "--model openai/gpt-5.6-luna" in validate
     assert "steps.validate.outcome == 'success'" in store
-    assert "!cancelled() && (steps.refresh.outputs.refreshed != 'true' || steps.validate.outcome != 'success')" in workflow
+    assert "if: steps.refresh.outputs.refreshed == 'true' && steps.validate.outcome == 'success'" in store
+    assert workflow.index("- name: Validate refreshed token with opencode") < workflow.index(
+        "- name: Set secret (refreshed token)"
+    )
+    assert "CHATGPT_ACCESS_TOKEN" not in workflow
     assert "CHATGPT_REFRESH_TOKEN" not in workflow
 
 
-def test_force_fallback_input_gates_the_refresh_step():
+def test_refresh_workflow_has_no_credential_fallback():
     workflow = (
         Path(__file__).parents[1] / ".github/workflows/refresh-chatgpt-auth.yml"
     ).read_text(encoding="utf-8")
-    assert "force_fallback:" in workflow
-    refresh = workflow[
-        workflow.index("- name: Try token refresh (no browser)") : workflow.index(
-            "- name: Browser login (fallback)"
-        )
-    ]
-    assert "if: ${{ !inputs.force_fallback }}" in refresh
+    assert "force_fallback:" not in workflow
+    assert "Browser login (fallback)" not in workflow
+    assert "Agent-usable primitives fallback" not in workflow
 
 
 def test_has_blocking_screen_detects_openai_error_page():

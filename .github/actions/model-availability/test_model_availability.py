@@ -37,7 +37,15 @@ def fake_run(args, *a, **kw):
 
 
 class TestDiscoverModels:
-    def test_discovers_openai_models_from_opencode_catalog_without_oauth_api(self, monkeypatch):
+    def test_discovers_openai_models_from_opencode_catalog_with_auth(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        auth_dir = tmp_path / ".local" / "share" / "opencode"
+        auth_dir.mkdir(parents=True)
+        (auth_dir / "auth.json").write_text(
+            '{"openai":{"type":"oauth","access":"test-access","refresh":"test-refresh","expires":123}}',
+            encoding="utf-8",
+        )
+
         def fake_run_with_openai(args, *a, **kw):
             if args == ["opencode", "models"]:
                 return types.SimpleNamespace(stdout="openai/gpt-5.6-luna\n")
@@ -55,6 +63,27 @@ class TestDiscoverModels:
         models, _ = model_availability.discover_models()
 
         assert models == ["openai/gpt-5.6-luna"]
+
+    def test_omits_openai_models_without_valid_auth(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        def unexpected_oauth_request(*args, **kwargs):
+            raise AssertionError("OpenAI models must come from the authenticated catalog")
+
+        def fake_run_with_openai(args, *a, **kw):
+            if args == ["opencode", "models"]:
+                return types.SimpleNamespace(stdout="openai/gpt-5.6-luna\n")
+            if args == ["opencode", "debug", "config"]:
+                kw["stdout"].write(json.dumps(CONFIG))
+                return types.SimpleNamespace(stdout="")
+            raise AssertionError(f"unexpected args: {args}")
+
+        monkeypatch.setattr(model_availability.urllib.request, "urlopen", unexpected_oauth_request)
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run_with_openai)
+
+        models, _ = model_availability.discover_models()
+
+        assert models == []
 
     def test_discovers_models_per_provider(self, monkeypatch):
         captured = {}
@@ -1178,12 +1207,10 @@ class TestModelAvailabilityAction:
     def test_auth_materialized_by_setup_opencode_not_here(self):
         root = Path(__file__).parents[3]
         setup = (root / ".github/actions/setup-opencode/action.yml").read_text()
-        assert "umask 077" in setup
-        assert (
-            "printf '%s' \"$OPENCODE_AUTH_CONTENT\" > ~/.local/share/opencode/auth.json"
-            in setup
-        )
-        assert "printf '%s\\n' \"$OPENCODE_AUTH_CONTENT\"" not in setup
+        assert "auth-json-v1:" in setup
+        assert "materialize-opencode-auth.sh" in setup
+        assert "OPENCODE_DISABLE_DEFAULT_PLUGINS=true" in setup
+        assert 'OPENCODE_CONFIG_CONTENT={"plugin":[]}' in setup
         action = Path(__file__).with_name("action.yml").read_text()
         assert "OPENCODE_AUTH_CONTENT" not in action
         assert "auth.json" not in action

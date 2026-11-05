@@ -325,7 +325,7 @@ test("v2 classify: session.step.failed message → balance", () => {
   assert.equal(hit?.reason, "balance");
 });
 
-test("plugin setup v2: subscribe captures options.signal, exits on fatal", async () => {
+test("v1 plugin event handler exits on fatal", async () => {
   const tmp = (process.env.RUNNER_TEMP = "/tmp/fatal-guard-test-1");
   const markerPath = `${tmp}/opencode-fatal.json`;
   const origExit = process.exit;
@@ -339,23 +339,16 @@ test("plugin setup v2: subscribe captures options.signal, exits on fatal", async
   };
   try {
     mkdirSync(tmp, { recursive: true });
-    const unsub = plugin.setup({
+    const hooks = await plugin({}, {});
+    await hooks.event({
       event: {
-        async *subscribe({ signal }) {
-          await Promise.resolve();
-          yield {
-            type: "session.error",
-            data: {
-              error: apiErr(402, "Insufficient balance"),
-              sessionID: "s1",
-            },
-          };
-          if (signal.aborted) return;
+        type: "session.error",
+        properties: {
+          error: apiErr(402, "Insufficient balance"),
+          sessionID: "s1",
         },
       },
     });
-    await new Promise((r) => setTimeout(r, 10));
-    unsub();
   } catch (e) {
     // ignore exit throw
   }
@@ -367,7 +360,7 @@ test("plugin setup v2: subscribe captures options.signal, exits on fatal", async
   assert.equal(marker.sessionID, "s1");
 });
 
-test("plugin setup v2: benign event does not exit", async () => {
+test("v1 plugin event handler ignores benign events", async () => {
   const tmp = (process.env.RUNNER_TEMP = "/tmp/fatal-guard-test-2");
   const markerPath = `${tmp}/opencode-fatal.json`;
   const origExit = process.exit;
@@ -381,15 +374,13 @@ test("plugin setup v2: benign event does not exit", async () => {
   };
   try {
     mkdirSync(tmp, { recursive: true });
-    const unsub = plugin.setup({
+    const hooks = await plugin({}, {});
+    await hooks.event({
       event: {
-        async *subscribe({ signal }) {
-          yield { type: "message.part.updated", data: {} };
-        },
+        type: "message.part.updated",
+        properties: {},
       },
     });
-    await new Promise((r) => setTimeout(r, 10));
-    unsub();
   } catch (e) {
     // ignore
   }

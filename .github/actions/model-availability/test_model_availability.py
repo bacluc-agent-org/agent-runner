@@ -1449,11 +1449,21 @@ class TestModelAvailabilityAction:
         assert 'AISIX_IMAGE="ghcr.io/api7/aisix:$AISIX_VERSION"' in setup
         assert "CHATGPT_ACCESS_TOKEN" in setup
         assert "CHATGPT_REFRESH_TOKEN" in setup
-        assert "~/.local/share/opencode/auth.json" not in setup
+        assert "write_auth_content" in setup
         action = Path(__file__).with_name("action.yml").read_text()
         assert "OPENCODE_AUTH_CONTENT" not in action
         assert "auth.json" not in action
         assert "python3" in action
+
+    def test_free_probe_uses_materialized_auth_without_raw_secret_environment(self, tmp_path, monkeypatch):
+        auth_file = tmp_path / ".local/share/opencode/auth.json"
+        auth_file.parent.mkdir(parents=True)
+        auth_file.write_text('{"openai":{"type":"oauth","access":"safe-access","refresh":"safe-refresh","expires":123}}')
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("OPENCODE_AUTH_CONTENT", "untrusted raw secret")
+        env = model_availability.opencode_env("opencode/example-free")
+        assert "OPENCODE_AUTH_CONTENT" not in env
+        assert '"access":"safe-access"' in auth_file.read_text()
 
     def test_model_discovery_reads_oauth_token_file_without_passing_it_to_opencode(self, tmp_path, monkeypatch):
         token_file = tmp_path / "access-token"

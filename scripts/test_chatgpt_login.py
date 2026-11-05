@@ -98,6 +98,13 @@ def test_write_auth_file_default_path(tmp_path, monkeypatch):
     assert json.loads(dest.read_text(encoding="utf-8")) == auth
 
 
+def test_write_auth_content_validates_and_restricts_permissions(tmp_path):
+    content = json.dumps({"openai": {"type": "oauth", "access": "safe-access", "refresh": "safe-refresh", "expires": 123}})
+    dest = chatgpt_login.write_auth_content(content, tmp_path / "auth.json")
+    assert json.loads(dest.read_text(encoding="utf-8")) == json.loads(content)
+    assert dest.stat().st_mode & 0o777 == 0o600
+
+
 _CLOUDFLARE_BODY = """
 <html><head><title>Just a moment...</title></head>
 <body>

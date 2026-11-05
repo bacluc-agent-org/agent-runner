@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+import urllib.error
 from pathlib import Path
 from urllib.parse import urlsplit
 from datetime import datetime, timezone
@@ -367,8 +368,18 @@ def fetch_openai_oauth_model_ids() -> list[str]:
                 and model.get("supported_in_api") is not False
             }
         )
+    except urllib.error.HTTPError as e:
+        status = e.code
+        if status == 401:
+            detail = "OAuth authentication failed (HTTP 401)"
+        elif status == 429:
+            detail = "OAuth rate/quota limit (HTTP 429)"
+        else:
+            detail = f"OAuth catalog HTTP error ({status})"
+        print(f"warning: failed to discover models from ChatGPT Codex catalog: {detail}", file=sys.stderr)
+        return []
     except Exception as e:
-        print(f"warning: failed to discover models from {OPENAI_CODEX_MODELS_URL}: {e}", file=sys.stderr)
+        print(f"warning: failed to discover models from ChatGPT Codex catalog: transport/response failure ({type(e).__name__})", file=sys.stderr)
         return []
 
 
@@ -474,9 +485,9 @@ def candidate_priority(candidate: str) -> int:
         return 1
     free = is_whitelisted(model, FREE_PATTERNS)
     if provider == "opencode":
-        return 2 if free else 4
+        return 1 if free else 4
     if provider == "openai":
-        return 1
+        return 2
     if re.search(r"gpt", model, re.IGNORECASE):
         return 2 if provider in ("opencode-go-openai", "opencode-go-openai-2") else 6
     if provider == "openrouter":
@@ -581,6 +592,20 @@ def log_failed_openai_probes(results: dict[str, bool], work_dir: str) -> None:
         print(f"OpenAI OAuth probe failed ({candidate}):\n{diagnostic}", file=sys.stderr)
 
 
+def log_failed_free_probes(results: dict[str, bool], work_dir: str) -> None:
+    for candidate, success in results.items():
+        if success or not re.search(r"/(?:[^/]+-free|[^/]+:free)$", candidate):
+            continue
+        log_path = os.path.join(work_dir, "model-probes", "probe-" + candidate.replace("/", "-") + ".log")
+        try:
+            diagnostic = Path(log_path).read_text()
+        except OSError:
+            diagnostic = ""
+        status = re.search(r"HTTP(?:Error)?\D+(\d{3})", diagnostic, re.IGNORECASE)
+        category = f"HTTP {status.group(1)}" if status else "timeout" if "TIMEOUT" in diagnostic else "probe error"
+        print(f"Free-model probe failed ({candidate}): {category}", file=sys.stderr)
+
+
 def available_models(
     cache: dict, whitelisted_models: list[str], provider_models: dict[str, list[str]]
 ) -> list[str]:
@@ -649,6 +674,7 @@ def main() -> int:
     work_dir = os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()
     results = probe_candidates(pending, work_dir) if pending else {}
     log_failed_openai_probes(results, work_dir)
+    log_failed_free_probes(results, work_dir)
     ok = sum(1 for v in results.values() if v)
     if pending:
         print(f"probe results: {len(results)} checked, {ok} ok, {len(results) - ok} failed")

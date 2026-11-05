@@ -15,7 +15,7 @@ export interface FatalHit {
 }
 
 const BALANCE_RE =
-  /insufficient (balance|credit)|out of (balance|credit)|quota|billing|usage limit|available balance/;
+  /insufficient (balance|credit)|out of (balance|credit)|quota|billing|usage limit|go.?usage.?limit|available balance/;
 const MODEL_UNAVAILABLE_RE =
   /model .*not (found|available|exist)|no such model|no endpoints found/;
 

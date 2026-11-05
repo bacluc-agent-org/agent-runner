@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import types
+import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,6 +38,30 @@ def fake_run(args, *a, **kw):
 
 
 class TestDiscoverModels:
+    @pytest.mark.parametrize(
+        ("error", "diagnostic"),
+        [
+            (urllib.error.HTTPError("https://private.invalid", 401, "secret-token", {}, None), "OAuth authentication failed (HTTP 401)"),
+            (urllib.error.HTTPError("https://private.invalid", 429, "secret-token", {}, None), "OAuth rate/quota limit (HTTP 429)"),
+            (urllib.error.HTTPError("https://private.invalid", 503, "secret-token", {}, None), "OAuth catalog HTTP error (503)"),
+            (urllib.error.URLError("secret-token"), "transport/response failure (URLError)"),
+        ],
+    )
+    def test_oauth_catalog_failures_are_classified_without_secrets(
+        self, monkeypatch, capsys, error, diagnostic
+    ):
+        monkeypatch.setenv("OPENAI_ACCESS_TOKEN", "secret-token")
+        monkeypatch.setattr(
+            model_availability.urllib.request,
+            "urlopen",
+            lambda *args, **kwargs: (_ for _ in ()).throw(error),
+        )
+
+        assert model_availability.fetch_openai_oauth_model_ids() == []
+        stderr = capsys.readouterr().err
+        assert diagnostic in stderr
+        assert "secret-token" not in stderr
+
     def test_provider_config_reads_urls_from_array_shaped_debug_output(self, monkeypatch, tmp_path):
         config_path = tmp_path / "opencode.jsonc"
         config_path.write_text(
@@ -791,16 +816,16 @@ class TestCandidatePriority:
         assert model_availability.candidate_priority("opencode-go-openai-2/qwen3.8-flash") == 1
 
     def test_opencode_free_before_openrouter_free(self):
-        assert model_availability.candidate_priority("opencode/a-free") == 2
+        assert model_availability.candidate_priority("opencode/a-free") == 1
         assert model_availability.candidate_priority("openrouter/zai/GLM-4.5:free") == 3
 
     def test_opencode_paid(self):
         assert model_availability.candidate_priority("opencode/paid-model") == 4
 
     def test_openai_models(self):
-        assert model_availability.candidate_priority("openai/gpt-5.6-luna") == 1
-        assert model_availability.candidate_priority("openai/gpt-6-luna") == 1
-        assert model_availability.candidate_priority("openai/gpt-5.4") == 1
+        assert model_availability.candidate_priority("openai/gpt-5.6-luna") == 2
+        assert model_availability.candidate_priority("openai/gpt-6-luna") == 2
+        assert model_availability.candidate_priority("openai/gpt-5.4") == 2
 
     def test_go_openai_providers(self):
         assert model_availability.candidate_priority("opencode-go-openai/glm-5.3") == 5
@@ -821,7 +846,7 @@ class TestCandidatePriority:
         assert model_availability.candidate_priority("opencode-go-openai-2/glm-5.3") == 5
 
     def test_openai_non_gpt_priority(self):
-        assert model_availability.candidate_priority("openai/other-model") == 1
+        assert model_availability.candidate_priority("openai/other-model") == 2
 
     def test_go_anthropic_providers(self):
         assert model_availability.candidate_priority("opencode-go-anthropic/glm-5.3") == 6
@@ -844,8 +869,8 @@ class TestPrioritizeCandidates:
         assert model_availability.prioritize_candidates(candidates) == [
             "opencode/big-pickle",
             "opencode-go-openai/qwen3.8-flash",
-            "openai/gpt-6-luna",
             "opencode/a-free",
+            "openai/gpt-6-luna",
             "openrouter/anthropic/claude-sonnet-4.5",
         ]
 
@@ -855,6 +880,17 @@ class TestPrioritizeCandidates:
 
 
 class TestSelectPending:
+    def test_free_opencode_candidates_fit_budget_before_many_openai_models(self):
+        now = datetime(2026, 9, 6, 15, 0, tzinfo=timezone.utc)
+        candidates = [f"openai/gpt-{i}" for i in range(model_availability.PROBE_BUDGET)]
+        candidates.extend(["opencode/free-a-free", "opencode/free-b-free"])
+
+        pending, skipped = model_availability.select_pending(candidates, {}, now)
+
+        assert pending[:2] == ["opencode/free-a-free", "opencode/free-b-free"]
+        assert len(pending) == model_availability.PROBE_BUDGET
+        assert skipped == 2
+
     def test_stale_highest_priority_first(self):
         now = datetime(2026, 9, 6, 15, 0, tzinfo=timezone.utc)
         cache = {
@@ -1167,6 +1203,22 @@ class TestProbeModelLogging:
         assert "token" not in diagnostic
         assert "caller-key" not in diagnostic
 
+    def test_failed_free_probe_logs_only_sanitized_error_category(self, tmp_path, capsys):
+        probe_dir = tmp_path / "model-probes"
+        probe_dir.mkdir()
+        (probe_dir / "probe-opencode-a-free.log").write_text(
+            "request failed with HTTP 429: quota exhausted; secret-value"
+        )
+
+        model_availability.log_failed_free_probes(
+            {"opencode/a-free": False}, str(tmp_path)
+        )
+
+        diagnostic = capsys.readouterr().err
+        assert "opencode/a-free" in diagnostic
+        assert "HTTP 429" in diagnostic
+        assert "secret-value" not in diagnostic
+
     def test_oauth_probe_registers_the_catalog_model_in_opencode_config(self, tmp_path, monkeypatch):
         captured = {}
 
@@ -1397,11 +1449,28 @@ class TestModelAvailabilityAction:
         assert 'AISIX_IMAGE="ghcr.io/api7/aisix:$AISIX_VERSION"' in setup
         assert "CHATGPT_ACCESS_TOKEN" in setup
         assert "CHATGPT_REFRESH_TOKEN" in setup
-        assert "~/.local/share/opencode/auth.json" not in setup
+        assert "write_auth_content" in setup
+        assert 'PYTHONPATH="$GITHUB_WORKSPACE/scripts"' in setup
+        assert "OpenCode auth content is not configured" in setup
         action = Path(__file__).with_name("action.yml").read_text()
         assert "OPENCODE_AUTH_CONTENT" not in action
         assert "auth.json" not in action
         assert "python3" in action
+
+    def test_free_probe_uses_materialized_auth_without_raw_secret_environment(self, tmp_path, monkeypatch, capsys):
+        auth_file = tmp_path / ".local/share/opencode/auth.json"
+        auth_file.parent.mkdir(parents=True)
+        auth_file.write_text('{"openai":{"type":"oauth","access":"safe-access","refresh":"safe-refresh","expires":123}}')
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("OPENCODE_AUTH_CONTENT", "untrusted raw secret")
+        env = model_availability.opencode_env("opencode/example-free")
+        assert "OPENCODE_AUTH_CONTENT" not in env
+        assert '"access":"safe-access"' in auth_file.read_text()
+        probe_logs = tmp_path / "model-probes"
+        probe_logs.mkdir()
+        (probe_logs / "probe-opencode-example-free.log").write_text("safe-access safe-refresh")
+        model_availability.log_failed_free_probes({"opencode/example-free": False}, str(tmp_path))
+        assert "safe-access" not in capsys.readouterr().err
 
     def test_model_discovery_reads_oauth_token_file_without_passing_it_to_opencode(self, tmp_path, monkeypatch):
         token_file = tmp_path / "access-token"

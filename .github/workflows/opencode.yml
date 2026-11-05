@@ -107,9 +107,6 @@ jobs:
       OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
       OPENCODE_GO_2_API_KEY: ${{ secrets.OPENCODE_GO_2_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-      OPENAI_ACCESS_TOKEN: ${{ secrets.CHATGPT_ACCESS_TOKEN }}
-      OPENAI_REFRESH_TOKEN: ${{ secrets.CHATGPT_REFRESH_TOKEN }}
-      OPENAI_OAUTH_CLIENT_ID: ${{ secrets.OPENAI_OAUTH_CLIENT_ID }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON }}
       BACLUC_AGENT_GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
@@ -149,7 +146,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: bacluc-agent-org/agent-runner
-          ref: ${{ github.repository == 'bacluc-agent-org/agent-runner' && github.sha || '' }}
           path: ${{ env.DIAGNOSTICS_CHECKOUT }}
           fetch-depth: 1
           persist-credentials: false
@@ -165,10 +161,6 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-
-      - name: Warm up OpenCode CLI
-        shell: bash
-        run: scripts/wait_for_opencode.sh
 
       - name: Check model availability
         id: model-availability
@@ -196,12 +188,6 @@ jobs:
           DISCOVERY_TIMEOUT: ${{ inputs.discovery_timeout_minutes || 5 }}
         run: |
           set -Eeuo pipefail
-          configure_openai_model() {
-            [[ "$1" == openai/* ]] || return 0
-            local slug="${1#openai/}"
-            export OPENCODE_CONFIG_CONTENT
-            OPENCODE_CONFIG_CONTENT="$(jq -cn --arg slug "$slug" --arg baseURL "$AISIX_PROXY_URL" --arg apiKey "$AISIX_CALLER_KEY" '{provider:{openai:{options:{baseURL:$baseURL,apiKey:$apiKey},models:{($slug):{name:$slug}}}}}')"
-          }
 
           requested="${MODEL_TEXT:-}"
           if [[ -z "$requested" && "${MODEL_CHOICE:-auto}" != auto ]]; then requested="$MODEL_CHOICE"; fi
@@ -213,6 +199,8 @@ jobs:
           printf '::add-mask::%s\n' "$OPENCODE_GO_2_API_KEY"
           if [[ -n "$OPENCODE_AUTH_CONTENT" ]]; then
             printf '::add-mask::%s\n' "$OPENCODE_AUTH_CONTENT"
+          elif
+            printf 'OPENCODE_AUTH_CONTENT is empty'
           fi
 
           available_models_file="$RUNNER_TEMP/available-models.txt"
@@ -303,12 +291,7 @@ jobs:
             printf '::stop-commands::%s\n' "$stop_token"
             printf 'Model discovery prompt:\n%s\n' "$discovery_prompt"
             set +e
-            configure_openai_model "$fallback_model"
-            discovery_standalone_args=()
-            if [[ "$fallback_model" == openai/* ]]; then
-              discovery_standalone_args+=(--standalone)
-            fi
-            timeout "${DISCOVERY_TIMEOUT}m" opencode run "${discovery_standalone_args[@]}" --agent model-discovery --model "$fallback_model" --title "model-discovery" "$discovery_prompt" | tee "$discovery_output"
+            timeout "${DISCOVERY_TIMEOUT}m" opencode run --agent model-discovery --model "$fallback_model" --title "model-discovery" "$discovery_prompt" | tee "$discovery_output"
             discovery_statuses=("${PIPESTATUS[@]}")
             printf '::%s::\n' "$stop_token"
             discovery_status=${discovery_statuses[0]}
@@ -381,10 +364,8 @@ jobs:
           }
 
           requested_model="$model"
-          if [[ "$model" == openai/* ]] && [[ -n "${AISIX_PROXY_URL:-}" && -n "${AISIX_CALLER_KEY:-}" ]]; then
-            configure_openai_model "$model"
-            printf 'OPENCODE_CONFIG_CONTENT=%s\n' "$OPENCODE_CONFIG_CONTENT" >> "$GITHUB_ENV"
-            printf 'Model availability: requested %q is openai/* and AISIX OAuth proxy is ready; skipping fallback\n' "$model"
+          if [[ "$model" == openai/* && -f ~/.local/share/opencode/auth.json ]]; then
+            printf 'Model availability: requested %q is openai/* and auth.json is present; skipping fallback\n' "$model"
             echo "model=${model}" >> "$GITHUB_OUTPUT"
             printf '\n\n\n\n\n\n'
             printf 'Chosen model is %s (source: %s)\n' "$model" "$model_source"
@@ -394,7 +375,7 @@ jobs:
           fi
           printf '::%s::\n' "$stop_token"
           if [[ "$model" == openai/* ]]; then
-            printf '::error::Model availability: requested %q is openai/* but no valid AISIX OAuth proxy is ready; cannot run openai models.\n' "$model" >&2
+            printf '::error::Model availability: requested %q is openai/* but no valid auth.json is present (OPENCODE_AUTH_CONTENT empty or invalid); cannot run openai models.\n' "$model" >&2
             exit 1
           fi
           stop_token="$(openssl rand -hex 32)"
@@ -437,11 +418,7 @@ jobs:
           printf '\n\n\n\n\n\n'
           printf '::%s::\n' "$stop_token"
 
-          configure_openai_model "$model"
           echo "model=${model}" >> "$GITHUB_OUTPUT"
-          if [[ "$model" == openai/* ]]; then
-            printf 'OPENCODE_CONFIG_CONTENT=%s\n' "$OPENCODE_CONFIG_CONTENT" >> "$GITHUB_ENV"
-          fi
 
       - name: Extract target issue number
         id: target-issue
@@ -489,7 +466,6 @@ jobs:
         id: coordinator
         shell: bash
         env:
-          AVAILABLE_MODELS: ${{ steps.model-availability.outputs.available-models }}
           MODEL: ${{ steps.select-model.outputs.model }}
           COORDINATOR_TIMEOUT: ${{ inputs.timeout_minutes || 120 }}
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
@@ -501,18 +477,13 @@ jobs:
 
           coordinator_session_title='coordinator-run'
           PROMPT=$(printf 'model: %s \n%s\n\n%s' "$MODEL" "$PROMPT" "$(cat "$RUNNER_TEMP/agent-runner/scripts/progress-reporting.txt")")
-          coordinator_standalone_args=()
-          if [[ "$MODEL" == openai/* ]]; then
-            coordinator_standalone_args+=(--standalone)
-          fi
-          unset OPENAI_ACCESS_TOKEN OPENAI_REFRESH_TOKEN OPENCODE_AUTH_CONTENT
           stop_token="$(openssl rand -hex 32)"
           : "${stop_token:?stop-commands fence token generation failed}"
           printf '::stop-commands::%s\n' "$stop_token"
-          printf 'Final coordinator command: opencode run %s --agent coordinator --model %q --title %q\n' "${coordinator_standalone_args[*]}" "$MODEL" "$coordinator_session_title"
+          printf 'Final coordinator command: opencode run --agent coordinator --model %q --title %q\n' "$MODEL" "$coordinator_session_title"
           printf 'Coordinator prompt:\n%s\n' "$PROMPT"
           set +e
-          timeout "${COORDINATOR_TIMEOUT}m" opencode run "${coordinator_standalone_args[@]}" --agent coordinator --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
+          timeout "${COORDINATOR_TIMEOUT}m" opencode run --agent coordinator --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
           coordinator_statuses=("${PIPESTATUS[@]}")
           printf '::%s::\n' "$stop_token"
           coordinator_status=${coordinator_statuses[0]}
@@ -733,21 +704,6 @@ jobs:
             RUN_SUMMARY="${RUN_SUMMARY}; pushed: ${PUSHED_REPOS//$'\n'/ }"
           fi
 
-          new_comment_needed="false"
-          progress_baseline=""
-          if [[ -n "${COMMENT_ID:-}" ]]; then
-            actor=$(gh api user --jq .login)
-            bot_comment_updated=$(gh api "repos/$ISSUE_REPOSITORY/issues/comments/$COMMENT_ID" --jq '.updated_at // .created_at' 2>/dev/null || echo '')
-            progress_baseline="$bot_comment_updated"
-            last_human_comment=$(gh issue view "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --json comments --jq "[.comments[] | select(.author.login != \"$actor\")] | max_by(.createdAt) | .createdAt // \"none\"" 2>/dev/null || echo 'none')
-            if [[ -n "$last_human_comment" && "$last_human_comment" != "none" && -n "$bot_comment_updated" ]]; then
-              if [[ "$last_human_comment" > "$progress_baseline" ]]; then
-                new_comment_needed="true"
-              fi
-            fi
-          fi
-
-
           # The runner owns the single progress comment: the script replaces this run's
           # row and the Open PR line. Never append a free-form run report to the issue.
           python3 "$RUNNER_TEMP/agent-runner/scripts/update_progress_comment.py" \
@@ -763,19 +719,24 @@ jobs:
             --github-output "$GITHUB_OUTPUT" \
             || printf 'warning: could not update the progress comment\n' >&2
 
-
+          # Check if a human commented after our last update; if so, respond with a new comment.
+          # ponytail: global scan of issue comments per update; per-account locks if throughput matters.
+          new_comment_needed="false"
           if [[ -n "${COMMENT_ID:-}" ]]; then
-            last_human_comment=$(gh issue view "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --json comments --jq "[.comments[] | select(.author.login != \"$actor\")] | max_by(.createdAt) | .createdAt // \"none\"" 2>/dev/null || echo 'none')
-            new_comment_needed="false"
-            if [[ -n "$progress_baseline" && "$last_human_comment" > "$progress_baseline" ]]; then
-              new_comment_needed="true"
+            bot_comment_updated=$(gh api "repos/$ISSUE_REPOSITORY/issues/comments/$COMMENT_ID" --jq '.updated_at // .created_at' 2>/dev/null || echo '')
+            last_human_comment=$(gh issue view "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --json comments --jq '[.comments[] | select(.author.login != "bacluc-agent")] | max_by(.createdAt) | .createdAt // "none"' 2>/dev/null || echo 'none')
+            if [[ -n "$last_human_comment" && "$last_human_comment" != "none" && -n "$bot_comment_updated" ]]; then
+              # Compare timestamps lexicographically (ISO 8601 works for this)
+              if [[ "$last_human_comment" > "$bot_comment_updated" ]]; then
+                new_comment_needed="true"
+              fi
             fi
           fi
 
           if [[ "$new_comment_needed" == "true" ]]; then
             # A human answered after our last update: reply with the quoted comment plus one
             # acknowledgement line. The run report belongs in the progress comment, never here.
-            last_human_body=$(gh issue view "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --json comments --jq "[.comments[] | select(.author.login != \"$actor\")] | max_by(.createdAt) | .body // empty" 2>/dev/null || echo '')
+            last_human_body=$(gh issue view "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --json comments --jq '[.comments[] | select(.author.login != "bacluc-agent")] | max_by(.createdAt) | .body // empty' 2>/dev/null || echo '')
             reply_body="Thanks for the feedback — picking it up."
             if [[ -n "$last_human_body" && "$last_human_body" != "null" ]]; then
               reply_body="${reply_body}"$'\n\n'"$(printf '%s\n' "$last_human_body" | sed 's/^/> /')"

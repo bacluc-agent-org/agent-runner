@@ -43,9 +43,6 @@ jobs:
       OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
       OPENCODE_GO_2_API_KEY: ${{ secrets.OPENCODE_GO_2_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-      OPENAI_ACCESS_TOKEN: ${{ secrets.CHATGPT_ACCESS_TOKEN }}
-      OPENAI_REFRESH_TOKEN: ${{ secrets.CHATGPT_REFRESH_TOKEN }}
-      OPENAI_OAUTH_CLIENT_ID: ${{ secrets.OPENAI_OAUTH_CLIENT_ID }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON }}
       ISSUE_REPOSITORY: ${{ vars.ISSUE_REPOSITORY || github.repository }}
@@ -60,10 +57,6 @@ jobs:
 
       - name: Set up OpenCode
         uses: ./.github/actions/setup-opencode
-
-      - name: Warm up OpenCode CLI
-        shell: bash
-        run: scripts/wait_for_opencode.sh
 
       - name: Check model availability
         id: model-availability
@@ -109,21 +102,19 @@ jobs:
           printf 'Fetching github issues...\n'
           printf '\n\n\n\n\n\n'
 
+          # Oldest-first: the 50-item page keeps the OLDEST 50 unclaimed issues instead of the
+          # newest 50, so backlog items beyond the cap are the newest, not the oldest.
           search_json="$RUNNER_TEMP/candidates.json"
-          lookup_started=$SECONDS
-          gh api --paginate --slurp "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:ready-for-implementation+-label:agent-running&per_page=100" \
-            > "$search_json.pages"
-          jq '[.[] | .items[]]' "$search_json.pages" > "$search_json"
-          rm "$search_json.pages"
-          printf 'GitHub lookup duration: candidate search and collection %ss\n' "$((SECONDS - lookup_started))"
+          gh api "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:ready-for-implementation+-label:agent-running+sort:created-asc&per_page=50" \
+            --jq '.items' > "$search_json"
 
           candidates="$RUNNER_TEMP/candidate-numbers.txt"
-          jq -r '.[].number | tostring' "$search_json" | shuf -n 50 > "$candidates"
+          jq -r '.[].number | tostring' "$search_json" > "$candidates"
           if [[ ! -s "$candidates" ]]; then
             printf '%s\n' 'No unclaimed open issues; nothing to do.'
             exit 0
           fi
-          printf 'Randomized sample of up to 50 eligible issues:\n'
+          printf 'Unclaimed candidate issues (oldest first):\n'
           cat "$candidates"
           printf '\n\n\n\n\n\n'
           printf 'Selecting model...\n'
@@ -137,14 +128,11 @@ jobs:
           # Exclude known-weak free models per scripts/model-deny-list.txt (shared with
           # opencode.yml and refine-issues.yml); they pass the trivial OK probe but
           # fail as coordinator/selector in 10+ runs (e.g. 34029380869, 34042660858).
-          mapfile -t all_free_models < <(grep -E '^(opencode|openrouter)/[^[:space:]]+(-free|:free)$' "$available_models_file" | awk '!seen[$0]++')
           mapfile -t free_models < <(grep -E '^(opencode|openrouter)/[^[:space:]]+(-free|:free)$' "$available_models_file" | grep -Ev -f scripts/model-deny-list.txt | awk '!seen[$0]++')
-          mapfile -t openai_models < <(grep -E '^openai/' "$available_models_file" | awk '!seen[$0]++')
           for candidate in \
             'opencode-go-openai/qwen3.8-flash' \
             'opencode-go-openai-2/qwen3.8-flash' \
             'opencode/big-pickle' \
-            "${openai_models[@]}" \
             "${free_models[@]}"; do
             case "$candidate" in
               opencode-go-openai/qwen3.8-flash)
@@ -160,11 +148,6 @@ jobs:
               openrouter/*)
                 [[ -n "$OPENROUTER_API_KEY" ]] || continue
                 ;;
-              openai/*)
-                if [[ -z "${AISIX_PROXY_URL:-}" || -z "${AISIX_CALLER_KEY:-}" ]]; then
-                  continue
-                fi
-                ;;
               *) continue ;;
             esac
             selection_model="$candidate"
@@ -174,20 +157,6 @@ jobs:
           if [[ -z "$selection_model" ]]; then
             selection_model="$(grep -Ev -f scripts/model-deny-list.txt "$available_models_file" | head -n1 || true)"
             selection_source='last resort (deny-list filtered)'
-            if [[ -z "$selection_model" ]]; then
-              for candidate in "${all_free_models[@]}"; do
-                case "$candidate" in
-                  opencode/*-free) ;;
-                  openrouter/*)
-                    [[ -n "$OPENROUTER_API_KEY" ]] || continue
-                    ;;
-                  *) continue ;;
-                esac
-                selection_model="$candidate"
-                selection_source='last resort (known-weak free)'
-                break
-              done
-            fi
             if [[ -z "$selection_model" ]]; then
               printf '%s\n' 'No issue-selection model is available; not dispatching.' >&2
               exit 1
@@ -204,120 +173,102 @@ jobs:
           default_tail="$(cat scripts/issue-selection-tail.txt)"
           tail_instruction="${SELECTION_PROMPT:-$default_tail}"
 
-          lookup_started=$SECONDS
+          enriched="$RUNNER_TEMP/candidates.enriched.json"
+          cp "$search_json" "$enriched"
           gh api "repos/${GITHUB_REPOSITORY}/branches?per_page=100" --paginate --jq '.[].name' > "$RUNNER_TEMP/branches.txt"
-          printf 'GitHub lookup duration: repository branches %ss\n' "$((SECONDS - lookup_started))"
-          enriched="$search_json"
+          : > "$RUNNER_TEMP/enrichment.jsonl"
+
+          # Repos to check for open agent PRs: the known agent repos plus any repos
+          # referenced in candidate issue bodies (e.g. upstream ecamp/ecamp3).
+          # Extracted mentions are filtered by existence on GitHub to drop path-like
+          # noise (e.g. api/camps, e2e/tests) that the grep pattern also matches.
+          repo_list=("$GITHUB_REPOSITORY" "$ISSUE_REPOSITORY" bacluc/provision-machines bacluc-agent/ecamp3)
+          mapfile -t body_repos < <(jq -r '.[].body // ""' "$search_json" \
+            | sed 's|https\?://[^/]*/||g; s|git@[^:]*:||g; s|github\.com/||g; s|\.git\b||g' \
+            | grep -oE '[A-Za-z0-9][A-Za-z0-9-]{2,}/[A-Za-z0-9][A-Za-z0-9_.-]{1,}' \
+            | grep -vE '^(github|www|http|https)\.com$' \
+            | sort -u)
+          existing_repos=()
+          for repo in "${body_repos[@]}"; do
+            if gh repo view "$repo" --json nameWithOwner --jq .nameWithOwner >/dev/null 2>&1; then
+              existing_repos+=("$repo")
+            fi
+          done
+          body_repos=("${existing_repos[@]}")
+          for repo in "${body_repos[@]}"; do
+            case " ${repo_list[*]} " in
+              *" $repo "*) ;;
+              *) repo_list+=("$repo") ;;
+            esac
+          done
+          if (( ${#repo_list[@]} > 20 )); then
+            repo_list=("${repo_list[@]:0:20}")
+          fi
+
+          pr_lookup_dir="$RUNNER_TEMP/pr-lookup"
+          mkdir -p "$pr_lookup_dir"
+          for repo in "${repo_list[@]}"; do
+            key="$(echo "$repo" | tr '/' '_')"
+            gh pr list -R "$repo" --state all --limit 200 --json number,createdAt,updatedAt,headRefName,state,title \
+              --jq '.[] | "\(.headRefName)|#\(.number)|\(.createdAt)|\(.updatedAt)|\(.state)|\(.title)"' 2>/dev/null \
+              | sort -t'|' -k4 -r > "$pr_lookup_dir/$key.lookup" || true
+          done
+
+          # Shuffle candidates so enrichment order (and the debug dump) is random.
+          while IFS= read -r num; do
+            pr_info="none"
+            pr_repo=""
+            pr_number=""
+            for repo in "${repo_list[@]}"; do
+              key="$(echo "$repo" | tr '/' '_')"
+              match="$(grep -m1 -E "issue-${num}([-_]|[^0-9A-Za-z_-]|$)|${ISSUE_REPOSITORY}#${num}([^0-9]|$)" "$pr_lookup_dir/$key.lookup" 2>/dev/null || true)"
+              if [[ -n "$match" ]]; then
+                pr_repo="$repo"
+                pr_number="$(echo "$match" | cut -d'|' -f2 | tr -d '#')"
+                pr_created="$(echo "$match" | cut -d'|' -f3)"
+                pr_state="$(echo "$match" | cut -d'|' -f5)"
+                pr_last_commit="$(gh api --paginate --slurp "repos/$pr_repo/pulls/$pr_number/commits" | jq -er --arg fallback "$pr_created" '([.[][] | .commit.committer.date] | max) // $fallback')"
+                case "$pr_state" in
+                  MERGED) pr_info="merged #${pr_number} last-commit:${pr_last_commit}" ;;
+                  CLOSED) pr_info="closed #${pr_number} last-commit:${pr_last_commit}" ;;
+                  *) pr_info="open #${pr_number} last-commit:${pr_last_commit}" ;;
+                esac
+                break
+              fi
+            done
+            # Newest non-bot feedback on the issue or on the matched PR. Formal reviews carry
+            # submitted_at and also mirror inline review comments, so one call covers both.
+            pr_human_ts="none"
+            if [[ -n "$pr_number" ]]; then
+              pr_human_ts="$(gh pr view "$pr_number" -R "$pr_repo" --json comments,reviews --jq '[[.comments[] | select(.author.login != "bacluc-agent") | .createdAt], [.reviews[] | select(.author.login != "bacluc-agent") | .submittedAt]] | add | max // "none"' 2>/dev/null || echo "none")"
+            fi
+            issue_human_ts="$(gh issue view "$num" -R "$ISSUE_REPOSITORY" --json comments --jq '[.comments[] | select(.author.login != "bacluc-agent")] | max_by(.createdAt) | .createdAt // "none"' 2>/dev/null || echo "none")"
+            jq -nc --arg num "$num" --arg pr "$pr_info" --arg a "$issue_human_ts" --arg b "$pr_human_ts" '{number:($num|tonumber),pr_info:$pr,last_human_comment_at:([$a,$b]|map(select(test("^[0-9]")))|max // null)}' >> "$RUNNER_TEMP/enrichment.jsonl"
+          done < <(shuf "$candidates")
+          jq -n --slurpfile issues "$enriched" --slurpfile enrichment "$RUNNER_TEMP/enrichment.jsonl" '$issues[0] | map(. as $issue | ($enrichment | map(select(.number == $issue.number)) | .[0]) as $e | if $e then . + {last_human_comment_at:$e.last_human_comment_at, pr_state:($e.pr_info|split(" ")[0]), pr_number:(if $e.pr_info == "none" then null else ($e.pr_info|split("#")[1]|split(" ")[0]|tonumber) end), pr_last_commit_at:(if $e.pr_info == "none" then null else ($e.pr_info|split("last-commit:")[1]) end)} else . end)' > "$RUNNER_TEMP/candidates.final.json"
+          cp "$RUNNER_TEMP/candidates.final.json" "$enriched"
 
           prompt="$RUNNER_TEMP/selection-prompt.txt"
           printf '%s\n' "$tail_instruction" > "$RUNNER_TEMP/tail.txt"
           python3 scripts/selection_tiers.py --candidates "$enriched" --branches "$RUNNER_TEMP/branches.txt" --tail-file "$RUNNER_TEMP/tail.txt" > "$prompt"
-          printf 'Randomized candidates:\n'
+          printf 'Selected-tier candidates:\n'
           cat "$prompt"
 
           selection="$RUNNER_TEMP/selection.out"
-          mapfile -t allowed_models < <(grep -Ev -f scripts/model-deny-list.txt "$available_models_file" | awk '!seen[$0]++')
-          retry_candidates=(
-            'opencode-go-openai/qwen3.8-flash'
-            'opencode-go-openai-2/qwen3.8-flash'
-            'opencode/big-pickle'
-            "${free_models[@]}"
-            "${allowed_models[@]}"
-            "${all_free_models[@]}"
-          )
-          attempted_selection_models=("$selection_model")
-          configure_openai_model() {
-            [[ "$1" == openai/* ]] || return 0
-            local slug="${1#openai/}"
-            export OPENCODE_CONFIG_CONTENT
-            OPENCODE_CONFIG_CONTENT="$(jq -cn --arg slug "$slug" --arg baseURL "$AISIX_PROXY_URL" --arg apiKey "$AISIX_CALLER_KEY" '{provider:{openai:{options:{baseURL:$baseURL,apiKey:$apiKey},models:{($slug):{name:$slug}}}}}')"
-          }
-          run_selection() {
-            local stop_token selection_command_status fatal_marker
-            local -a standalone_args=()
-            selection_started=$SECONDS
-            configure_openai_model "$selection_model"
-            if [[ "$selection_model" == openai/* ]]; then
-              standalone_args+=(--standalone)
-            fi
-            stop_token="$(openssl rand -hex 32)"
-            : "${stop_token:?stop-commands fence token generation failed}"
-            printf '::stop-commands::%s\n' "$stop_token"
-            set +e
-            timeout "${SELECTION_TIMEOUT_MINUTES}m" opencode run "${standalone_args[@]}" --agent issue-selector --model "$selection_model" --title "issue-selector" "$(< "$prompt")" | tee "$selection"
-            selection_statuses=("${PIPESTATUS[@]}")
-            set -e
-            printf '::%s::\n' "$stop_token"
-            selection_status=${selection_statuses[0]}
-            selection_tee_status=${selection_statuses[1]}
-            selection_command_status=$selection_status
-            fatal_marker=0
-            if (( selection_status == 0 )) && ! grep -Eq '^SELECTED_ISSUE:[[:space:]]*[0-9]+[[:space:]]*$' "$selection"; then
-              for _ in {1..10}; do
-                [[ -f "$RUNNER_TEMP/opencode-fatal.json" ]] && break
-                sleep 0.1
-              done
-            fi
-            if (( selection_status == 0 )) && [[ -f "$RUNNER_TEMP/opencode-fatal.json" ]]; then
-              selection_status=1
-              fatal_marker=1
-            fi
-            printf 'Issue selector duration: model=%s seconds=%s exit=%s fatal_marker=%s\n' "$selection_model" "$((SECONDS - selection_started))" "$selection_command_status" "$fatal_marker"
-          }
-          run_selection
+          set +e
+          stop_token="$(openssl rand -hex 32)"
+          : "${stop_token:?stop-commands fence token generation failed}"
+          printf '::stop-commands::%s\n' "$stop_token"
+          timeout "${SELECTION_TIMEOUT_MINUTES}m" opencode run --agent issue-selector --model "$selection_model" --title "issue-selector" "$(< "$prompt")" | tee "$selection"
+          selection_statuses=("${PIPESTATUS[@]}")
+          printf '::%s::\n' "$stop_token"
+          selection_status=${selection_statuses[0]}
+          selection_tee_status=${selection_statuses[1]}
+          set -e
           printf 'Model selection statuses: opencode=%s tee=%s\n' "$selection_status" "$selection_tee_status"
           if (( selection_tee_status != 0 )); then
             exit "$selection_tee_status"
           fi
-          selection_retry_count=0
-          while (( selection_status != 0 && selection_retry_count < 2 )); do
-            retry_model=''
-            for candidate in "${retry_candidates[@]}"; do
-              [[ "$candidate" == "$selection_model" ]] && continue
-              [[ " ${attempted_selection_models[*]} " == *" $candidate "* ]] && continue
-              case "$candidate" in
-                opencode-go-openai/qwen3.8-flash)
-                  grep -Fxq "$candidate" "$available_models_file" && [[ -n "$OPENCODE_GO_API_KEY" ]] || continue
-                  ;;
-                opencode-go-openai-2/qwen3.8-flash)
-                  grep -Fxq "$candidate" "$available_models_file" && [[ -n "$OPENCODE_GO_2_API_KEY" ]] || continue
-                  ;;
-                opencode/big-pickle)
-                  grep -Fxq "$candidate" "$available_models_file" || continue
-                  ;;
-                opencode-go-openai/*)
-                  grep -Fxq "$candidate" "$available_models_file" && [[ -n "$OPENCODE_GO_API_KEY" ]] || continue
-                  ;;
-                opencode-go-openai-2/*)
-                  grep -Fxq "$candidate" "$available_models_file" && [[ -n "$OPENCODE_GO_2_API_KEY" ]] || continue
-                  ;;
-                opencode-go-*) continue ;;
-                opencode/*)
-                  grep -Fxq "$candidate" "$available_models_file" || continue
-                  ;;
-                openrouter/*)
-                  grep -Fxq "$candidate" "$available_models_file" || continue
-                  [[ -n "$OPENROUTER_API_KEY" ]] || continue
-                  ;;
-                *) continue ;;
-              esac
-              retry_model="$candidate"
-              break
-            done
-            [[ -n "$retry_model" ]] || break
-            printf 'Issue selector invocation failed (exit %s); retrying with %s.\n' "$selection_status" "$retry_model"
-            attempted_selection_models+=("$retry_model")
-            selection_model="$retry_model"
-            echo "selection_model=${selection_model}" >> "$GITHUB_OUTPUT"
-            : > "$selection"
-            rm -f "$RUNNER_TEMP/opencode-fatal.json"
-            ((selection_retry_count+=1))
-            run_selection
-            if (( selection_tee_status != 0 )); then
-              exit "$selection_tee_status"
-            fi
-          done
-          printf 'Model selection statuses: opencode=%s tee=%s\n' "$selection_status" "$selection_tee_status"
           if (( selection_status != 0 )); then
             printf 'Selection failed (opencode=%s); not dispatching.\n' "$selection_status" >&2
             ((selection_status == 124)) && printf '::error::issue selection exceeded the %sm limit (opencode exit %s)\n' "$SELECTION_TIMEOUT_MINUTES" "$selection_status"

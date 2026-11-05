@@ -1,6 +1,6 @@
 import { classifyEvent } from "../classify.ts";
+import type { Plugin } from "@opencode-ai/plugin";
 import type { Event } from "@opencode-ai/sdk";
-import type { Plugin } from "@opencode/plugin/promise/plugin";
 import { writeFileSync } from "node:fs";
 
 // .ts extension REQUIRED for Node type stripping
@@ -39,47 +39,32 @@ export function messageOf(error: unknown): string {
 
 const plugin: Plugin = {
   id: "fatal-error-guard",
-  setup(context) {
-    const controller = new AbortController();
-    void (async () => {
-      for await (const event of context.event.subscribe({
-        signal: controller.signal,
-      })) {
-        const hit = classifyEvent(event as Event, {
-          model: process.env.MODEL,
-        });
-        if (!hit) continue;
+  async setup({ context }) {
+    context.event(async ({ event }: { event: Event }) => {
+      const hit = classifyEvent(event, { model: process.env.MODEL });
+      if (!hit) return;
 
-        const message = messageOf(hit.error);
-        console.error(`fatal provider error (${hit.reason}): ${message}`);
+      const message = messageOf(hit.error);
+      console.error(`fatal provider error (${hit.reason}): ${message}`);
 
-        const e = event as any;
-        const props = e.properties ?? e.data;
-        const sessionID =
-          props?.sessionID ?? e?.properties?.sessionID ?? "unknown";
+      const marker = {
+        reason: hit.reason,
+        model: process.env.MODEL ?? "unknown",
+        provider: hit.provider ?? "unknown",
+        sessionID: event.properties?.sessionID ?? "unknown",
+        error: hit.error ?? null,
+        message,
+        stage: process.env.OPENCODE_FATAL_STAGE ?? "unknown",
+        at: new Date().toISOString(),
+      };
 
-        const marker = {
-          reason: hit.reason,
-          model: process.env.MODEL ?? "unknown",
-          provider: hit.provider ?? "unknown",
-          sessionID,
-          error: hit.error ?? null,
-          message,
-          stage: process.env.OPENCODE_FATAL_STAGE ?? "unknown",
-          at: new Date().toISOString(),
-        };
-
-        const path = `${process.env.RUNNER_TEMP ?? "/tmp"}/opencode-fatal.json`;
-        try {
-          writeFileSync(path, JSON.stringify(marker));
-        } finally {
-          process.exit(1);
-        }
+      const path = `${process.env.RUNNER_TEMP ?? "/tmp"}/opencode-fatal.json`;
+      try {
+        writeFileSync(path, JSON.stringify(marker));
+      } finally {
+        process.exit(1);
       }
-    })().catch((e) =>
-      console.error("fatal-error-guard: event stream failed:", String(e)),
-    );
-    return () => controller.abort();
+    });
   },
 };
 

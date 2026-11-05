@@ -780,21 +780,32 @@ class TestMergeResults:
 
 class TestAvailableModels:
     def test_free_first_then_paid(self):
+        now = datetime(2026, 9, 6, 12, tzinfo=timezone.utc)
         cache = {
-            "opencode-go-openai/glm-5.2": {"ok": True, "checked": "x"},
-            "opencode/a-free": {"ok": True, "checked": "x"},
+            "opencode-go-openai/glm-5.2": {"ok": True, "checked": "2026-09-06T11:30:00Z"},
+            "opencode/a-free": {"ok": True, "checked": "2026-09-06T11:30:00Z"},
             "opencode/b-free": {"ok": False, "checked": "x"},
-            "opencode-go-openai-2/glm-5.2": {"ok": True, "checked": "x"},
+            "opencode-go-openai-2/glm-5.2": {"ok": True, "checked": "2026-09-06T11:30:00Z"},
         }
         assert model_availability.available_models(
             cache,
             ["opencode/a-free", "opencode/b-free"],
             {"opencode-go-openai": ["glm-5.2"], "opencode-go-openai-2": ["glm-5.2"]},
+            now,
         ) == [
             "opencode/a-free",
             "opencode-go-openai/glm-5.2",
             "opencode-go-openai-2/glm-5.2",
         ]
+
+    def test_excludes_stale_positive_cache_entries(self):
+        now = datetime(2026, 9, 6, 12, tzinfo=timezone.utc)
+        assert model_availability.available_models(
+            {"opencode/a-free": {"ok": True, "checked": "2026-09-04T10:00:00Z"}},
+            ["opencode/a-free"],
+            {},
+            now,
+        ) == []
 
 
 class TestResolveCacheIssue:

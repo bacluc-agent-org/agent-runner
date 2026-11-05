@@ -22,13 +22,18 @@ ACTIONLINT_VERSION=1.7.12
 
 mount=(-v "$PWD:/workspace" -w /workspace)
 status=0
+prettier_ignore=".prettierignore.completion-check"
+opencode_temp=$(mktemp -d)
+trap 'rm -rf "$opencode_temp"; rm -f "$prettier_ignore"' EXIT
+mkdir -p "$opencode_temp/.opencode"
+cp .opencode/package.json .opencode/package-lock.json "$opencode_temp/.opencode/"
+cp .opencode/classify.ts "$opencode_temp/.opencode/"
+cp -R .opencode/plugin .opencode/tool "$opencode_temp/.opencode/"
 
 # The prettier check must not cover nested git checkouts in the workspace
 # (e.g. cloned target repositories): they have their own formatting rules
 # and toolchain. git lists such checkouts as a single untracked "<dir>/"
 # entry, while regular untracked files of this repository stay checked.
-prettier_ignore=".prettierignore.completion-check"
-trap 'rm -f "$prettier_ignore"' EXIT
 cat .gitignore .prettierignore 2> /dev/null > "$prettier_ignore" || true
 printf '%s\n' "$prettier_ignore" >> "$prettier_ignore"
 while IFS= read -r entry; do
@@ -49,11 +54,9 @@ check() {
 
 check 'formatting (prettier --check .)' docker run --rm "${mount[@]}" "ghcr.io/bacluc/prettier-image/prettier-image:${PRETTIER_VERSION}" --ignore-path "$prettier_ignore" --check .
 check 'actionlint (workflows + used actions)' docker run --rm "${mount[@]}" "rhysd/actionlint:${ACTIONLINT_VERSION}" -color
-if [[ ! -d .opencode/node_modules/@opencode-ai/plugin ]]; then
-  check 'opencode node dependencies (npm install)' npm install --prefix .opencode
-fi
-check 'opencode plugin tests (node --test)' node --test ".opencode/plugin/*.test.mjs"
-check 'opencode tool tests (node --test)' node --test ".opencode/tool/*.test.mjs"
+check 'opencode node dependencies (npm install)' npm install --prefix "$opencode_temp/.opencode"
+check 'opencode plugin tests (node --test)' node --test "$opencode_temp/.opencode/plugin/*.test.mjs"
+check 'opencode tool tests (node --test)' node --test "$opencode_temp/.opencode/tool/*.test.mjs"
 if command -v uv > /dev/null 2>&1; then
   check 'pytest (scripts tests)' uv run --group dev pytest -q
 elif command -v pytest > /dev/null 2>&1; then

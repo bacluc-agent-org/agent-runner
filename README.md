@@ -75,29 +75,24 @@ idea (issue in agent-todo)
 | `opencode.yml`                 | called by the other workflows               | The core runner: checks model availability, selects a model, runs the coordinator agent, pushes the work, keeps one structured progress comment on the issue, and only short replies to human comments. |
 | `review-fixes.yml`             | every 4 hours at minute 32                  | Finds open pull requests with review comments and re-dispatches the agent to apply them.                                                                                                                |
 | `refresh-chatgpt-auth.yml`     | 1st and 15th of each month                  | Keeps the OpenAI login working by refreshing the OAuth token (browser login as fallback).                                                                                                               |
-| `invite-owner.yml`             | daily at minute 23 after 04:00 UTC          | Invites the `FORK_INVITE_USER` GitHub user with `push` permission to every `bacluc-agent` repository that does not already have them as collaborator.                                                   |
 | `renew-interaction-limits.yml` | 1st of each month                           | Renews the repository interaction limit so collaborators can keep working.                                                                                                                              |
 
 ### Actions (reusable building blocks)
 
-- `setup-opencode` — installs the OpenCode CLI, copies shared agent
-  configuration from `bacluc/provision-machines`, refreshes ChatGPT OAuth
-  outside OpenCode, and routes OpenAI requests through per-job AISIX.
+- `setup-opencode` — installs the OpenCode CLI and copies the shared agent
+  configuration from the `bacluc/provision-machines` repository (pinned to
+  the latest release tag). The AI configuration lives there, not here.
 - `model-availability` — probes which AI models currently work and stores the
-  result in a cache issue in the todo repository. It discovers ChatGPT/Codex
-  models with the standalone OAuth bearer token and probes them through AISIX.
-  Probing every model on every run would be slow and expensive; the cache makes
-  it cheap.
+  result in a cache issue in the todo repository. Probing every model on
+  every run would be slow and expensive; the cache makes it cheap.
 
-Selectors prefer models outside the shared `scripts/model-deny-list.txt`. If
-none are available, the hourly issue selector makes one last-resort attempt
-with an available free model from that list; it still validates the selector
-output before dispatching.
+Selectors apply the shared `scripts/model-deny-list.txt` and stop instead of
+dispatching when no allowed model is available.
 
 ### Agents (the AI personas)
 
-- `issue-selector` — reads all eligible candidate issues in random order and
-  picks one while avoiding recent repeats.
+- `issue-selector` — reads the candidate issues and picks one from the best
+  available mechanically ranked tier.
 
 - `issue-refiner` — a technical writer that rewrites issue bodies into
   `## Goal` and `## How to implement`, keeping at most 4000 visible
@@ -117,8 +112,8 @@ output before dispatching.
   `<details>` fold inside the implementation section.
 - `dump_subagent_transcripts.py` — dumps agent session transcripts for
   debugging.
-- `refresh-token.py` / `chatgpt-login.py` — refresh the ChatGPT OAuth bearer
-  token without OpenCode, or fall back to a browser login.
+- `refresh-token.py` / `chatgpt-login.py` — refresh the OpenAI login without
+  a browser, or fall back to a browser login.
 - `issue-selection-tail.txt` — the default selection instructions appended to
   the issue-selector prompt.
 
@@ -160,12 +155,12 @@ and verifies forwarding and historical denial in a later step outside the checko
 
 Set these in Settings → Secrets and variables → Actions → Variables:
 
-| Variable                         | Description                                                                                                                                                                                                                           | Default                   |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| `ISSUE_REPOSITORY`               | Repository for issue tracking and cache (format: `owner/repo`)                                                                                                                                                                        | `github.repository`       |
-| `MODEL_AVAILABILITY_CACHE_ISSUE` | Issue number used as the model-availability cache                                                                                                                                                                                     | auto-detected             |
-| `FORK_INVITE_USER`               | GitHub user invited with `push` on every new fork and swept as collaborator onto every `bacluc-agent` repository daily by `invite-owner.yml` (exposed to the `github-fork-invite` skill as `GITHUB_FORK_INVITE_USER`; empty disables) | unset (skill no-op)       |
-| `REVIEW_FIXES_OWNER`             | GitHub account (organization or user) whose authored pull requests the _review-fixes_ workflow searches for review comments                                                                                                           | `github.repository_owner` |
+| Variable                         | Description                                                                                                                                | Default                   |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------- |
+| `ISSUE_REPOSITORY`               | Repository for issue tracking and cache (format: `owner/repo`)                                                                             | `github.repository`       |
+| `MODEL_AVAILABILITY_CACHE_ISSUE` | Issue number used as the model-availability cache                                                                                          | auto-detected             |
+| `FORK_INVITE_USER`               | GitHub user invited with `push` on every new fork (exposed to the `github-fork-invite` skill as `GITHUB_FORK_INVITE_USER`; empty disables) | unset (skill no-op)       |
+| `REVIEW_FIXES_OWNER`             | GitHub account (organization or user) whose authored pull requests the _review-fixes_ workflow searches for review comments                | `github.repository_owner` |
 
 ## Secrets
 
@@ -177,9 +172,7 @@ Never print their values.
 | GitHub access                   | `BACLUC_AGENT_GITHUB_TOKEN`                                                | All issue, PR, and workflow operations                                         |
 | GitHub access                   | `FORK_INVITE_USER`                                                         | Fallback for the `FORK_INVITE_USER` variable (variable wins when both are set) |
 | AI providers                    | `OPENCODE_GO_API_KEY`, `OPENCODE_GO_2_API_KEY`, `OPENROUTER_API_KEY`       | API keys for the AI model providers                                            |
-| ChatGPT OAuth                   | `CHATGPT_ACCESS_TOKEN`, `CHATGPT_REFRESH_TOKEN`                            | Independent bearer and rotating refresh tokens, updated by agent workflows     |
-| ChatGPT OAuth                   | `OPENAI_OAUTH_CLIENT_ID`                                                   | Optional client-ID override; defaults to the OpenCode public client ID         |
-| Legacy migration                | `OPENCODE_AUTH_JSON`                                                       | Bootstrap source until the independent token secrets are set                   |
+| OpenAI login                    | `OPENCODE_AUTH_JSON`                                                       | The OpenAI OAuth credential (refreshed automatically)                          |
 | Web search                      | `BRAVE_API_KEY`                                                            | API key for the `brave-search` MCP server (optional)                           |
 | OpenAI login (ChatGPT fallback) | `CHATGPT_EMAIL`, `CHATGPT_PASSWORD`, `CHATGPT_2FA_KEY`, `CHATGPT_TOTP_KEY` | Browser login fallback with a ChatGPT account                                  |
 | OpenAI login (OpenAI fallback)  | `OPENAI_USERNAME`, `OPENAI_PASSWORD`, `OPENAI_2FA_KEY`                     | Browser login fallback with an OpenAI account                                  |

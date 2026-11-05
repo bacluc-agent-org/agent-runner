@@ -284,7 +284,7 @@ def test_primitives_fallback_runs_only_after_browser_login_failure():
     primitives = workflow[
         workflow.index("- name: Agent-usable primitives fallback") :
     ]
-    assert "if: steps.browser-login.outcome == 'failure'" in primitives
+    assert "if: ${{ !cancelled() && steps.browser-login.outcome == 'failure' }}" in primitives
     for command in ("start", "status", "step"):
         assert f"uv run scripts/chatgpt-login.py {command} || true" in primitives
 

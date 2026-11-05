@@ -128,7 +128,7 @@ jobs:
           printf 'Auth refreshed via browser login\n'
 
       - name: Agent-usable primitives fallback (start/status/step)
-        if: steps.browser-login.outcome == 'failure'
+        if: ${{ !cancelled() && steps.browser-login.outcome == 'failure' }}
         env:
           CHATGPT_EMAIL: ${{ secrets.CHATGPT_EMAIL || secrets.OPENAI_USERNAME }}
           CHATGPT_PASSWORD: ${{ secrets.CHATGPT_PASSWORD || secrets.OPENAI_PASSWORD }}

@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+import urllib.error
 from pathlib import Path
 from urllib.parse import urlsplit
 from datetime import datetime, timezone
@@ -367,8 +368,18 @@ def fetch_openai_oauth_model_ids() -> list[str]:
                 and model.get("supported_in_api") is not False
             }
         )
+    except urllib.error.HTTPError as e:
+        status = e.code
+        if status == 401:
+            detail = "OAuth authentication failed (HTTP 401)"
+        elif status == 429:
+            detail = "OAuth rate/quota limit (HTTP 429)"
+        else:
+            detail = f"OAuth catalog HTTP error ({status})"
+        print(f"warning: failed to discover models from ChatGPT Codex catalog: {detail}", file=sys.stderr)
+        return []
     except Exception as e:
-        print(f"warning: failed to discover models from {OPENAI_CODEX_MODELS_URL}: {e}", file=sys.stderr)
+        print(f"warning: failed to discover models from ChatGPT Codex catalog: transport/response failure ({type(e).__name__})", file=sys.stderr)
         return []
 
 

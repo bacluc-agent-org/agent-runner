@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import types
+import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,6 +38,30 @@ def fake_run(args, *a, **kw):
 
 
 class TestDiscoverModels:
+    @pytest.mark.parametrize(
+        ("error", "diagnostic"),
+        [
+            (urllib.error.HTTPError("https://private.invalid", 401, "secret-token", {}, None), "OAuth authentication failed (HTTP 401)"),
+            (urllib.error.HTTPError("https://private.invalid", 429, "secret-token", {}, None), "OAuth rate/quota limit (HTTP 429)"),
+            (urllib.error.HTTPError("https://private.invalid", 503, "secret-token", {}, None), "OAuth catalog HTTP error (503)"),
+            (urllib.error.URLError("secret-token"), "transport/response failure (URLError)"),
+        ],
+    )
+    def test_oauth_catalog_failures_are_classified_without_secrets(
+        self, monkeypatch, capsys, error, diagnostic
+    ):
+        monkeypatch.setenv("OPENAI_ACCESS_TOKEN", "secret-token")
+        monkeypatch.setattr(
+            model_availability.urllib.request,
+            "urlopen",
+            lambda *args, **kwargs: (_ for _ in ()).throw(error),
+        )
+
+        assert model_availability.fetch_openai_oauth_model_ids() == []
+        stderr = capsys.readouterr().err
+        assert diagnostic in stderr
+        assert "secret-token" not in stderr
+
     def test_provider_config_reads_urls_from_array_shaped_debug_output(self, monkeypatch, tmp_path):
         config_path = tmp_path / "opencode.jsonc"
         config_path.write_text(

@@ -5,10 +5,10 @@
       "customType": "regex",
       "managerFilePatterns": ["/^\\.github\\/.*\\.yml$/"],
       "matchStrings": [
-        "npm install --global opencode-ai@(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+        "npm install --global @opencode/cli@(?<currentValue>\\d+\\.\\d+\\.\\d+)"
       ],
       "datasourceTemplate": "npm",
-      "depNameTemplate": "opencode-ai"
+      "depNameTemplate": "@opencode/cli"
     },
     {
       "customType": "regex",

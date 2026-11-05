@@ -1192,6 +1192,22 @@ class TestProbeModelLogging:
         assert "token" not in diagnostic
         assert "caller-key" not in diagnostic
 
+    def test_failed_free_probe_logs_only_sanitized_error_category(self, tmp_path, capsys):
+        probe_dir = tmp_path / "model-probes"
+        probe_dir.mkdir()
+        (probe_dir / "probe-opencode-a-free.log").write_text(
+            "request failed with HTTP 429: quota exhausted; secret-value"
+        )
+
+        model_availability.log_failed_free_probes(
+            {"opencode/a-free": False}, str(tmp_path)
+        )
+
+        diagnostic = capsys.readouterr().err
+        assert "opencode/a-free" in diagnostic
+        assert "HTTP 429" in diagnostic
+        assert "secret-value" not in diagnostic
+
     def test_oauth_probe_registers_the_catalog_model_in_opencode_config(self, tmp_path, monkeypatch):
         captured = {}
 

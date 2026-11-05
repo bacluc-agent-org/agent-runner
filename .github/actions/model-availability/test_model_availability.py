@@ -1451,6 +1451,7 @@ class TestModelAvailabilityAction:
         assert "CHATGPT_REFRESH_TOKEN" in setup
         assert "write_auth_content" in setup
         assert 'PYTHONPATH="$GITHUB_WORKSPACE/scripts"' in setup
+        assert "OpenCode auth content is not configured" in setup
         action = Path(__file__).with_name("action.yml").read_text()
         assert "OPENCODE_AUTH_CONTENT" not in action
         assert "auth.json" not in action

@@ -255,7 +255,7 @@ def test_fill_first_visible_without_delay_uses_plain_fill():
     assert page.locator_instance.typed == []
 
 
-def test_refresh_workflow_fences_failure_diagnostics_and_masks_stored_auth():
+def test_refresh_workflow_suppresses_failed_auth_output_and_masks_stored_auth():
     workflow = (
         Path(__file__).parents[1] / ".github/workflows/refresh-chatgpt-auth.yml"
     ).read_text(encoding="utf-8")
@@ -264,13 +264,10 @@ def test_refresh_workflow_fences_failure_diagnostics_and_masks_stored_auth():
             "- name: Agent-usable primitives fallback"
         )
     ]
-    assert 'printf \'::stop-commands::%s\\n\' "$stop_token"' in browser
-    auth_log = 'cat "$RUNNER_TEMP/auth.json" >&2'
-    assert auth_log in browser
-    assert 'printf \'::%s::\\n\' "$stop_token"' in browser
-    assert browser.index('printf \'::stop-commands::%s\\n\' "$stop_token"') < browser.index(
-        auth_log
-    ) < browser.index('printf \'::%s::\\n\' "$stop_token"')
+    assert 'cat "$RUNNER_TEMP/auth.json" >&2' not in browser
+    assert 'cat "$RUNNER_TEMP/chatgpt-login.stderr" >&2' not in browser
+    assert "Browser login failed; authentication output suppressed." in browser
+    assert 'exit "$status"' in browser
 
     for step in ("Set secret (refreshed token)", "Browser login (fallback)"):
         start = workflow.index(f"- name: {step}")
@@ -319,6 +316,7 @@ def test_refresh_workflow_uses_opencode_v1_auth_and_validates_before_storing():
     assert "npm install --global opencode-ai@1.18.32" in validate
     assert "--model openai/gpt-5.6-luna" in validate
     assert "steps.validate.outcome == 'success'" in store
+    assert "!cancelled() && (steps.refresh.outputs.refreshed != 'true' || steps.validate.outcome != 'success')" in workflow
     assert "CHATGPT_REFRESH_TOKEN" not in workflow
 
 

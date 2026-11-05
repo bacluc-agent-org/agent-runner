@@ -227,7 +227,7 @@ jobs:
                 pr_number="$(echo "$match" | cut -d'|' -f2 | tr -d '#')"
                 pr_created="$(echo "$match" | cut -d'|' -f3)"
                 pr_state="$(echo "$match" | cut -d'|' -f5)"
-                pr_last_commit="$(gh api --paginate --slurp "repos/$pr_repo/pulls/$pr_number/commits" | jq -er --arg fallback "$pr_created" '([.[][] | .commit.committer.date] | max) // $fallback')"
+                pr_last_commit="$(gh api --paginate --slurp "repos/$pr_repo/pulls/$pr_number/commits" | jq -er --arg fallback "$pr_created" '([.[][] | .commit.committer.date] | max) // $fallback')" || pr_last_commit="$pr_created"
                 case "$pr_state" in
                   MERGED) pr_info="merged #${pr_number} last-commit:${pr_last_commit}" ;;
                   CLOSED) pr_info="closed #${pr_number} last-commit:${pr_last_commit}" ;;

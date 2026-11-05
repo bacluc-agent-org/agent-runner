@@ -125,6 +125,7 @@ def test_workflow_uses_latest_commit_and_created_at_when_pr_has_no_commits():
     assert "--json number,createdAt,updatedAt,headRefName,state,title" in content
     assert "sort -t'|' -k4 -r" in content
     assert 'gh api --paginate --slurp "repos/$pr_repo/pulls/$pr_number/commits" | jq -er --arg fallback "$pr_created"' in content
+    assert '''pr_last_commit="$(gh api --paginate --slurp "repos/$pr_repo/pulls/$pr_number/commits" | jq -er --arg fallback "$pr_created" '([.[][] | .commit.committer.date] | max) // $fallback')" || pr_last_commit="$pr_created"''' in content
     assert '([.[][] | .commit.committer.date] | max) // $fallback' in content
     assert 'pr_last_commit_at:(' in content
     assert 'map(select(test("^[0-9]")))|max // null' in content

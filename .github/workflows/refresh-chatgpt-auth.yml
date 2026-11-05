@@ -104,7 +104,7 @@ jobs:
 
       - name: Browser login (fallback)
         id: browser-login
-        if: steps.refresh.outputs.refreshed != 'true' || steps.validate.outcome != 'success'
+        if: ${{ !cancelled() && (steps.refresh.outputs.refreshed != 'true' || steps.validate.outcome != 'success') }}
         env:
           OPENAI_USERNAME: ${{ secrets.OPENAI_USERNAME }}
           OPENAI_PASSWORD: ${{ secrets.OPENAI_PASSWORD }}
@@ -116,12 +116,7 @@ jobs:
           status=$?
           set -e
           if (( status != 0 )); then
-            stop_token="$(openssl rand -hex 32)"
-            : "${stop_token:?stop-commands fence token generation failed}"
-            printf '::stop-commands::%s\n' "$stop_token"
-            cat "$RUNNER_TEMP/auth.json" >&2
-            cat "$RUNNER_TEMP/chatgpt-login.stderr" >&2
-            printf '::%s::\n' "$stop_token"
+            printf 'Browser login failed; authentication output suppressed.\n' >&2
             exit "$status"
           fi
           # xvfb-run merges the script's stderr into stdout, so drop the

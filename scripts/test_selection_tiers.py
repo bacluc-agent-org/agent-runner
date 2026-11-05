@@ -7,6 +7,10 @@ from selection_tiers import Candidate, parse_branches, render_prompt
 WORKFLOW = Path(__file__).parents[1] / ".github/workflows/hourly-issue.yml"
 
 
+def test_issue_runner_is_scheduled_hourly():
+    assert '    - cron: "37 * * * *"' in WORKFLOW.read_text()
+
+
 def candidate(number=1, **values):
     defaults = dict(
         number=number,

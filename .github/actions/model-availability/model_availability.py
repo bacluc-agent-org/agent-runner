@@ -236,12 +236,6 @@ def discover_models() -> tuple[list[str], dict[str, list[str]]]:
     except OSError:
         pass
     whitelisted_models = parse_whitelisted_models(result.stdout)
-    openai_patterns = PROVIDER_WHITELISTS["openai"]
-    whitelisted_models.extend(
-        f"openai/{model}"
-        for model in fetch_openai_oauth_model_ids()
-        if is_whitelisted(model, openai_patterns)
-    )
     provider_config = load_provider_config()
     base_urls = {
         name: info["baseURL"]
@@ -311,7 +305,7 @@ def candidate_priority(candidate: str) -> int:
     if provider == "opencode":
         return 2 if free else 4
     if provider == "openai":
-        return 1
+        return 4
     if re.search(r"gpt", model, re.IGNORECASE):
         return 2 if provider in ("opencode-go-openai", "opencode-go-openai-2") else 6
     if provider == "openrouter":

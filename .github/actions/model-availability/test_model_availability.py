@@ -37,6 +37,25 @@ def fake_run(args, *a, **kw):
 
 
 class TestDiscoverModels:
+    def test_discovers_openai_models_from_opencode_catalog_without_oauth_api(self, monkeypatch):
+        def fake_run_with_openai(args, *a, **kw):
+            if args == ["opencode", "models"]:
+                return types.SimpleNamespace(stdout="openai/gpt-5.6-luna\n")
+            if args == ["opencode", "debug", "config"]:
+                kw["stdout"].write(json.dumps(CONFIG))
+                return types.SimpleNamespace(stdout="")
+            raise AssertionError(f"unexpected args: {args}")
+
+        def unexpected_oauth_request(*args, **kwargs):
+            raise AssertionError("OpenAI models must come from the OpenCode catalog")
+
+        monkeypatch.setattr(model_availability.urllib.request, "urlopen", unexpected_oauth_request)
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run_with_openai)
+
+        models, _ = model_availability.discover_models()
+
+        assert models == ["openai/gpt-5.6-luna"]
+
     def test_discovers_models_per_provider(self, monkeypatch):
         captured = {}
 

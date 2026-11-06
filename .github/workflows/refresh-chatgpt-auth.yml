@@ -6,6 +6,7 @@ on:
       - ".github/workflows/refresh-chatgpt-auth.yml"
       - "scripts/refresh-token.py"
       - "scripts/chatgpt-login.py"
+      - "scripts/chatgpt-login-primitives-fallback.sh"
       - "scripts/opencode_auth.py"
   workflow_dispatch:
     inputs:

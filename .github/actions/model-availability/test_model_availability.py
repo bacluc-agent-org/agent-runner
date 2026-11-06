@@ -1249,6 +1249,30 @@ class TestDiscoveryTimeout:
         assert model_availability.DISCOVERY_TIMEOUT_SECONDS <= 120
 
 
+class TestRefineIssuesWorkflowDispatch:
+    WORKFLOW = Path(__file__).parents[3] / ".github/workflows/refine-issues.yml"
+    REUSABLE_WORKFLOW = "./.github/workflows/refine-issues-reusable.yml"
+
+    def test_dispatch_workflow_calls_reusable_workflow(self):
+        content = self.WORKFLOW.read_text()
+        assert f"uses: {self.REUSABLE_WORKFLOW}" in content
+        assert "ISSUE_REPOSITORY: ${{ vars.ISSUE_REPOSITORY || github.repository }}" in content
+        assert "MODEL_AVAILABILITY_CACHE_ISSUE: ${{ vars.MODEL_AVAILABILITY_CACHE_ISSUE }}" in content
+        for secret in (
+            "BACLUC_AGENT_GITHUB_TOKEN",
+            "OPENCODE_GO_API_KEY",
+            "OPENCODE_GO_2_API_KEY",
+            "OPENROUTER_API_KEY",
+            "BRAVE_API_KEY",
+            "OPENCODE_AUTH_JSON",
+        ):
+            assert f"{secret}: ${{{{ secrets.{secret} }}}}" in content
+
+    def test_refinement_job_uses_github_hosted_runner(self):
+        content = (self.WORKFLOW.parent / "refine-issues-reusable.yml").read_text()
+        assert "runs-on: ubuntu-latest" in content
+
+
 class TestRefineIssuesExitCode:
     WORKFLOW = Path(__file__).parents[3] / ".github/workflows/refine-issues-reusable.yml"
 

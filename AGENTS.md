@@ -63,7 +63,7 @@ are assigned to an env variable, and have a renovate comment on top.
 
 ```bash
 # renovate: datasource=docker depName=ghcr.io/bacluc/prettier-image/prettier-image
-PRETTIER_VERSION=5.1.1
+PRETTIER_VERSION=8.0.0
 
 # renovate: datasource=docker depName=rhysd/actionlint
 ACTIONLINT_VERSION=1.7.12

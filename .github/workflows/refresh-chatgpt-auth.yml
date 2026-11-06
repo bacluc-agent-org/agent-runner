@@ -139,14 +139,63 @@ jobs:
           CHATGPT_TOTP_KEY: ${{ secrets.CHATGPT_TOTP_KEY }}
         run: |
           set -Eeuo pipefail
-          # Fallback: use agent-usable primitives to try login manually
-          # start launches Chrome with CDP, status reports step, step performs one action
           echo "Agent fallback: attempting login via primitives..."
           stop_token="$(openssl rand -hex 32)"
           : "${stop_token:?stop-commands fence token generation failed}"
           printf '::stop-commands::%s\n' "$stop_token"
-          uv run scripts/chatgpt-login.py start || true
-          uv run scripts/chatgpt-login.py status || true
-          uv run scripts/chatgpt-login.py step || true
+          uv run scripts/chatgpt-login.py start > "$RUNNER_TEMP/primitives-auth.json" 2> "$RUNNER_TEMP/primitives-login.stderr" &
+          login_pid=$!
+          cleanup() {
+            if kill -0 "$login_pid" 2>/dev/null; then
+              kill "$login_pid" 2>/dev/null || true
+              wait "$login_pid" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+          completed=false
+          for attempt in $(seq 1 60); do
+            if ! kill -0 "$login_pid" 2>/dev/null; then
+              wait "$login_pid" || { printf 'Primitive login start failed; output suppressed\n' >&2; exit 1; }
+              completed=true
+              break
+            fi
+            if [[ -s "$RUNNER_TEMP/primitives-auth.json" ]]; then
+              wait "$login_pid" || { printf 'Primitive login start failed; output suppressed\n' >&2; exit 1; }
+              completed=true
+              break
+            fi
+            if ! status_json=$(uv run scripts/chatgpt-login.py status); then
+              sleep 5
+              continue
+            fi
+            printf '%s\n' "$status_json" | jq -e 'type == "object" and (.error == null) and (.step | type == "string") and ((.blocking == null) or (.blocking | type == "string"))' >/dev/null || { printf 'Primitive login reported an invalid status\n' >&2; exit 1; }
+            if [[ "$(jq -r '.blocking // empty' <<< "$status_json")" != "" ]]; then
+              sleep 5
+              continue
+            fi
+            if [[ "$(jq -r '.code_ready' <<< "$status_json")" == true ]]; then
+              wait "$login_pid" || { printf 'Primitive login start failed; output suppressed\n' >&2; exit 1; }
+              completed=true
+              break
+            fi
+            step_json=$(uv run scripts/chatgpt-login.py step) || step_status=$?
+            if [[ -n "${step_status:-}" ]]; then
+              [[ "$step_status" == 1 ]] || { printf 'Primitive login step failed with status %s\n' "$step_status" >&2; exit "$step_status"; }
+              unset step_status
+            else
+              printf '%s\n' "$step_json" | jq -e 'type == "object" and (.error == null) and (.step | type == "string") and ((.blocking == null) or (.blocking | type == "string"))' >/dev/null || { printf 'Primitive login step returned an invalid status\n' >&2; exit 1; }
+              if [[ "$(jq -r '.blocking // empty' <<< "$step_json")" != "" ]]; then
+                sleep 5
+                continue
+              fi
+            fi
+            sleep 5
+          done
+          [[ "$completed" == true ]] || { printf 'Primitive login timed out after %s attempts\n' "$attempt" >&2; exit 1; }
+          auth_json=$(cat "$RUNNER_TEMP/primitives-auth.json")
+          [[ -n "$auth_json" ]] || { printf 'Primitive login produced no authentication JSON\n' >&2; exit 1; }
           printf '::%s::\n' "$stop_token"
-          printf 'Agent primitives fallback attempted\n'
+          printf '::add-mask::%s\n' "$auth_json"
+          printf '%s\n' "$auth_json" | jq -e '.openai.type == "oauth" and (.openai.access | type == "string" and length > 0) and (.openai.refresh | type == "string" and length > 0) and (.openai.expires | type == "number")' >/dev/null
+          GH_TOKEN="$BACLUC_AGENT_GITHUB_TOKEN" gh secret set OPENCODE_AUTH_JSON --repo "$GITHUB_REPOSITORY" --body "$auth_json"
+          printf 'Auth refreshed via primitives fallback\n'

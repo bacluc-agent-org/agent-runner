@@ -471,21 +471,20 @@ def _exchange_code(code: str, verifier: str) -> dict:
 
 
 def _do_email_step(page, email: str) -> bool:
-    if not _fill_first_visible(page, ['input[type="email"]', 'input[name="email"]', 'input[id="email"]'], email, delay_ms=100):
+    if not _fill_first_visible(page, ['input[type="email"]', 'input[name="email"]', 'input[id="email"]'], email, delay_ms=200):
         return False
-    time.sleep(1)
+    time.sleep(2)
     return _click_first_visible(page, ['button[type="submit"]', 'button:has-text("Continue")'])
 
 
 def _do_password_step(page, password: str) -> bool:
-    if not _fill_first_visible(page, ['input[type="password"]'], password, delay_ms=100):
+    if not _fill_first_visible(page, ['input[type="password"]'], password, delay_ms=200):
         return False
-    time.sleep(2)
+    time.sleep(4)
     clicked = _click_first_visible(page, ['button[type="submit"]', 'button:has-text("Continue")'])
     if clicked:
-        # Password submit triggers a SPA navigation; give it time to land
-        # before callers inspect the page again.
-        time.sleep(2)
+        time.sleep(8)
+        _wait_for_blocking_clear(page, timeout_s=30)
     return clicked
 
 
@@ -589,13 +588,10 @@ def cmd_start() -> int:
             return 1
 
         _log_step(page, "authorize")
-        blocking = _wait_for_blocking_clear(page, timeout_s=120)
+        blocking = _has_blocking_screen(page)
         if blocking:
             _capture_debug(page, "start", "authorize", blocking, page_errors)
             print(f"Login blocked: {blocking}", file=sys.stderr)
-            browser.close()
-            callback.close()
-            return 2
         print(
             f"[chatgpt-login] attach: playwright-cli attach --cdp=http://localhost:{cdp_port}; "
             f"drive: scripts/chatgpt-login.py status|step",

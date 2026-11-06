@@ -296,6 +296,41 @@ def test_primitives_fallback_runs_only_after_browser_login_failure():
     assert 'gh secret set OPENCODE_AUTH_JSON' in primitives
 
 
+def test_primitives_fallback_retries_startup_and_bounds_the_session():
+    workflow = (
+        Path(__file__).parents[1] / ".github/workflows/refresh-chatgpt-auth.yml"
+    ).read_text(encoding="utf-8")
+    primitives = workflow[
+        workflow.index("- name: Agent-usable primitives fallback") :
+    ]
+    assert "status_failures=0" in primitives
+    assert "status_failures=$((status_failures + 1))" in primitives
+    assert "sleep 2" in primitives
+    assert "status_failures >= 10" in primitives
+    assert "attempt < 120" in primitives
+    assert "sleep 5" in primitives
+    assert "Primitives fallback timed out after 10 minutes." in primitives
+
+
+def test_primitives_fallback_always_cleans_up_and_only_stores_valid_auth():
+    workflow = (
+        Path(__file__).parents[1] / ".github/workflows/refresh-chatgpt-auth.yml"
+    ).read_text(encoding="utf-8")
+    primitives = workflow[
+        workflow.index("- name: Agent-usable primitives fallback") :
+    ]
+    cleanup = primitives[
+        primitives.index("cleanup() {") : primitives.index("trap cleanup EXIT")
+    ]
+    assert "scripts/chatgpt-login.py stop" in cleanup
+    assert 'kill "$start_pid"' in cleanup
+    assert 'wait "$start_pid"' in cleanup
+    assert 'trap cleanup EXIT' in primitives
+    assert "jq -e '.openai.type == \"oauth\" and .openai.access != \"\" and .openai.refresh != \"\" and (.openai.expires | type == \"number\")'" in primitives
+    assert primitives.index("jq -e ") < primitives.index("gh secret set OPENCODE_AUTH_JSON")
+    assert 'GH_TOKEN="$BACLUC_AGENT_GITHUB_TOKEN" gh secret set OPENCODE_AUTH_JSON' in primitives
+
+
 _OPENAI_ERROR_BODY = "<html><body><h1>Oops, an error occurred!</h1></body></html>"
 
 

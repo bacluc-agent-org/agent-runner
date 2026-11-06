@@ -165,17 +165,24 @@ def test_email_step_types_slowly_and_pauses_before_submit(monkeypatch):
     monkeypatch.setattr(chatgpt_login, "time", fake_time)
     page = _FillPage()
     assert chatgpt_login._do_email_step(page, "user@example.com")
-    assert page.locator_instance.typed == [("user@example.com", 100)]
-    assert fake_time.sleeps == [1.0]
+    assert page.locator_instance.typed == [("user@example.com", 200)]
+    assert fake_time.sleeps == [2.0]
 
 
-def test_password_step_pauses_after_fill_and_after_submit(monkeypatch):
+def test_password_step_pauses_and_waits_for_post_submit_blocking(monkeypatch):
     fake_time = _FakeTime()
+    waits = []
     monkeypatch.setattr(chatgpt_login, "time", fake_time)
+    monkeypatch.setattr(
+        chatgpt_login,
+        "_wait_for_blocking_clear",
+        lambda page, timeout_s: waits.append(timeout_s),
+    )
     page = _FillPage()
     assert chatgpt_login._do_password_step(page, "hunter2")
-    assert page.locator_instance.typed == [("hunter2", 100)]
-    assert fake_time.sleeps == [2.0, 2.0]
+    assert page.locator_instance.typed == [("hunter2", 200)]
+    assert fake_time.sleeps == [4.0, 8.0]
+    assert waits == [30]
 
 
 def test_password_step_skips_post_submit_pause_when_click_fails(monkeypatch):
@@ -184,7 +191,7 @@ def test_password_step_skips_post_submit_pause_when_click_fails(monkeypatch):
     monkeypatch.setattr(chatgpt_login, "_click_first_visible", lambda *args, **kwargs: False)
     page = _FillPage()
     assert not chatgpt_login._do_password_step(page, "hunter2")
-    assert fake_time.sleeps == [2.0]
+    assert fake_time.sleeps == [4.0]
 
 
 def test_wait_for_blocking_clear_defaults_to_90s():
@@ -277,7 +284,7 @@ def test_refresh_workflow_suppresses_failed_auth_output_and_masks_stored_auth():
         assert 'gh secret set OPENCODE_AUTH_JSON' in block
 
 
-def test_primitives_fallback_runs_only_after_browser_login_failure():
+def test_primitives_fallback_observes_retries_and_validates_login_output():
     workflow = (
         Path(__file__).parents[1] / ".github/workflows/refresh-chatgpt-auth.yml"
     ).read_text(encoding="utf-8")
@@ -285,8 +292,17 @@ def test_primitives_fallback_runs_only_after_browser_login_failure():
         workflow.index("- name: Agent-usable primitives fallback") :
     ]
     assert "if: ${{ !cancelled() && steps.browser-login.outcome == 'failure' }}" in primitives
-    for command in ("start", "status", "step"):
-        assert f"uv run scripts/chatgpt-login.py {command} || true" in primitives
+    assert "scripts/chatgpt-login.py start >" in primitives
+    assert 'for attempt in $(seq 1 60)' in primitives
+    assert "scripts/chatgpt-login.py status) ||" in primitives
+    assert "scripts/chatgpt-login.py step) || step_status=$?" in primitives
+    assert "Primitive login timed out" in primitives
+    assert "Primitive login reported an invalid status" in primitives
+    assert "jq -r '.blocking // empty'" in primitives
+    assert 'jq -e \'.openai.type == "oauth"' in primitives
+    assert 'gh secret set OPENCODE_AUTH_JSON' in primitives
+    assert "scripts/chatgpt-login.py status || true" not in primitives
+    assert "scripts/chatgpt-login.py step || true" not in primitives
 
 
 _OPENAI_ERROR_BODY = "<html><body><h1>Oops, an error occurred!</h1></body></html>"

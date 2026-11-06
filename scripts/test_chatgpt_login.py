@@ -1,6 +1,8 @@
 import importlib.util
 import inspect
 import json
+import os
+import subprocess
 import types
 from pathlib import Path
 
@@ -285,50 +287,80 @@ def test_primitives_fallback_runs_only_after_browser_login_failure():
         workflow.index("- name: Agent-usable primitives fallback") :
     ]
     assert "if: ${{ !cancelled() && steps.browser-login.outcome == 'failure' }}" in primitives
-    assert 'scripts/chatgpt-login.py start > "$RUNNER_TEMP/primitives-auth.json"' in primitives
-    assert 'for ((attempt = 0; attempt < 120; attempt++)); do' in primitives
-    assert 'jobs -pr | grep -qx "$start_pid"' in primitives
-    assert 'status_failures >= 10' in primitives
-    assert 'scripts/chatgpt-login.py status' in primitives
-    assert 'scripts/chatgpt-login.py step' in primitives
-    assert 'Primitives fallback timed out after 10 minutes.' in primitives
-    assert 'trap cleanup EXIT' in primitives
-    assert 'gh secret set OPENCODE_AUTH_JSON' in primitives
+    assert 'bash scripts/chatgpt-login-primitives-fallback.sh' in primitives
 
 
-def test_primitives_fallback_retries_startup_and_bounds_the_session():
+def test_primitives_fallback_executes_success_polling_timeout_and_cleanup(tmp_path):
     workflow = (
         Path(__file__).parents[1] / ".github/workflows/refresh-chatgpt-auth.yml"
     ).read_text(encoding="utf-8")
-    primitives = workflow[
-        workflow.index("- name: Agent-usable primitives fallback") :
-    ]
-    assert "status_failures=0" in primitives
-    assert "status_failures=$((status_failures + 1))" in primitives
-    assert "sleep 2" in primitives
-    assert "status_failures >= 10" in primitives
-    assert "attempt < 120" in primitives
-    assert "sleep 5" in primitives
-    assert "Primitives fallback timed out after 10 minutes." in primitives
+    assert "bash scripts/chatgpt-login-primitives-fallback.sh" in workflow
+    script = Path(__file__).with_name("chatgpt-login-primitives-fallback.sh")
+    auth = '{"openai":{"type":"oauth","access":"access-secret","refresh":"refresh-secret","expires":123}}'
 
+    def run(mode):
+        bin_dir = tmp_path / mode
+        bin_dir.mkdir()
+        log = tmp_path / f"{mode}.log"
+        (bin_dir / "uv").write_text(
+            "#!/usr/bin/env bash\n"
+            'if [[ "$3" == start ]]; then /bin/sleep "${START_DELAY:-0.15}"; printf \'%s\\n\' "$AUTH_JSON"; '
+            'elif [[ "$3" == stop ]]; then printf stop\\n >> "$CALL_LOG"; '
+            'elif [[ "$3" == status ]]; then '
+            'if [[ "$STATUS_FAILURES" -gt 0 ]]; then STATUS_FAILURES=$((STATUS_FAILURES-1)); exit 1; fi; '
+            'printf status\\n >> "$CALL_LOG"; printf \'{}\\n\'; '
+            'elif [[ "$3" == step ]]; then printf step\\n >> "$CALL_LOG"; '
+            '[[ "$STEP_FAIL" != true ]]; fi\n',
+            encoding="utf-8",
+        )
+        (bin_dir / "jq").write_text(
+            "#!/usr/bin/env bash\n[[ \"$1\" == -r ]] && exit 0\nexit \"${JQ_FAIL:-0}\"\n",
+            encoding="utf-8",
+        )
+        (bin_dir / "gh").write_text(
+            "#!/usr/bin/env bash\n[[ \"$GH_TOKEN\" == secret-token ]] || exit 8\nprintf '%s\\n' \"$*\" >> \"$CALL_LOG\"\n",
+            encoding="utf-8",
+        )
+        (bin_dir / "sleep").write_text("#!/usr/bin/env bash\n/bin/sleep 0.01\n", encoding="utf-8")
+        for command in bin_dir.iterdir():
+            command.chmod(0o755)
+        env = os.environ | {
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "RUNNER_TEMP": str(tmp_path),
+            "CALL_LOG": str(log),
+            "AUTH_JSON": auth,
+            "BACLUC_AGENT_GITHUB_TOKEN": "secret-token",
+            "GITHUB_REPOSITORY": "owner/repo",
+            "STATUS_FAILURES": "0",
+            "START_DELAY": "0.15" if mode != "timeout" else "5",
+            "STEP_FAIL": "true" if mode == "failure" else "false",
+            "JQ_FAIL": "1" if mode == "invalid-auth" else "0",
+        }
+        return subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True, timeout=15), log
 
-def test_primitives_fallback_always_cleans_up_and_only_stores_valid_auth():
-    workflow = (
-        Path(__file__).parents[1] / ".github/workflows/refresh-chatgpt-auth.yml"
-    ).read_text(encoding="utf-8")
-    primitives = workflow[
-        workflow.index("- name: Agent-usable primitives fallback") :
-    ]
-    cleanup = primitives[
-        primitives.index("cleanup() {") : primitives.index("trap cleanup EXIT")
-    ]
-    assert "scripts/chatgpt-login.py stop" in cleanup
-    assert 'kill "$start_pid"' in cleanup
-    assert 'wait "$start_pid"' in cleanup
-    assert 'trap cleanup EXIT' in primitives
-    assert "jq -e '.openai.type == \"oauth\" and .openai.access != \"\" and .openai.refresh != \"\" and (.openai.expires | type == \"number\")'" in primitives
-    assert primitives.index("jq -e ") < primitives.index("gh secret set OPENCODE_AUTH_JSON")
-    assert 'GH_TOKEN="$BACLUC_AGENT_GITHUB_TOKEN" gh secret set OPENCODE_AUTH_JSON' in primitives
+    result, log = run("success")
+    assert result.returncode == 0, result.stderr
+    calls = log.read_text()
+    assert "status" in calls
+    assert "step" in calls and "stop" in calls and "secret set OPENCODE_AUTH_JSON" in calls
+    assert "::add-mask::" in result.stdout and "access-secret" in result.stdout
+
+    result, log = run("failure")
+    assert result.returncode != 0
+    assert "Primitives step failed" in result.stderr
+    assert "stop" in log.read_text()
+    assert "secret set" not in log.read_text()
+
+    result, log = run("timeout")
+    assert result.returncode != 0
+    assert "timed out after 10 minutes" in result.stderr
+    assert "stop" in log.read_text()
+    assert "secret set" not in log.read_text()
+
+    result, log = run("invalid-auth")
+    assert result.returncode != 0
+    assert "stop" in log.read_text()
+    assert "secret set" not in log.read_text()
 
 
 _OPENAI_ERROR_BODY = "<html><body><h1>Oops, an error occurred!</h1></body></html>"

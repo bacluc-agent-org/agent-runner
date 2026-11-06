@@ -1250,7 +1250,7 @@ class TestDiscoveryTimeout:
 
 
 class TestRefineIssuesExitCode:
-    WORKFLOW = Path(__file__).parents[3] / ".github/workflows/refine-issues.yml"
+    WORKFLOW = Path(__file__).parents[3] / ".github/workflows/refine-issues-reusable.yml"
 
     @classmethod
     def _completion_tail(cls):
@@ -1280,7 +1280,7 @@ class TestRefineIssuesExitCode:
 
 
 class TestRefineIssuesNoCandidates:
-    WORKFLOW = Path(__file__).parents[3] / ".github/workflows/refine-issues.yml"
+    WORKFLOW = Path(__file__).parents[3] / ".github/workflows/refine-issues-reusable.yml"
 
     @classmethod
     def _no_candidates_block(cls):
@@ -1326,7 +1326,7 @@ class TestWorkflowOpenRouterSelection:
     WORKFLOWS = [
         ".github/workflows/opencode.yml",
         ".github/workflows/hourly-issue.yml",
-        ".github/workflows/refine-issues.yml",
+        ".github/workflows/refine-issues-reusable.yml",
     ]
 
     def test_workflows_select_openrouter_and_exclude_weak_free_models(self):

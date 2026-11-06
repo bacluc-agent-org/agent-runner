@@ -215,6 +215,93 @@ def test_wait_for_blocking_clear_returns_none_immediately_for_clean_page(monkeyp
     assert fake_time.sleeps == []
 
 
+def test_start_keeps_browser_session_alive_when_authorize_page_is_blocked(monkeypatch, tmp_path, capsys):
+    class _Socket:
+        def bind(self, address):
+            pass
+
+        def close(self):
+            pass
+
+    class _Page:
+        url = "https://auth.openai.com/oauth/authorize"
+
+        def on(self, *args):
+            pass
+
+        def goto(self, *args, **kwargs):
+            pass
+
+        def title(self):
+            return "Just a moment..."
+
+    class _Browser:
+        closed = False
+
+        def new_context(self, **kwargs):
+            return types.SimpleNamespace(new_page=lambda: page)
+
+        def close(self):
+            self.closed = True
+
+    class _Callback:
+        closed = False
+
+        def __init__(self, state):
+            self.error = None
+            self.code = None
+
+        def start(self):
+            pass
+
+        def close(self):
+            self.closed = True
+
+    page = _Page()
+    browser = _Browser()
+    callback = _Callback("state")
+    fake_time = _FakeTime()
+    monkeypatch.setattr(chatgpt_login.socket, "socket", lambda *args: _Socket())
+    monkeypatch.setattr(chatgpt_login, "_CallbackServer", lambda state: callback)
+    monkeypatch.setattr(chatgpt_login, "_write_state", lambda data: None)
+    monkeypatch.setattr(chatgpt_login, "_watch_page_errors", lambda page: [])
+    monkeypatch.setattr(chatgpt_login, "_capture_debug", lambda *args: None)
+    monkeypatch.setattr(chatgpt_login, "_has_blocking_screen", lambda page: "cloudflare challenge")
+    monkeypatch.setattr(
+        chatgpt_login,
+        "_wait_for_blocking_clear",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("startup must not wait out the challenge")),
+    )
+    monkeypatch.setattr(chatgpt_login, "_launch_browser", lambda *args, **kwargs: browser)
+    monkeypatch.setattr(chatgpt_login.signal, "signal", lambda *args: None)
+
+    def sleep(seconds):
+        chatgpt_login._STOP_REQUESTED = True
+
+    fake_time.sleep = sleep
+    monkeypatch.setattr(chatgpt_login, "time", fake_time)
+    monkeypatch.setattr(chatgpt_login, "STATE_FILE", tmp_path / "state.json")
+
+    import playwright.sync_api
+
+    class _SyncPlaywright:
+        chromium = types.SimpleNamespace(launch=lambda **kwargs: browser)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(playwright.sync_api, "sync_playwright", lambda: _SyncPlaywright())
+    monkeypatch.setattr(chatgpt_login, "_STOP_REQUESTED", False)
+
+    assert chatgpt_login.cmd_start() == 1
+    assert browser.closed
+    assert callback.closed
+    assert "Login blocked: cloudflare challenge" in capsys.readouterr().err
+
+
 class _RecordingLocator:
     def __init__(self):
         self.fills = []

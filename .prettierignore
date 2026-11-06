@@ -2,5 +2,8 @@
 .pytest_cache/
 __pycache__/
 .playwright-cli/
+.idea/
+loop-metrics.json
 # opencode generates .opencode/.gitignore at runtime (without trailing newline)
 .opencode/.gitignore
+.opencode/node_modules/

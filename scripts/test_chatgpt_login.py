@@ -288,6 +288,7 @@ def test_primitives_fallback_runs_only_after_browser_login_failure():
     assert 'scripts/chatgpt-login.py start > "$RUNNER_TEMP/primitives-auth.json"' in primitives
     assert 'for ((attempt = 0; attempt < 120; attempt++)); do' in primitives
     assert 'jobs -pr | grep -qx "$start_pid"' in primitives
+    assert 'status_failures >= 10' in primitives
     assert 'scripts/chatgpt-login.py status' in primitives
     assert 'scripts/chatgpt-login.py step' in primitives
     assert 'Primitives fallback timed out after 10 minutes.' in primitives

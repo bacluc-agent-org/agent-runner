@@ -154,15 +154,22 @@ jobs:
           }
           trap cleanup EXIT
           completed=false
+          status_failures=0
           for ((attempt = 0; attempt < 120; attempt++)); do
             if ! jobs -pr | grep -qx "$start_pid"; then
               wait "$start_pid" && completed=true
               break
             fi
             status=$(uv run scripts/chatgpt-login.py status) || {
-              printf 'Primitives status failed; stopping fallback.\n' >&2
-              exit 1
+              status_failures=$((status_failures + 1))
+              if (( status_failures >= 10 )); then
+                printf 'Primitives status failed after 10 startup retries.\n' >&2
+                exit 1
+              fi
+              sleep 2
+              continue
             }
+            status_failures=0
             blocking=$(jq -r '.blocking // empty' <<<"$status")
             if [[ -n "$blocking" ]]; then
               printf 'Login blocked: %s\n' "$blocking" >&2

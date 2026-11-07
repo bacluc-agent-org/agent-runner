@@ -1514,3 +1514,40 @@ class TestWorkflowOpenRouterSelection:
         )
         assert result.returncode == 0
         assert "fallback: good-model" in result.stdout
+
+
+class TestGpt6LunaIsNeverDispatched:
+    WORKFLOW = Path(".github/workflows/opencode.yml")
+
+    def test_openai_candidates_are_deny_list_filtered(self):
+        content = self.WORKFLOW.read_text()
+        assert (
+            'mapfile -t openai_models < <(grep -E \'^openai/\' "$available_models_file" | grep -Ev "$deny_re" | awk \'!seen[$0]++\')'
+            in content
+        )
+
+    def test_deny_guard_precedes_openai_early_dispatch(self):
+        content = self.WORKFLOW.read_text()
+        guard = content.index("refusing to dispatch.")
+        early_dispatch = content.index(
+            'if [[ "$model" == openai/* && -f ~/.local/share/opencode/auth.json ]]; then'
+        )
+        assert guard < early_dispatch
+        assert 'grep -Eq "$deny_re" <<<"$model"' in content
+        assert "model_source='fallback: deny-listed requested model'" in content
+
+    def test_dropdown_omits_gpt_6_luna_and_keeps_gpt_5_6_luna(self):
+        content = self.WORKFLOW.read_text()
+        options = content[content.index("model_choice:") : content.index("timeout_minutes:")]
+        for model in [
+            "opencode-go-openai/gpt-6-luna",
+            "opencode-go-openai-2/gpt-6-luna",
+            "openai/gpt-6-luna",
+        ]:
+            assert f"- {model}\n" not in options
+        for model in [
+            "opencode-go-openai/gpt-5.6-luna",
+            "opencode-go-openai-2/gpt-5.6-luna",
+            "openai/gpt-5.6-luna",
+        ]:
+            assert f"- {model}\n" in options

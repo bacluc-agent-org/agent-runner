@@ -35,6 +35,7 @@
 # space-bunny-free: ok:false in cache issue 49; retry_limit/coordinator timeouts in runs 36370700758, 36421630037.
 /space-bunny
 /inkling-2-small-free
+/iceman-free
 # longcat-2.5-preview-free: ok:true in cache issue 49 but coordinator timeouts in runs 36376341322, 36352361852.
 /longcat-2\.5-preview
 # qwen/qwen3.8-27b:free: ok:false in cache issue 49; retry_limit in run 36365028762.

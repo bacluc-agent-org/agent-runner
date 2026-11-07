@@ -688,12 +688,12 @@ jobs:
           delivery_file="$RUNNER_TEMP/delivery.json"
           prs='[]'
           if [[ -n "${BRANCH:-}" ]]; then
-            slugs="${PUSHED_SLUGS:-}"
+            slugs="${PUSHED_SLUGS:-$GITHUB_REPOSITORY}"
             while IFS= read -r repo; do
               [[ -n "$repo" ]] || continue
               result=$(gh pr list -R "$repo" --head "$BRANCH" --state open --json url,state,body 2>/dev/null || printf '%s\n' '[]')
               prs=$(jq -c -s 'add' <(printf '%s\n' "$prs") <(printf '%s\n' "$result"))
-            done < <(printf '%s\n' "$GITHUB_REPOSITORY" "$slugs" | sort -u)
+            done < <(printf '%s\n' "$slugs" | sort -u)
           fi
           target_run="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           target_issue_url="$GITHUB_SERVER_URL/$ISSUE_REPOSITORY/issues/$ISSUE_NUMBER"

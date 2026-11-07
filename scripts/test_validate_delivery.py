@@ -146,8 +146,9 @@ def test_workflow_wires_fail_closed_validation_before_completion():
     assert 'PUSH_OUTCOME: ${{ steps.push-work.outcome }}' in body
     assert 'gh api --paginate "repos/$ISSUE_REPOSITORY/issues/$ISSUE_NUMBER/comments"' in body
     assert 'PUSHED_SLUGS: ${{ steps.push-work.outputs.pushed_slugs }}' in body
-    assert 'slugs="${PUSHED_SLUGS:-}"' in body
-    assert 'printf \'%s\\n\' "$GITHUB_REPOSITORY" "$slugs" | sort -u' in body
+    assert 'slugs="${PUSHED_SLUGS:-$GITHUB_REPOSITORY}"' in body
+    assert 'printf \'%s\\n\' "$slugs" | sort -u' in body
+    assert 'printf \'%s\\n\' "$GITHUB_REPOSITORY" "$slugs" | sort -u' not in body
     assert body.index('if grep -Eq "$deny_re" <<<"$model"') < body.index('if [[ "$model" == openai/*')
     assert "git add -A" not in body
 

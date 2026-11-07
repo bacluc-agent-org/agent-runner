@@ -136,7 +136,9 @@ def test_workflow_paginates_flattens_and_bounds_unique_samples():
     content = WORKFLOW.read_text()
     assert 'gh api --paginate --slurp "search/issues?' in content
     assert '&per_page=100"' in content
-    assert "--jq '[.[] | .items[]]'" in content
+    assert ' > "$RUNNER_TEMP/eligible-pages.json"' in content
+    assert "jq '[.[] | .items[]]' \"$RUNNER_TEMP/eligible-pages.json\" > \"$RUNNER_TEMP/eligible.json\"" in content
+    assert 'gh api --paginate --slurp "search/issues?' in content.split("--jq '[.[] | .items[]]'")[0]
     assert 'jq -c \'.[]\' "$RUNNER_TEMP/eligible.json" | shuf -n 50 | jq -s' in content
 
     with TemporaryDirectory() as directory:

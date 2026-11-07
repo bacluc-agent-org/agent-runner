@@ -104,7 +104,8 @@ jobs:
 
           search_json="$RUNNER_TEMP/candidates.json"
           gh api --paginate --slurp "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:ready-for-implementation+-label:agent-running&per_page=100" \
-            --jq '[.[] | .items[]]' > "$RUNNER_TEMP/eligible.json"
+            > "$RUNNER_TEMP/eligible-pages.json"
+          jq '[.[] | .items[]]' "$RUNNER_TEMP/eligible-pages.json" > "$RUNNER_TEMP/eligible.json"
           jq -c '.[]' "$RUNNER_TEMP/eligible.json" | shuf -n 50 | jq -s '.' > "$search_json"
 
           candidates="$RUNNER_TEMP/candidate-numbers.txt"

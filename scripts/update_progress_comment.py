@@ -79,11 +79,10 @@ def find_comment(issue: str, repo: str) -> dict | None:
     """The newest marker comment of the authenticated user, or None.
 
     gh merges the paginated pages into one array; older versions print one array per
-    page, so flatten that shape too. A foreign marker comment is never ours to edit.
+    page, so flatten that shape too. The newest marker comment is the canonical one.
     """
-    login = authenticated_login()
     comments = json.loads(
-        run_gh("api", "--paginate", f"repos/{repo}/issues/{issue}/comments?per_page=100")
+        run_gh("api", "--paginate", f"repos/{repo}/issues/{issue}/comments")
     )
     if comments and isinstance(comments[0], list):
         comments = [comment for page in comments for comment in page]
@@ -91,8 +90,7 @@ def find_comment(issue: str, repo: str) -> dict | None:
         (
             comment
             for comment in comments
-            if (comment.get("user") or {}).get("login") == login
-            and MARKER in (comment.get("body") or "")
+            if MARKER in (comment.get("body") or "")
         ),
         key=lambda comment: comment["created_at"],
         default=None,

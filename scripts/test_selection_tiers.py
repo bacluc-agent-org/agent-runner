@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from subprocess import run
 from tempfile import TemporaryDirectory
@@ -129,3 +130,50 @@ def test_workflow_uses_latest_commit_and_created_at_when_pr_has_no_commits():
     assert '([.[][] | .commit.committer.date] | max) // $fallback' in content
     assert 'pr_last_commit_at:(' in content
     assert 'map(select(test("^[0-9]")))|max // null' in content
+
+
+def test_workflow_paginates_flattens_and_bounds_unique_samples():
+    content = WORKFLOW.read_text()
+    assert 'gh api --paginate --slurp "search/issues?' in content
+    assert '&per_page=100"' in content
+    assert "--jq '[.[] | .items[]]'" in content
+    assert 'jq -c \'.[]\' "$RUNNER_TEMP/eligible.json" | shuf -n 50 | jq -s' in content
+
+    with TemporaryDirectory() as directory:
+        for size, expected in [(0, 0), (1, 1), (50, 50), (51, 50), (75, 50)]:
+            eligible = Path(directory) / f"{size}.json"
+            eligible.write_text(json.dumps([{"number": number} for number in range(size)]))
+            result = run(
+                [
+                    "bash",
+                    "-Eeuo",
+                    "pipefail",
+                    "-c",
+                    """jq -c '.[]' "$1" | shuf -n 50 | jq -s 'length, (map(.number) | unique | length)'""",
+                    "bash",
+                    str(eligible),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            assert result.stdout.splitlines() == [str(expected), str(expected)]
+
+
+def test_workflow_sampling_handles_empty_and_singleton_inputs_and_keeps_selection_safeguards():
+    content = WORKFLOW.read_text()
+    assert 'jq -r \'.[].number | tostring\' "$search_json"' in content
+    assert 'if [[ ! -s "$candidates" ]]; then' in content
+    assert 'grep -qxF "$issue_number" "$candidates"' in content
+    assert '--add-label agent-running,agent-attempted' in content
+    with TemporaryDirectory() as directory:
+        for values, expected in [([], 0), ([{"number": 1}], 1)]:
+            eligible = Path(directory) / f"{expected}.json"
+            eligible.write_text(json.dumps(values))
+            result = run(
+                ["bash", "-Eeuo", "pipefail", "-c", """jq -c '.[]' "$1" | shuf -n 50 | jq -s length""", "bash", str(eligible)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            assert result.stdout.strip() == str(expected)

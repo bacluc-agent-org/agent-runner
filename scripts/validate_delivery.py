@@ -33,12 +33,8 @@ def _substantive(value: Any) -> bool:
 def _valid_progress(progress: Any) -> bool:
     if not isinstance(progress, dict):
         return False
-    if progress.get("valid") is False or progress.get("report") is False:
-        return False
-    if progress.get("valid") is True and progress.get("report", True) is True:
-        return True
     body = str(progress.get("body") or "")
-    if MARKER not in body or any(body.count(heading) != 1 for heading in HEADINGS):
+    if body.count(MARKER) != 1 or any(body.count(heading) != 1 for heading in HEADINGS):
         return False
     summary = body.split("### Management summary", 1)[1].split("### ", 1)[0]
     return _substantive(summary) and "| Run | Model | What happened | Result | Failure reason |" in body
@@ -60,7 +56,7 @@ def validate_delivery(delivery: dict[str, Any]) -> str:
     prs = delivery.get("prs")
     if not isinstance(prs, list):
         raise DeliveryError("pull requests must be a list")
-    if changed:
+    if changed is True:
         if not delivery.get("pushed"):
             raise DeliveryError("code changed without a pushed branch")
         if len(prs) != 1:

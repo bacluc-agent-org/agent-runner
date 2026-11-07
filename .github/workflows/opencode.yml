@@ -653,10 +653,7 @@ jobs:
               prs=$(jq -c -s 'add' <(printf '%s\n' "$prs") <(printf '%s\n' "$result"))
             done < <(printf '%s\n' "$GITHUB_REPOSITORY" "$slugs" | sort -u)
           fi
-          progress_body=''
-          if [[ -n "${ISSUE_NUMBER:-}" ]]; then
-            progress_body=$(gh issue view "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --json comments --jq '[.comments[] | select(.body | contains("<!-- agent-progress -->"))] | max_by(.createdAt) | .body // ""' 2>/dev/null || true)
-          fi
+          progress_body=$(gh issue view "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --json comments --jq '[.comments[] | select(.body | contains("<!-- agent-progress -->"))] | max_by(.createdAt) | .body // ""' 2>/dev/null || true)
           changed=false
           pushed=false
           [[ -n "${PUSHED_REPOS:-}" ]] && changed=true && pushed=true

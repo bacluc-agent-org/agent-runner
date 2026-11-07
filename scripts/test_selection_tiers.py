@@ -44,13 +44,34 @@ def test_durable_attempt_label_counts_as_history_without_branch():
         candidates = Path(directory) / "candidates.json"
         branches = Path(directory) / "branches.txt"
         tail = Path(directory) / "tail.txt"
-        candidates.write_text(json.dumps([{"number": 42, "labels": [{"name": "agent-attempted"}]}]))
+        candidates.write_text(
+            json.dumps(
+                [
+                    {"number": 42, "labels": [{"name": "agent-attempted"}]},
+                    {"number": 43, "labels": [{"name": "agent-running:123"}]},
+                ]
+            )
+        )
         branches.write_text("")
         tail.write_text("Choose\n")
         result = run(["python3", "scripts/selection_tiers.py", "--candidates", str(candidates), "--branches", str(branches), "--tail-file", str(tail)], check=True, capture_output=True, text=True)
     assert "attempts for 42: 1" in result.stderr
     assert "Candidate tiers: 0=0 1=0 2=1 3=0" in result.stderr
     assert "[attempts: 1] [tier: 2]" in result.stdout
+    assert "43: " not in result.stdout
+
+
+def test_workflow_uses_run_scoped_claims_and_filters_them_from_candidates():
+    content = WORKFLOW.read_text()
+    assert 'CURRENT_RUN_ID: ${{ github.run_id }}' in content
+    assert 'gh issue edit "$issue_number" -R "$ISSUE_REPOSITORY" --add-label "agent-running:${CURRENT_RUN_ID}",agent-attempted' in content
+    assert 'any(startswith("agent-running:"))' in content
+    assert 'gh run view "$run_id"' in content
+    assert 'if [[ "$run_status" != "in_progress" && "$run_status" != "queued" ]]' in content
+    assert 'if [[ "$label" == "agent-running:${CURRENT_RUN_ID}" ]]' in content
+    assert "--limit 1000 --json number,labels" in content
+    assert '([.labels[]?.name | select(startswith("agent-running:"))] | join(","))' in content
+    assert "--label 'agent-running:*'" not in content
 
 
 def test_tiers_cover_feedback_history_and_finished_work():

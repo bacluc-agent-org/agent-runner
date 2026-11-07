@@ -108,6 +108,8 @@ def main() -> None:
         number = int(issue["number"])
         issue_runs = [run for candidate, run in runs if candidate == number]
         labels = [label["name"] for label in issue.get("labels", [])]
+        if any(label.casefold() == "agent-running" or label.casefold().startswith("agent-running:") for label in labels):
+            continue
         attempts = max(len(issue_runs), int(any(label.casefold() == "agent-attempted" for label in labels)))
         candidate = Candidate(
             number=number,

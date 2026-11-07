@@ -40,3 +40,10 @@
 /qwen/qwen3\.8-27b
 # poolside/laguna-s-2.1:free: ok:false in cache issue 49; coordinator selection in run 36368492150 (failure indirect).
 /poolside/laguna-s-2\.1
+# GPT-6 Luna is temporarily denied for coordinator runs after premature
+# successful stops without delivery; keep GPT-5.6 Luna available.
+^openai/gpt-6-luna$
+^openai/gpt-6-luna-fast$
+^openrouter/openai/gpt-6-luna$
+^opencode-go-openai/gpt-6-luna$
+^opencode-go-openai-2/gpt-6-luna$

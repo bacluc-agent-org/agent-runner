@@ -1469,7 +1469,7 @@ class TestWorkflowOpenRouterSelection:
         """Verify opencode.yml loads the deny-list regardless of explicit request."""
         content = Path(".github/workflows/opencode.yml").read_text()
         # Deny-list should be loaded unconditionally (not inside 'if [[ -z "$requested" ]]')
-        deny_load = content.index('deny_file="$RUNNER_TEMP/agent-runner/scripts/model-deny-list.txt"')
+        deny_load = content.index('deny_file="$GITHUB_WORKSPACE/scripts/model-deny-list.txt"')
         requested_check = content.index('requested="${MODEL_TEXT:-}"')
         # The deny-list load should come after requested is determined but not be gated by it
         assert deny_load > requested_check

@@ -29,8 +29,12 @@ def _provider_api_keys(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _isolated_home(monkeypatch, tmp_path):
-    """Hide the machine's ~/.local/share/opencode/auth.json: a real OpenAI OAuth login
-    makes discovery fetch the live catalog, so tests see models they never mocked."""
+    """Use a temporary HOME so the machine's auth.json cannot affect discovery.
+
+    The runtime consumes OpenAI credentials from OPENAI_ACCESS_TOKEN or
+    OPENAI_ACCESS_TOKEN_FILE, so remove both environment-token inputs as well.
+    Tests that exercise OAuth explicitly restore the token they need.
+    """
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("OPENAI_ACCESS_TOKEN", raising=False)
     monkeypatch.delenv("OPENAI_ACCESS_TOKEN_FILE", raising=False)

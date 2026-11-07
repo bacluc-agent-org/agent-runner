@@ -14,6 +14,7 @@ class DeliveryError(ValueError):
 
 
 PR_URL = re.compile(r"^https://github\.com/([^/\s]+)/([^/\s]+)/pull/[1-9][0-9]*$")
+REPO_SLUG = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 MARKER = "<!-- agent-progress -->"
 HEADINGS = (
     "### Management summary",
@@ -96,7 +97,7 @@ def validate_delivery(delivery: dict[str, Any]) -> str:
     target_repo = str(delivery.get("target_repo") or "")
     target_issue = str(delivery.get("target_issue") or "")
     target_run = str(delivery.get("target_run") or "")
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", target_repo):
+    if not REPO_SLUG.fullmatch(target_repo):
         raise DeliveryError("target repository is missing or malformed")
     if not re.fullmatch(r"https://github\.com/[^/\s]+/[^/\s]+/issues/[1-9][0-9]*", target_issue):
         raise DeliveryError("target issue reference is missing or malformed")
@@ -114,21 +115,32 @@ def validate_delivery(delivery: dict[str, Any]) -> str:
     if changed is True:
         if not delivery.get("pushed") or not delivery.get("branch"):
             raise DeliveryError("code changed without a pushed branch")
-        if len(prs) != 1:
-            raise DeliveryError("code delivery must have exactly one pull request")
-        pr = prs[0]
-        if not isinstance(pr, dict) or pr.get("state", "").upper() != "OPEN":
-            raise DeliveryError("pull request is not open")
-        match = PR_URL.fullmatch(str(pr.get("url") or ""))
-        if not match or f"{match.group(1)}/{match.group(2)}" != target_repo:
-            raise DeliveryError("pull request URL is malformed")
-        if not _substantive(pr.get("body")) or not _references(pr.get("body"), target_issue, target_run):
-            raise DeliveryError("pull request body lacks target issue and run references")
+        pushed_slugs = delivery.get("pushed_slugs")
+        if not isinstance(pushed_slugs, list) or not pushed_slugs:
+            raise DeliveryError("code delivery lacks pushed repository slugs")
+        if any(not isinstance(slug, str) or not REPO_SLUG.fullmatch(slug) for slug in pushed_slugs):
+            raise DeliveryError("pushed repository slugs are malformed")
+        expected = set(pushed_slugs)
+        if len(expected) != len(pushed_slugs) or len(prs) != len(expected):
+            raise DeliveryError("code delivery must have exactly one pull request per pushed repository")
+        delivered = set()
+        for pr in prs:
+            if not isinstance(pr, dict) or pr.get("state", "").upper() != "OPEN":
+                raise DeliveryError("pull request is not open")
+            match = PR_URL.fullmatch(str(pr.get("url") or ""))
+            slug = f"{match.group(1)}/{match.group(2)}" if match else ""
+            if slug not in expected or slug in delivered:
+                raise DeliveryError("pull request repository does not match pushed repositories")
+            if not _substantive(pr.get("body")) or not _references(pr.get("body"), target_issue, target_run):
+                raise DeliveryError("pull request body lacks target issue and run references")
+            delivered.add(slug)
+        if delivered != expected:
+            raise DeliveryError("code delivery is missing a pull request for a pushed repository")
         return "code"
 
     if changed is not False:
         raise DeliveryError("delivery must state whether code changed")
-    if prs or delivery.get("pushed") or delivery.get("branch"):
+    if prs or delivery.get("pushed") or delivery.get("branch") or delivery.get("pushed_slugs"):
         raise DeliveryError("no-code delivery must not claim a branch or pull request")
     if not _valid_progress(delivery.get("progress"), target_issue, target_run):
         raise DeliveryError("no-code delivery lacks a canonical progress report")

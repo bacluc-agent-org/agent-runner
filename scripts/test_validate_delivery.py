@@ -26,6 +26,7 @@ def _delivery(**overrides):
         "branch": "agent-run/433-123",
         "push_outcome": "success",
         "target_repo": TARGET_REPO,
+        "pushed_slugs": [TARGET_REPO],
         "target_issue": TARGET_ISSUE,
         "target_run": TARGET_RUN,
     }
@@ -35,6 +36,34 @@ def _delivery(**overrides):
 
 def test_accepts_code_delivery_with_one_open_nonempty_pr():
     assert validate_delivery(_delivery()) == "code"
+
+
+def test_accepts_one_pr_for_each_pushed_repository_slug():
+    second_repo = "bacluc-agent/remote-project"
+    second_pr = {
+        "url": f"https://github.com/{second_repo}/pull/34",
+        "state": "OPEN",
+        "body": f"Fixes {TARGET_ISSUE}\n\nValidated by {TARGET_RUN}.",
+    }
+    delivery = _delivery(
+        pushed_slugs=[TARGET_REPO, second_repo],
+        prs=[_delivery()["prs"][0], second_pr],
+    )
+
+    assert validate_delivery(delivery) == "code"
+
+
+@pytest.mark.parametrize(
+    "pushed_slugs, prs",
+    [
+        ([TARGET_REPO, "bacluc-agent/remote-project"], [_delivery()["prs"][0]]),
+        ([TARGET_REPO], [_delivery()["prs"][0], _delivery()["prs"][0]]),
+        ([TARGET_REPO], [{**_delivery()["prs"][0], "url": "https://github.com/bacluc-agent/unrelated/pull/1"}]),
+    ],
+)
+def test_rejects_missing_extra_or_unrelated_repository_deliveries(pushed_slugs, prs):
+    with pytest.raises(DeliveryError):
+        validate_delivery(_delivery(pushed_slugs=pushed_slugs, prs=prs))
 
 
 def test_accepts_no_code_delivery_with_canonical_progress_report():
@@ -66,6 +95,7 @@ none
         summary=f"Confirmed the requested behavior; see {TARGET_ISSUE} and {TARGET_RUN}.",
         prs=[],
         progress=_delivery()["progress"],
+        pushed_slugs=[],
         pushed=False,
         branch="",
     )
@@ -130,6 +160,7 @@ def test_accepts_zero_step_early_completion_with_current_run_evidence():
         changed=False,
         prs=[],
         pushed=False,
+        pushed_slugs=[],
         branch="",
         coordinator={"outcome": "success", "fatal": "", "steps": 0},
     )
@@ -146,8 +177,9 @@ def test_workflow_wires_fail_closed_validation_before_completion():
     assert 'PUSH_OUTCOME: ${{ steps.push-work.outcome }}' in body
     assert 'gh api --paginate "repos/$ISSUE_REPOSITORY/issues/$ISSUE_NUMBER/comments"' in body
     assert 'PUSHED_SLUGS: ${{ steps.push-work.outputs.pushed_slugs }}' in body
-    assert 'slugs="${PUSHED_SLUGS:-$GITHUB_REPOSITORY}"' in body
-    assert 'printf \'%s\\n\' "$slugs" | sort -u' in body
+    assert 'slugs="${PUSHED_SLUGS:-}"' in body
+    assert "pushed_slugs_json=" in body
+    assert "done < <(printf '%s\\n' \"$slugs\")" in body
     assert 'printf \'%s\\n\' "$GITHUB_REPOSITORY" "$slugs" | sort -u' not in body
     assert body.index('if grep -Eq "$deny_re" <<<"$model"') < body.index('if [[ "$model" == openai/*')
     assert "git add -A" not in body

@@ -1,6 +1,6 @@
 name: Check model availability
 description: >-
-  Probes whitelisted models (free models plus glm, gpt-5.6-luna, gpt-6-luna, qwen, kimi,
+  Probes whitelisted models (free models plus glm, gpt-5.6-luna, qwen, kimi,
   big-pickle) of the OpenCode Go providers and OpenRouter for availability
   and merges the results into the model-availability cache issue in the issue
   repository. The cache issue number is taken from the

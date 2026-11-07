@@ -19,8 +19,8 @@ FREE_PATTERNS = [r"(?:-|:)free$", r"big-pickle"]
 PROVIDER_WHITELISTS: dict[str, list[str]] = {
     "openrouter": [r"(?:-|:)free$", r"big-pickle"],
     "opencode": [r"(?:-|:)free$", r"big-pickle", r"glm", r"gpt-5\.6-luna", r"qwen", r"kimi"],
-    # gpt-5.6-sol/terra and gpt-6 (except gpt-6-luna) excluded: too expensive; widen past gpt- if openai ships non-gpt names
-    "openai": [r"^gpt-(?!(5\.6-(sol|terra)|6(?!-luna))).*$"],
+    # All gpt-6 models and gpt-5.6-sol/terra are excluded: too expensive; widen past gpt- if openai ships non-gpt names
+    "openai": [r"^gpt-(?!(?:5\.6-(?:sol|terra)|6)).*$"],
 }
 PROVIDERS = (
     ("opencode-go-openai", "OPENCODE_GO_API_KEY"),

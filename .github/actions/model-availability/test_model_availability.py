@@ -433,9 +433,6 @@ class TestParseWhitelistedModels:
             "openai/gpt-5.3-codex-sparky",
             "openai/gpt-5.6-luna",
             "openai/gpt-5.6-luna-preview",
-            "openai/gpt-6-luna",
-            "openai/gpt-6-luna-fast",
-            "openai/gpt-6-luna-preview",
             "opencode/gpt-5.6-luna-preview",
         ]
 
@@ -1140,10 +1137,11 @@ class TestOpencodeWhitelist:
             assert model_availability.is_whitelisted(model, patterns)
         assert not model_availability.is_whitelisted("opencode/some-paid-model", patterns)
 
-    def test_openai_whitelist_allows_gpt_6_luna_blocks_other_gpt_6(self):
+    def test_openai_whitelist_excludes_all_gpt_6_models(self):
         patterns = model_availability.PROVIDER_WHITELISTS["openai"]
         for model in [
             "gpt-5.3-codex-spark",
+            "gpt-5",
             "gpt-5.4",
             "gpt-5.4-fast",
             "gpt-5.4-mini",
@@ -1153,9 +1151,6 @@ class TestOpencodeWhitelist:
             "gpt-5.6-luna",
             "gpt-5.6-luna-fast",
             "gpt-5.6-luna-preview",
-            "gpt-6-luna",
-            "gpt-6-luna-fast",
-            "gpt-6-luna-preview",
             "gpt-4o",
         ]:
             assert model_availability.is_whitelisted(model, patterns)
@@ -1169,6 +1164,9 @@ class TestOpencodeWhitelist:
             "gpt-6",
             "gpt-6-astra",
             "gpt-6-astra-fast",
+            "gpt-6-luna",
+            "gpt-6-luna-fast",
+            "gpt-6-luna-preview",
             "gpt-6-sol",
         ]:
             assert not model_availability.is_whitelisted(model, patterns)

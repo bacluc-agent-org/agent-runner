@@ -66,6 +66,35 @@ def test_auth_diagnostic_executes_and_never_prints_credentials():
         assert len(outcomes) == 3
 
 
+def test_openai_model_validation_executes_missing_malformed_and_valid_auth_without_leaks():
+    script = _step_script(ROOT / ".github/workflows/opencode.yml", "Select model")
+    start = script.index('auth_file="$HOME/.local/share/opencode/auth.json"')
+    end = script.index("\nstop_token=", start)
+    validation = script[start:end]
+    credential = "representative-secret-never-log"
+    with tempfile.TemporaryDirectory() as home:
+        auth_file = Path(home) / ".local/share/opencode/auth.json"
+        auth_file.parent.mkdir(parents=True)
+        cases = (
+            (None, "validation=missing", False),
+            (f"not json {credential}", "validation=invalid", False),
+            (f'{{"openai":{{"type":"oauth","access":"{credential}","refresh":"r","expires":1}}}}', "auth.json is valid", True),
+        )
+        for content, expected, valid in cases:
+            if content is None:
+                auth_file.unlink(missing_ok=True)
+            else:
+                auth_file.write_text(content)
+            result = _run(
+                f"model=openai/example; model_source=test; GITHUB_OUTPUT={home}/output; {validation}",
+                HOME=home,
+                OPENCODE_AUTH_CONTENT=credential,
+            )
+            assert result.returncode == (0 if valid else 1)
+            assert expected in result.stdout + result.stderr
+            assert credential not in result.stdout + result.stderr
+
+
 def test_selector_validation_executes_missing_malformed_and_valid_outputs():
     script = _step_script(ROOT / ".github/workflows/hourly-issue.yml", "Pick issue and dispatch")
     start = script.index('issue_number="$(grep -E')

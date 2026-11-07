@@ -51,20 +51,20 @@ runs:
             printf 'SOURCE_BRANCH resolution: unresolved (exit %s); fell back to tag\n' "$branch_rc"
           fi
         fi
-        # The tag path below keeps its original indentation on purpose: bash
-        # ignores leading whitespace, so this fix stays a pure addition.
         if ((source_resolved == 0)); then
-        mapfile -t tags < <(git ls-remote --tags "$SOURCE_REPOSITORY" \
-          | awk '$2 !~ /\^\{\}$/ { sub("refs/tags/", "", $2); print $2 }' \
-          | grep -E '^[vV]?[0-9]+([.][0-9]+){1,2}([-.][0-9A-Za-z.-]+)?$' \
-          | sort -V)
-
-        if ((${#tags[@]} == 0)); then
-          printf '%s\n' 'No semver tags found in the source repository' >&2
-          exit 1
+        if [[ -n "${SOURCE_RELEASE:-}" ]]; then
+          tag="$SOURCE_RELEASE"
+        else
+          mapfile -t tags < <(git ls-remote --tags "$SOURCE_REPOSITORY" \
+            | awk '$2 !~ /\^\{\}$/ { sub("refs/tags/", "", $2); print $2 }' \
+            | grep -E '^[vV]?[0-9]+([.][0-9]+){1,2}([-.][0-9A-Za-z.-]+)?$' \
+            | sort -V)
+          if ((${#tags[@]} == 0)); then
+            printf '%s\n' 'No semver tags found in the source repository' >&2
+            exit 1
+          fi
+          tag="${tags[${#tags[@]}-1]}"
         fi
-
-        tag="${tags[${#tags[@]}-1]}"
         tag_refs="$(git ls-remote --tags "$SOURCE_REPOSITORY" "refs/tags/$tag" "refs/tags/$tag^{}")"
         tag_sha="$(printf '%s\n' "$tag_refs" | awk -v tag="$tag" \
           '$2 == "refs/tags/" tag "^{}" { peeled=$1 } $2 == "refs/tags/" tag { direct=$1 } END { print peeled ? peeled : direct }')"

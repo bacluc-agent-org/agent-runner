@@ -27,6 +27,10 @@ permissions:
   issues: write
   pull-requests: write
 
+concurrency:
+  group: hourly-issue-selection
+  cancel-in-progress: false
+
 jobs:
   select:
     # ponytail: the release step does not run if the job is killed at timeout-minutes, so the
@@ -81,6 +85,7 @@ jobs:
           OPENCODE_FATAL_STAGE: selection
           SELECTION_TIMEOUT_MINUTES: ${{ inputs.selection_timeout_minutes || 10 }}
         run: |
+          # shellcheck disable=SC2016
           set -Eeuo pipefail
           rm -f "$RUNNER_TEMP/opencode-fatal.json"
 
@@ -89,24 +94,48 @@ jobs:
           printf '::add-mask::%s\n' "$OPENCODE_GO_2_API_KEY"
           printf '::add-mask::%s\n' "$OPENCODE_AUTH_CONTENT"
 
-          if ! gh label create agent-running -R "$ISSUE_REPOSITORY" \
-            --color 0E8A16 --description 'Selected by the hourly issue runner' --force; then
-            printf '::warning::could not ensure the agent-running label exists; the claim may not apply\n'
-          fi
           if ! gh label create agent-attempted -R "$ISSUE_REPOSITORY" \
             --color 1D76DB --description 'Already attempted by the hourly issue runner' --force; then
             printf '::warning::could not ensure the agent-attempted label exists; attempt history may not apply\n'
           fi
 
+          claim_label="agent-running:${GITHUB_RUN_ID}"
+          if ! gh label create "$claim_label" -R "$ISSUE_REPOSITORY" \
+            --color 0E8A16 --description "Selected by hourly run ${GITHUB_RUN_ID}" --force; then
+            printf '::error::could not ensure the run-scoped claim label exists\n'
+            exit 1
+          fi
+
+          printf '%s\n' 'Cleaning stale run-scoped claims...'
+          all_open="$RUNNER_TEMP/all-open.json"
+          gh api --paginate --slurp "repos/${ISSUE_REPOSITORY}/issues?state=open&per_page=100" \
+            | jq '[.[][] | select(.pull_request == null)] | unique_by(.number)' > "$all_open"
+          while IFS=$'\t' read -r number label; do
+            [[ -n "$number" && -n "$label" ]] || continue
+            old_run="${label#agent-running:}"
+            status="$(gh run view "$old_run" -R "$GITHUB_REPOSITORY" --json status --jq .status 2>/dev/null || true)"
+            case "$status" in
+              queued|in_progress) ;;
+              *)
+                gh issue edit "$number" -R "$ISSUE_REPOSITORY" --remove-label "$label" \
+                  || printf '::warning::could not remove stale claim %s from #%s\n' "$label" "$number"
+                ;;
+            esac
+          done < <(jq -r '.[] | .number as $number | (.labels // [])[]?.name
+            | select(test("^agent-running:[0-9]+$")) | "\($number)\t\(.)"' "$all_open")
+
           printf '\n\n\n\n\n\n'
           printf 'Fetching github issues...\n'
           printf '\n\n\n\n\n\n'
 
-          # Oldest-first: the 50-item page keeps the OLDEST 50 unclaimed issues instead of the
-          # newest 50, so backlog items beyond the cap are the newest, not the oldest.
+          # Fetch every page and filter locally: GitHub's label query cannot express the
+          # run-scoped claim prefix, and standing tasks are selectable without ready-for-implementation.
           search_json="$RUNNER_TEMP/candidates.json"
-          gh api "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:ready-for-implementation+-label:agent-running+sort:created-asc&per_page=50" \
-            --jq '.items' > "$search_json"
+          jq '[.[] | select((.labels | map(.name) | index("ready-for-implementation"))
+            or (.title | test("^standing\\b"; "i"))
+            or (.labels | map(.name | ascii_downcase) | index("meta: standing")))
+            | select((.labels | map(.name) | any(test("^agent-running($|:[0-9]+$)")) | not))
+            | sort_by(.created_at)' "$all_open" > "$search_json"
 
           candidates="$RUNNER_TEMP/candidate-numbers.txt"
           jq -r '.[].number | tostring' "$search_json" > "$candidates"
@@ -215,6 +244,7 @@ jobs:
           done
 
           # Shuffle candidates so enrichment order (and the debug dump) is random.
+          # shellcheck disable=SC2016
           while IFS= read -r num; do
             pr_info="none"
             pr_repo=""
@@ -287,17 +317,47 @@ jobs:
           # `|| true` is required: under `set -Eeuo pipefail` a non-matching grep fails the whole
           # pipeline, and the assignment would abort the step before the dispatch happens.
           issue_number="$(grep -E '^SELECTED_ISSUE:[[:space:]]*[0-9]+[[:space:]]*$' "$selection" | tail -1 | grep -oE '[0-9]+' || true)"
-          if [[ -z "$issue_number" ]] || ! grep -qxF "$issue_number" "$candidates"; then
+          if [[ -z "$issue_number" ]] || ! jq -e --arg number "$issue_number" "any(.[]; (.number|tostring) == \$number)" "$enriched" >/dev/null; then
             printf '::error::missing or invalid SELECTED_ISSUE; not dispatching\n'
             exit 1
           fi
+          selected_issue="$RUNNER_TEMP/selected-issue.json"
+          gh api "repos/${ISSUE_REPOSITORY}/issues/${issue_number}" > "$selected_issue"
+          if ! jq -e '
+            .state == "open" and (.pull_request == null) and
+            ((.labels | map(.name) | index("ready-for-implementation")) != null or
+             (.title | test("^standing\\b"; "i")) or
+             (.labels | map(.name | ascii_downcase) | index("meta: standing")) != null) and
+            ((.labels | map(.name) | any(test("^agent-running($|:[0-9]+$)")) | not))
+          ' "$selected_issue" >/dev/null; then
+            printf '::warning::selected issue #%s changed or is already claimed; not dispatching\n' "$issue_number"
+            exit 1
+          fi
           printf 'issue_number=%s\n' "$issue_number" >> "$GITHUB_OUTPUT"
-          if ! gh issue edit "$issue_number" -R "$ISSUE_REPOSITORY" --add-label agent-running,agent-attempted; then
-            printf '::warning::could not claim issue %s; dispatching unclaimed\n' "$issue_number"
+          gh issue edit "$issue_number" -R "$ISSUE_REPOSITORY" --add-label "$claim_label,agent-attempted"
+          if ! gh api "repos/${ISSUE_REPOSITORY}/issues/${issue_number}" --jq '.labels[].name' \
+            | grep -Fxq "$claim_label"; then
+            printf '::error::claim for issue #%s was not observed after applying it\n' "$issue_number"
+            exit 1
+          fi
+          if [[ "$issue_number" == 206 ]]; then
+            standing_protocol="$RUNNER_TEMP/standing-206-protocol.txt"
+            printf '%s\n' \
+              "" \
+              "Standing task protocol for https://github.com/bacluc-agent/agent-todo/issues/206:" \
+              "- Keep #206 open. Before reading any logs, establish the newest analyzed run ID from the existing progress comment and treat it as an exclusive baseline." \
+              "- Query hourly-issue.yml, opencode.yml, refine-issues.yml, and review-fixes.yml separately. Analyze only newer failed, cancelled, or empty-conclusion runs older than two hours; skip any run whose logs cannot be read." \
+              "- Normalize each failure signature using workflow/job/step, failure class, and stable error text. Use only signatures appearing in at least two distinct runs. Check the existing issue list and existing progress/report text for the normalized signature before creating anything." \
+              "- Create exactly one follow-up issue per pass, with exactly the validated \`## Goal\` and \`## How to implement\` sections, absolute evidence links, and a deterministic duplicate guard. If no qualifying signature or a duplicate exists, create no issue." \
+              "- Update the newest existing progress comment containing \`<!-- agent-progress -->\` in place; do not create a second progress comment. Use \`gh api --paginate\` to find it and \`gh api -X PATCH ... -F body=@<file>\` to update it." \
+              > "$standing_protocol"
+            prompt_file="$RUNNER_TEMP/standing-prompt.txt"
+            cat "$prompt" "$standing_protocol" > "$prompt_file"
+            mv "$prompt_file" "$prompt"
           fi
           {
             printf 'prompt<<%s\n' "$eof"
-            printf '%s\n' "$(< "$selection")"
+            printf '%s\n' "$(< "$prompt")"
             printf '%s\n' "$eof"
           } >> "$GITHUB_OUTPUT"
 
@@ -361,7 +421,7 @@ jobs:
 
   release:
     needs: [select, run]
-    if: always() && needs.select.outputs.issue_number != ''
+    if: always()
     permissions:
       issues: write
     runs-on: blacksmith-2vcpu-ubuntu-2404
@@ -376,6 +436,18 @@ jobs:
         run: |
           set -Eeuo pipefail
           printf '::add-mask::%s\n' "$GITHUB_TOKEN"
-          if ! gh issue edit "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --remove-label agent-running; then
-            printf '::warning::could not remove agent-running from #%s; it stays claimed until unlabelled by hand\n' "$ISSUE_NUMBER"
+          claim_label="agent-running:${GITHUB_RUN_ID}"
+          numbers=()
+          if [[ -n "$ISSUE_NUMBER" ]]; then
+            numbers+=("$ISSUE_NUMBER")
+          else
+            gh api --paginate --slurp "repos/${ISSUE_REPOSITORY}/issues?state=open&per_page=100" \
+              | jq -r --arg claim "$claim_label" "[.[][] | select(.pull_request == null)]
+                | map(select([.labels[]?.name] | index(\$claim)) | .number) | .[]" \
+              > "$RUNNER_TEMP/release-numbers.txt"
+            mapfile -t numbers < "$RUNNER_TEMP/release-numbers.txt"
           fi
+          for number in "${numbers[@]}"; do
+            gh issue edit "$number" -R "$ISSUE_REPOSITORY" --remove-label "$claim_label" \
+              || printf '::warning::could not remove %s from #%s\n' "$claim_label" "$number"
+          done

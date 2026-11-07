@@ -6,3 +6,4 @@ Put durable context for later runs inside the collapsible <details> block; keep 
 Post a separate comment ONLY as a short reply to a human comment: quote the human comment and add one acknowledgement line. Never the run report.
 Pass these rules verbatim into every subagent prompt.
 Pull request body: a description of the change that opens with the absolute link to the issue, then Management summary, then Verification evidence, then the same five-column Action runs table.
+Delivery outcome is valid only when the coordinator succeeds and produces exactly one substantive outcome: code changed requires a pushed branch and one valid open non-empty pull request; no code changed requires no branch or pull request and a canonical non-empty progress report. Malformed, duplicate, placeholder, blocked, branch-only, coordinator, push, and provider failures are not successful delivery.

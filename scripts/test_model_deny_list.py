@@ -32,3 +32,12 @@ def test_comment_lines_contain_no_pipe():
     for line in read_lines():
         if line.lstrip().startswith("#"):
             assert "|" not in line
+
+
+def test_gpt6_is_denied_without_denying_gpt5():
+    patterns = [re.compile(line) for line in read_lines() if not line.lstrip().startswith("#")]
+    assert all(
+        any(pattern.search(f"{provider}/gpt-6-luna") for pattern in patterns)
+        for provider in ("openai", "opencode-go-openai", "opencode-go-openai-2")
+    )
+    assert not any(pattern.search("openai/gpt-5.6-luna") for pattern in patterns)

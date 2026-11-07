@@ -26,6 +26,10 @@ on:
         description: Optional bacluc/provision-machines branch for the shared config (empty = latest release tag)
         required: false
         type: string
+      source_release:
+        description: Optional exact bacluc/provision-machines release tag (empty = newest semver tag)
+        required: false
+        type: string
       model:
         description: "Exact model override (provider/model, for example opencode-go-openai/glm-5.2). Wins over the dropdown; leave empty for automatic discovery."
         required: false
@@ -49,6 +53,7 @@ on:
           - opencode-go-openai/kimi-k3
           - opencode-go-openai/hy4-preview
           - opencode-go-openai/gpt-5.6-luna
+          - opencode-go-openai/gpt-6-luna
           - opencode-go-openai/minimax-m2.5
           - opencode-go-openai-2/qwen3.8-max
           - opencode-go-openai-2/qwen3.8-flash
@@ -56,8 +61,10 @@ on:
           - opencode-go-openai-2/kimi-k3
           - opencode-go-openai-2/hy4-preview
           - opencode-go-openai-2/gpt-5.6-luna
+          - opencode-go-openai-2/gpt-6-luna
           - opencode-go-openai-2/minimax-m2.5
           - openai/gpt-5.6-luna
+          - openai/gpt-6-luna
           - openai/gpt-4o-mini
       timeout_minutes:
         description: Job timeout in minutes
@@ -82,6 +89,16 @@ on:
         type: string
       issue_number:
         description: Issue number the run works on (empty = derive from the prompt)
+        required: false
+        type: string
+        default: ""
+      source_branch:
+        description: Optional bacluc/provision-machines branch for the shared config
+        required: false
+        type: string
+        default: ""
+      source_release:
+        description: Optional exact bacluc/provision-machines release tag
         required: false
         type: string
         default: ""
@@ -122,6 +139,7 @@ jobs:
       GITHUB_FORK_INVITE_USER: ${{ vars.FORK_INVITE_USER || secrets.FORK_INVITE_USER }}
       DIAGNOSTICS_CHECKOUT: .agent-runner-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
       SOURCE_BRANCH: ${{ inputs.source_branch || '' }}
+      SOURCE_RELEASE: ${{ inputs.source_release || '' }}
       PROMPT: "${{ inputs.prompt || 'Push-triggered validation: review the changed files in this push and verify the workflows are correct and complete. Report the result; do not modify files, create issues, or open pull requests.' }}"
       AGENT: ${{ inputs.agent || 'coordinator' }}
 
@@ -157,6 +175,7 @@ jobs:
         with:
           repository: bacluc-agent-org/agent-runner
           path: ${{ env.DIAGNOSTICS_CHECKOUT }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
           token: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
@@ -223,7 +242,8 @@ jobs:
           # Exclude known-weak free models per scripts/model-deny-list.txt (shared with
           # hourly-issue.yml and refine-issues.yml); they pass the trivial OK probe but
           # fail as coordinator/selector in 10+ runs (e.g. 34029380869, 34042660858).
-          deny_file="$RUNNER_TEMP/agent-runner/scripts/model-deny-list.txt"
+          deny_file="$GITHUB_WORKSPACE/scripts/model-deny-list.txt"
+          [[ -f "$deny_file" ]] || { printf 'Target checkout deny-list is missing; refusing model selection.\n' >&2; exit 1; }
           deny_re="$(awk '!/^[[:space:]]*(#|$)/' "$deny_file" 2>/dev/null | paste -sd'|' - || true)"
           [[ -n "$deny_re" ]] || deny_re='^$'
 
@@ -384,6 +404,16 @@ jobs:
             fi
           fi
           requested_model="$model"
+          if grep -Eq "$deny_re" <<<"$model"; then
+            if [[ -n "$fallback_model" ]]; then
+              printf 'Model availability: requested %q is deny-listed; falling back to %q\n' "$model" "$fallback_model"
+              model="$fallback_model"
+              model_source='fallback: deny-listed requested model'
+            else
+              printf 'Model availability: requested %q is deny-listed and no fallback is available; not dispatching.\n' "$model" >&2
+              exit 1
+            fi
+          fi
           if [[ "$model" == openai/* && -f ~/.local/share/opencode/auth.json ]]; then
             printf 'Model availability: requested %q is openai/* and auth.json is present; skipping fallback\n' "$model"
             echo "model=${model}" >> "$GITHUB_OUTPUT"
@@ -482,6 +512,18 @@ jobs:
             --mode ensure \
             --github-output "$GITHUB_OUTPUT"
 
+      - name: Capture worktree baseline
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          baseline_dir="$RUNNER_TEMP/agent-runner-baselines"
+          mkdir -p "$baseline_dir"
+          while IFS= read -r gitdir; do
+            repo_dir="$(dirname "$gitdir")"
+            key="$(printf '%s' "$repo_dir" | sha256sum | cut -d' ' -f1)"
+            git -C "$repo_dir" status --porcelain=v1 --untracked-files=all > "$baseline_dir/$key"
+          done < <(find "$GITHUB_WORKSPACE" -maxdepth 5 -name ".git" -type d 2>/dev/null)
+
       - name: Run coordinator
         id: coordinator
         shell: bash
@@ -498,18 +540,33 @@ jobs:
 
           coordinator_session_title='coordinator-run'
           PROMPT=$(printf 'model: %s \n%s\n\n%s' "$MODEL" "$PROMPT" "$(cat "$RUNNER_TEMP/agent-runner/scripts/progress-reporting.txt")")
+          base_prompt="$PROMPT"
           stop_token="$(openssl rand -hex 32)"
           : "${stop_token:?stop-commands fence token generation failed}"
           printf '::stop-commands::%s\n' "$stop_token"
           printf 'Final OpenCode command: opencode run --agent %q --model %q --title %q\n' "$AGENT" "$MODEL" "$coordinator_session_title"
           printf 'Coordinator prompt:\n%s\n' "$PROMPT"
-          set +e
-          timeout "${COORDINATOR_TIMEOUT}m" opencode run --agent "$AGENT" --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
-          coordinator_statuses=("${PIPESTATUS[@]}")
-          printf '::%s::\n' "$stop_token"
-          coordinator_status=${coordinator_statuses[0]}
-          coordinator_tee_status=${coordinator_statuses[1]}
-          set -e
+          coordinator_status=1
+          coordinator_tee_status=1
+          coordinator_feedback=''
+          for attempt in 1 2; do
+            if ((attempt > 1)); then
+              PROMPT=$(printf '%s\n\nDelivery validation feedback from the previous attempt: the coordinator did not produce a valid completed delivery. Review the previous output below, correct the underlying problem, and complete the task without claiming success until the delivery is real.\n<previous-output>\n%s\n</previous-output>' "$base_prompt" "$coordinator_feedback")
+              printf 'Retrying coordinator (attempt %s/2) with validation feedback.\n' "$attempt"
+            fi
+            set +e
+            timeout "${COORDINATOR_TIMEOUT}m" opencode run --agent "$AGENT" --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator-$attempt.out"
+            coordinator_statuses=("${PIPESTATUS[@]}")
+            printf '::%s::\n' "$stop_token"
+            coordinator_status=${coordinator_statuses[0]}
+            coordinator_tee_status=${coordinator_statuses[1]}
+            set -e
+            cp "$RUNNER_TEMP/coordinator-$attempt.out" "$RUNNER_TEMP/coordinator.out"
+            if ((coordinator_status == 0 && coordinator_tee_status == 0)); then
+              break
+            fi
+            coordinator_feedback="$(tail -n 80 "$RUNNER_TEMP/coordinator-$attempt.out")"
+          done
           printf 'Coordinator statuses: opencode=%s tee=%s\n' "$coordinator_status" "$coordinator_tee_status"
           echo "coordinator_status=${coordinator_status}" >> "$GITHUB_OUTPUT"
           echo "coordinator_tee_status=${coordinator_tee_status}" >> "$GITHUB_OUTPUT"
@@ -615,7 +672,25 @@ jobs:
             fi
 
             git checkout -B "$BRANCH_NAME" 2>/dev/null || git checkout "$BRANCH_NAME"
-            git add -A
+            baseline_file="$RUNNER_TEMP/agent-runner-baselines/$(printf '%s' "$repo_dir" | sha256sum | cut -d' ' -f1)"
+            declare -A baseline=()
+            if [[ -f "$baseline_file" ]]; then
+              while IFS= read -r status; do
+                [[ -n "$status" ]] && baseline["${status:3}"]="$status"
+              done < "$baseline_file"
+            fi
+            mapfile -t intended_paths < <(
+              while IFS= read -r status; do
+                [[ -n "$status" ]] || continue
+                path="${status:3}"
+                if [[ -z "${baseline[$path]+present}" || "${baseline[$path]}" != "$status" ]]; then
+                  printf '%s\n' "$path"
+                fi
+              done < <(git status --porcelain=v1 --untracked-files=all)
+            )
+            if ((${#intended_paths[@]})); then
+              git add -- "${intended_paths[@]}"
+            fi
             git commit -m "agent-run: automated commit for issue #${ISSUE_NUMBER} (run ${GITHUB_RUN_ID})" || true
             remote_url=$(git remote get-url origin 2>/dev/null || true)
             git push -u origin "$BRANCH_NAME" 2>/dev/null || {
@@ -650,6 +725,63 @@ jobs:
           fi
           printf '::%s::\n' "$stop_token"
 
+      - name: Validate delivery
+        if: always() && steps.select-model.outcome == 'success' && steps.target-issue.outputs.issue_number != ''
+        id: delivery-validation
+        shell: bash
+        env:
+          ISSUE_NUMBER: ${{ steps.target-issue.outputs.issue_number }}
+          COORDINATOR_OUTCOME: ${{ steps.coordinator.outcome }}
+          FATAL_REASON: ${{ steps.fatal-guard.outputs.fatal-reason }}
+          BRANCH: ${{ steps.push-work.outputs.branch_name }}
+          PUSHED_REPOS: ${{ steps.push-work.outputs.pushed_repos }}
+          PUSHED_SLUGS: ${{ steps.push-work.outputs.pushed_slugs }}
+          PUSH_OUTCOME: ${{ steps.push-work.outcome }}
+          GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          delivery_file="$RUNNER_TEMP/delivery.json"
+          prs='[]'
+          if [[ -n "${BRANCH:-}" ]]; then
+            slugs="${PUSHED_SLUGS:-}"
+            pushed_slugs_json=$(printf '%s\n' "$slugs" | jq -Rsc 'split("\n") | map(select(length > 0))')
+            while IFS= read -r repo; do
+              [[ -n "$repo" ]] || continue
+              result=$(gh pr list -R "$repo" --head "$BRANCH" --state open --json url,state,body 2>/dev/null || printf '%s\n' '[]')
+              prs=$(jq -c -s 'add' <(printf '%s\n' "$prs") <(printf '%s\n' "$result"))
+            done < <(printf '%s\n' "$slugs")
+          else
+            pushed_slugs_json='[]'
+          fi
+          target_run="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          target_issue_url="$GITHUB_SERVER_URL/$ISSUE_REPOSITORY/issues/$ISSUE_NUMBER"
+          progress_body=''
+          if [[ -n "${ISSUE_NUMBER:-}" ]]; then
+            progress_body=$(gh api --paginate "repos/$ISSUE_REPOSITORY/issues/$ISSUE_NUMBER/comments" | jq -s -r 'add | map(select(.body | contains("<!-- agent-progress -->"))) | max_by(.created_at) | .body // ""' 2>/dev/null || true)
+          fi
+          changed=false
+          pushed=false
+          [[ -n "${BRANCH:-}" ]] && changed=true
+          [[ -n "${PUSHED_REPOS:-}" && "${PUSH_OUTCOME:-}" == success ]] && pushed=true
+          summary="$progress_body"
+          if [[ "$prs" != '[]' ]]; then summary=$(jq -r '.[0].body // ""' <<<"$prs"); fi
+          jq -n \
+            --arg outcome "${COORDINATOR_OUTCOME:-}" \
+            --arg fatal "${FATAL_REASON:-}" \
+            --arg summary "$summary" \
+            --arg progress "$progress_body" \
+            --arg target_repo "$GITHUB_REPOSITORY" \
+            --arg target_issue "$target_issue_url" \
+            --arg target_run "$target_run" \
+            --arg branch "${BRANCH:-}" \
+            --arg push_outcome "${PUSH_OUTCOME:-}" \
+            --argjson pushed_slugs "$pushed_slugs_json" \
+            --argjson changed "$changed" \
+            --argjson pushed "$pushed" \
+            --argjson prs "$prs" \
+            '{coordinator: {outcome: $outcome, fatal: $fatal}, target_repo: $target_repo, target_issue: $target_issue, target_run: $target_run, changed: $changed, pushed: $pushed, branch: $branch, push_outcome: $push_outcome, pushed_slugs: $pushed_slugs, summary: $summary, prs: $prs, progress: {body: $progress}}' > "$delivery_file"
+          python3 "$RUNNER_TEMP/agent-runner/scripts/validate_delivery.py" "$delivery_file"
+
       - name: Emit loop-termination metrics
         if: always()
         id: loop-metrics
@@ -677,6 +809,7 @@ jobs:
           COMMENT_ID: ${{ steps.run-start-comment.outputs.comment_id }}
           MODEL: ${{ steps.select-model.outputs.model }}
           COORDINATOR_OUTCOME: ${{ steps.coordinator.outcome }}
+          DELIVERY_OUTCOME: ${{ steps.delivery-validation.outcome }}
           FATAL_REASON: ${{ steps.fatal-guard.outputs.fatal-reason }}
           BRANCH: ${{ steps.push-work.outputs.branch_name }}
           PUSHED_REPOS: ${{ steps.push-work.outputs.pushed_repos }}
@@ -688,12 +821,12 @@ jobs:
           RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
           # Determine status
-          if [[ "${COORDINATOR_OUTCOME:-}" == "success" ]]; then
+          if [[ "${COORDINATOR_OUTCOME:-}" == "success" && "${DELIVERY_OUTCOME:-}" == "success" ]]; then
             STATUS="✅ completed"
           elif [[ -n "${FATAL_REASON:-}" ]]; then
             STATUS="❌ fatal error: $FATAL_REASON"
           else
-            STATUS="⚠️ failed (coordinator exit ${COORDINATOR_OUTCOME:-})"
+            STATUS="⚠️ failed delivery (coordinator ${COORDINATOR_OUTCOME:-}; validation ${DELIVERY_OUTCOME:-})"
           fi
 
           # Check for existing PRs in every repo this run pushed to, not just this one.

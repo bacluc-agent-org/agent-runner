@@ -81,7 +81,8 @@ idea (issue in agent-todo)
 
 - `setup-opencode` — installs the OpenCode CLI and copies the shared agent
   configuration from the `bacluc/provision-machines` repository (pinned to
-  the latest release tag). The AI configuration lives there, not here.
+  release `2.4` by default). An explicit `SOURCE_BRANCH` selects a branch
+  instead. The AI configuration lives there, not here.
 - `model-availability` — probes which AI models currently work and stores the
   result in a cache issue in the todo repository. Probing every model on
   every run would be slow and expensive; the cache makes it cheap.
@@ -383,7 +384,8 @@ Tracked in bacluc-agent/agent-todo#152.
   machinery (the "how") so the todo repository stays readable and the runner
   can be reused.
 - **Where does the AI configuration live?** In `bacluc/provision-machines`;
-  the `setup-opencode` action installs it from the latest release tag.
+  the `setup-opencode` action installs release `2.4` by default, or the
+  explicitly requested `SOURCE_BRANCH`.
 - **How do I add an idea?** You don't — only `@BacLuc` does for this repository.
   You are free to fork this repository and point it to another issue repo.
   Open an issue in `bacluc-agent/agent-todo`. The refiner will turn it into a

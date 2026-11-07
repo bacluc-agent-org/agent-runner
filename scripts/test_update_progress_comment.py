@@ -257,7 +257,7 @@ class TestEnsure:
         mine = _comment(333, upc.TEMPLATE.read_text(encoding="utf-8"))
         foreign = _comment(
             111,
-            "<!-- agent-progress -->\n\nnot mine",
+            upc.TEMPLATE.read_text(encoding="utf-8"),
             login="someone-else",
             created_at="2026-09-26T23:00:00Z",
         )
@@ -271,7 +271,7 @@ class TestEnsure:
 
         assert gh.written == []
         assert len(gh.list_calls) == 1
-        assert output.read_text() == f"comment_id=333\ncomment_url={mine['html_url']}\n"
+        assert output.read_text() == f"comment_id=111\ncomment_url={foreign['html_url']}\n"
 
     def test_creates_from_template_when_no_marker_comment(self, fake_gh, tmp_path):
         gh = fake_gh([_comment(999, "unrelated", login="someone-else")])

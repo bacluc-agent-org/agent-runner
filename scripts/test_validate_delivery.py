@@ -119,16 +119,16 @@ def test_workflow_wires_fail_closed_validation_before_completion():
     assert "scripts/validate_delivery.py" in body
     assert "DELIVERY_OUTCOME" in body
     assert 'DELIVERY_OUTCOME:-}" == "success"' in body
+    assert 'deny_file="$GITHUB_WORKSPACE/scripts/model-deny-list.txt"' in body
+    assert 'PUSH_OUTCOME: ${{ steps.push-work.outcome }}' in body
+    assert 'gh api --paginate "repos/$ISSUE_REPOSITORY/issues/$ISSUE_NUMBER/comments"' in body
+    assert 'slugs="$GITHUB_REPOSITORY"' in body
+    assert body.index('if grep -Eq "$deny_re" <<<"$model"') < body.index('if [[ "$model" == openai/*')
+
+
 def test_setup_pins_default_release_and_keeps_branch_override():
     action = Path(__file__).parents[1] / ".github/actions/setup-opencode/action.yml"
     body = action.read_text(encoding="utf-8")
     assert "SOURCE_RELEASE=2.4" in body
     assert 'if [[ -n "${SOURCE_BRANCH:-}" ]]' in body
     assert 'git clone --quiet --branch "$SOURCE_BRANCH"' in body
- 
- 
-    assert 'deny_file="$GITHUB_WORKSPACE/scripts/model-deny-list.txt"' in body
-    assert 'PUSH_OUTCOME: ${{ steps.push-work.outcome }}' in body
-    assert 'gh api --paginate "repos/$ISSUE_REPOSITORY/issues/$ISSUE_NUMBER/comments"' in body
-    assert 'slugs="$GITHUB_REPOSITORY"' in body
-    assert body.index('if grep -Eq "$deny_re" <<<"$model"') < body.index('if [[ "$model" == openai/*')

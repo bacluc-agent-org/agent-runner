@@ -4,12 +4,6 @@ mode: primary
 temperature: 0.1
 permission:
   "*": deny
-  read: allow
-  glob: allow
-  grep: allow
-  webfetch: allow
-  bash:
-    "*": allow
 ---
 
 # Issue Selector Agent

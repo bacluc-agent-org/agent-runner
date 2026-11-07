@@ -3,5 +3,3 @@
 __pycache__/
 .idea/
 loop-metrics.json
-
-node_modules

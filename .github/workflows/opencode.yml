@@ -49,6 +49,7 @@ on:
           - opencode-go-openai/kimi-k3
           - opencode-go-openai/hy4-preview
           - opencode-go-openai/gpt-5.6-luna
+          - opencode-go-openai/gpt-6-luna
           - opencode-go-openai/minimax-m2.5
           - opencode-go-openai-2/qwen3.8-max
           - opencode-go-openai-2/qwen3.8-flash
@@ -56,8 +57,10 @@ on:
           - opencode-go-openai-2/kimi-k3
           - opencode-go-openai-2/hy4-preview
           - opencode-go-openai-2/gpt-5.6-luna
+          - opencode-go-openai-2/gpt-6-luna
           - opencode-go-openai-2/minimax-m2.5
           - openai/gpt-5.6-luna
+          - openai/gpt-6-luna
           - openai/gpt-4o-mini
       timeout_minutes:
         description: Job timeout in minutes
@@ -104,6 +107,9 @@ jobs:
       OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
       OPENCODE_GO_2_API_KEY: ${{ secrets.OPENCODE_GO_2_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENAI_ACCESS_TOKEN: ${{ secrets.CHATGPT_ACCESS_TOKEN }}
+      OPENAI_REFRESH_TOKEN: ${{ secrets.CHATGPT_REFRESH_TOKEN }}
+      OPENAI_OAUTH_CLIENT_ID: ${{ secrets.OPENAI_OAUTH_CLIENT_ID }}
       BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
       OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON }}
       BACLUC_AGENT_GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
@@ -159,6 +165,10 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
+      - name: Warm up OpenCode CLI
+        shell: bash
+        run: scripts/wait_for_opencode.sh
+
       - name: Check model availability
         id: model-availability
         uses: ./.github/actions/model-availability
@@ -185,6 +195,12 @@ jobs:
           DISCOVERY_TIMEOUT: ${{ inputs.discovery_timeout_minutes || 5 }}
         run: |
           set -Eeuo pipefail
+          configure_openai_model() {
+            [[ "$1" == openai/* ]] || return 0
+            local slug="${1#openai/}"
+            export OPENCODE_CONFIG_CONTENT
+            OPENCODE_CONFIG_CONTENT="$(jq -cn --arg slug "$slug" --arg baseURL "$AISIX_PROXY_URL" --arg apiKey "$AISIX_CALLER_KEY" '{provider:{openai:{options:{baseURL:$baseURL,apiKey:$apiKey},models:{($slug):{name:$slug}}}}}')"
+          }
 
           requested="${MODEL_TEXT:-}"
           if [[ -z "$requested" && "${MODEL_CHOICE:-auto}" != auto ]]; then requested="$MODEL_CHOICE"; fi
@@ -196,8 +212,6 @@ jobs:
           printf '::add-mask::%s\n' "$OPENCODE_GO_2_API_KEY"
           if [[ -n "$OPENCODE_AUTH_CONTENT" ]]; then
             printf '::add-mask::%s\n' "$OPENCODE_AUTH_CONTENT"
-          else
-            printf 'OPENCODE_AUTH_CONTENT is empty'
           fi
 
           available_models_file="$RUNNER_TEMP/available-models.txt"
@@ -215,7 +229,7 @@ jobs:
           [[ -n "$deny_re" ]] || deny_re='^$'
 
           mapfile -t free_models < <(grep -E '^(opencode|openrouter)/[^[:space:]]+(-free|:free)$' "$available_models_file" | grep -Ev "$deny_re" | awk '!seen[$0]++')
-          mapfile -t openai_models < <(grep -E '^openai/' "$available_models_file" | grep -Ev "$deny_re" | awk '!seen[$0]++')
+          mapfile -t openai_models < <(grep -E '^openai/' "$available_models_file" | awk '!seen[$0]++')
           for candidate in \
             'opencode/big-pickle' \
             'opencode-go-openai/qwen3.8-flash' \
@@ -288,7 +302,12 @@ jobs:
             printf '::stop-commands::%s\n' "$stop_token"
             printf 'Model discovery prompt:\n%s\n' "$discovery_prompt"
             set +e
-            timeout "${DISCOVERY_TIMEOUT}m" opencode run --agent model-discovery --model "$fallback_model" --title "model-discovery" "$discovery_prompt" | tee "$discovery_output"
+            configure_openai_model "$fallback_model"
+            discovery_standalone_args=()
+            if [[ "$fallback_model" == openai/* ]]; then
+              discovery_standalone_args+=(--standalone)
+            fi
+            timeout "${DISCOVERY_TIMEOUT}m" opencode run "${discovery_standalone_args[@]}" --agent model-discovery --model "$fallback_model" --title "model-discovery" "$discovery_prompt" | tee "$discovery_output"
             discovery_statuses=("${PIPESTATUS[@]}")
             printf '::%s::\n' "$stop_token"
             discovery_status=${discovery_statuses[0]}
@@ -360,19 +379,11 @@ jobs:
           PY
           }
 
-          if grep -Eq "$deny_re" <<<"$model"; then
-            if [[ -n "$fallback_model" ]]; then
-              printf 'Model availability: requested %q is deny-listed; falling back to %q\n' "$model" "$fallback_model"
-              model="$fallback_model"
-              model_source='fallback: deny-listed requested model'
-            else
-              printf 'Model availability: requested %q is deny-listed and no fallback is available; refusing to dispatch.\n' "$model" >&2
-              exit 1
-            fi
-          fi
           requested_model="$model"
-          if [[ "$model" == openai/* && -f ~/.local/share/opencode/auth.json ]]; then
-            printf 'Model availability: requested %q is openai/* and auth.json is present; skipping fallback\n' "$model"
+          if [[ "$model" == openai/* ]] && [[ -n "${AISIX_PROXY_URL:-}" && -n "${AISIX_CALLER_KEY:-}" ]]; then
+            configure_openai_model "$model"
+            printf 'OPENCODE_CONFIG_CONTENT=%s\n' "$OPENCODE_CONFIG_CONTENT" >> "$GITHUB_ENV"
+            printf 'Model availability: requested %q is openai/* and AISIX OAuth proxy is ready; skipping fallback\n' "$model"
             echo "model=${model}" >> "$GITHUB_OUTPUT"
             printf '\n\n\n\n\n\n'
             printf 'Chosen model is %s (source: %s)\n' "$model" "$model_source"
@@ -382,7 +393,7 @@ jobs:
           fi
           printf '::%s::\n' "$stop_token"
           if [[ "$model" == openai/* ]]; then
-            printf '::error::Model availability: requested %q is openai/* but no valid auth.json is present (OPENCODE_AUTH_CONTENT empty or invalid); cannot run openai models.\n' "$model" >&2
+            printf '::error::Model availability: requested %q is openai/* but no valid AISIX OAuth proxy is ready; cannot run openai models.\n' "$model" >&2
             exit 1
           fi
           stop_token="$(openssl rand -hex 32)"
@@ -392,7 +403,7 @@ jobs:
           if [[ "$resolution" == available ]]; then
             printf 'Model availability: requested %q is available; resolved model %q\n' "$requested_model" "$resolved"
             model="$resolved"
-            if [[ -z "$requested" ]] && grep -Eq "$deny_re" <<<"$resolved"; then
+            if grep -Eq "$deny_re" <<<"$resolved"; then
               if [[ -n "$fallback_model" ]]; then
                 printf 'Model availability: requested %q resolved to deny-listed model %q; falling back to %q\n' "$requested_model" "$model" "$fallback_model"
                 model="$fallback_model"
@@ -425,7 +436,11 @@ jobs:
           printf '\n\n\n\n\n\n'
           printf '::%s::\n' "$stop_token"
 
+          configure_openai_model "$model"
           echo "model=${model}" >> "$GITHUB_OUTPUT"
+          if [[ "$model" == openai/* ]]; then
+            printf 'OPENCODE_CONFIG_CONTENT=%s\n' "$OPENCODE_CONFIG_CONTENT" >> "$GITHUB_ENV"
+          fi
 
       - name: Extract target issue number
         id: target-issue
@@ -473,6 +488,7 @@ jobs:
         id: coordinator
         shell: bash
         env:
+          AVAILABLE_MODELS: ${{ steps.model-availability.outputs.available-models }}
           MODEL: ${{ steps.select-model.outputs.model }}
           COORDINATOR_TIMEOUT: ${{ inputs.timeout_minutes || 120 }}
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
@@ -484,13 +500,18 @@ jobs:
 
           coordinator_session_title='coordinator-run'
           PROMPT=$(printf 'model: %s \n%s\n\n%s' "$MODEL" "$PROMPT" "$(cat "$RUNNER_TEMP/agent-runner/scripts/progress-reporting.txt")")
+          coordinator_standalone_args=()
+          if [[ "$MODEL" == openai/* ]]; then
+            coordinator_standalone_args+=(--standalone)
+          fi
+          unset OPENAI_ACCESS_TOKEN OPENAI_REFRESH_TOKEN OPENCODE_AUTH_CONTENT
           stop_token="$(openssl rand -hex 32)"
           : "${stop_token:?stop-commands fence token generation failed}"
           printf '::stop-commands::%s\n' "$stop_token"
-          printf 'Final coordinator command: opencode run --agent coordinator --model %q --title %q\n' "$MODEL" "$coordinator_session_title"
+          printf 'Final coordinator command: opencode run %s --agent coordinator --model %q --title %q\n' "${coordinator_standalone_args[*]}" "$MODEL" "$coordinator_session_title"
           printf 'Coordinator prompt:\n%s\n' "$PROMPT"
           set +e
-          timeout "${COORDINATOR_TIMEOUT}m" opencode run --agent coordinator --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
+          timeout "${COORDINATOR_TIMEOUT}m" opencode run "${coordinator_standalone_args[@]}" --agent coordinator --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
           coordinator_statuses=("${PIPESTATUS[@]}")
           printf '::%s::\n' "$stop_token"
           coordinator_status=${coordinator_statuses[0]}

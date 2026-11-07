@@ -1252,6 +1252,14 @@ class TestDiscoveryTimeout:
 class TestRefineIssuesExitCode:
     WORKFLOW = Path(__file__).parents[3] / ".github/workflows/refine-issues.yml"
 
+    def test_openai_selection_uses_deny_filtered_models(self):
+        content = self.WORKFLOW.read_text()
+        assignment = "mapfile -t openai_models < <(grep -E '^openai/' \"$available_models_file\" | grep -Ev -f scripts/model-deny-list.txt"
+        assert assignment in content
+        loop_start = content.index("for candidate in \\")
+        loop_end = content.index("done", loop_start)
+        assert '"${openai_models[@]}"' in content[loop_start:loop_end]
+
     @classmethod
     def _completion_tail(cls):
         lines = cls.WORKFLOW.read_text().splitlines()

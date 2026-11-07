@@ -129,3 +129,13 @@ def test_workflow_uses_latest_commit_and_created_at_when_pr_has_no_commits():
     assert '([.[][] | .commit.committer.date] | max) // $fallback' in content
     assert 'pr_last_commit_at:(' in content
     assert 'map(select(test("^[0-9]")))|max // null' in content
+
+
+def test_coordinator_retries_only_confirmed_opencode_go_balance_failures():
+    opencode = (Path(__file__).parents[1] / ".github/workflows/opencode.yml").read_text()
+    retry = opencode[opencode.index("Confirmed OpenCode Go balance/usage limit"):]
+    assert '.reason == "balance" and (.model | startswith("opencode-go-"))' in opencode
+    assert "^opencode/[^[:space:]]*(big-pickle|(-free|:free))$" in opencode
+    assert 'grep -Ev "${deny_re:-^$}"' in opencode
+    assert 'echo "quota_retry_model=${MODEL}" >> "$GITHUB_OUTPUT"' in retry
+    assert "retrying once with verified free model" in retry

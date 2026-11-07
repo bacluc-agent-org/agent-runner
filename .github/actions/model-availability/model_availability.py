@@ -11,6 +11,7 @@ import tempfile
 import urllib.request
 from urllib.parse import urlsplit
 from datetime import datetime, timezone
+from pathlib import Path
 
 AVAILABLE_TTL_HOURS = 24
 # Trade-off: 1h re-probes failures twice as often, halving recovery latency for wrongly-marked models.
@@ -303,9 +304,9 @@ def candidate_priority(candidate: str) -> int:
         return 1
     free = is_whitelisted(model, FREE_PATTERNS)
     if provider == "opencode":
-        return 2 if free else 4
+        return 1 if free else 4
     if provider == "openai":
-        return 4
+        return 2
     if re.search(r"gpt", model, re.IGNORECASE):
         return 2 if provider in ("opencode-go-openai", "opencode-go-openai-2") else 6
     if provider == "openrouter":
@@ -388,6 +389,20 @@ def probe_candidates(candidates: list[str], work_dir: str) -> dict[str, bool]:
     return results
 
 
+def log_failed_free_probes(results: dict[str, bool], work_dir: str) -> None:
+    for candidate, success in results.items():
+        if success or not re.search(r"/(?:[^/]+-free|[^/]+:free)$", candidate):
+            continue
+        log_path = os.path.join(work_dir, "model-probes", "probe-" + candidate.replace("/", "-") + ".log")
+        try:
+            diagnostic = Path(log_path).read_text()
+        except OSError:
+            diagnostic = ""
+        status = re.search(r"HTTP(?:Error)?\D+(\d{3})", diagnostic, re.IGNORECASE)
+        category = f"HTTP {status.group(1)}" if status else "timeout" if "TIMEOUT" in diagnostic else "probe error"
+        print(f"Free-model probe failed ({candidate}): {category}", file=sys.stderr)
+
+
 def merge_results(cache: dict, results: dict[str, bool], checked: str) -> dict:
     merged = dict(cache)
     for candidate, ok in results.items():
@@ -446,6 +461,7 @@ def main() -> int:
         )
     work_dir = os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()
     results = probe_candidates(pending, work_dir) if pending else {}
+    log_failed_free_probes(results, work_dir)
     ok = sum(1 for v in results.values() if v)
     if pending:
         print(f"probe results: {len(results)} checked, {ok} ok, {len(results) - ok} failed")

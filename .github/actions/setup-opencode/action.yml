@@ -113,13 +113,16 @@ runs:
         if [[ -n "${OPENCODE_AUTH_CONTENT:-}" ]]; then
           printf '::add-mask::%s\n' "$OPENCODE_AUTH_CONTENT"
           printf '%s' "$OPENCODE_AUTH_CONTENT" | while IFS= read -r line || [[ -n "$line" ]]; do [[ -n "$line" ]] && printf '::add-mask::%s\n' "$line"; done
-          mkdir -p ~/.local/share/opencode
-          printf '%s' "$OPENCODE_AUTH_CONTENT" > ~/.local/share/opencode/auth.json
-          if ! jq -e '.openai.type == "oauth" and .openai.access != "" and .openai.refresh != "" and (.openai.expires | type == "number")' ~/.local/share/opencode/auth.json >/dev/null 2>&1; then
+          if ! PYTHONPATH="$GITHUB_WORKSPACE/scripts" OPENCODE_AUTH_CONTENT="$OPENCODE_AUTH_CONTENT" python3 -c 'import os; from opencode_auth import write_auth_content; write_auth_content(os.environ["OPENCODE_AUTH_CONTENT"])' 2>/dev/null; then
             echo "::warning::OPENCODE_AUTH_CONTENT is not valid opencode auth JSON (expected {openai:{type:oauth,access,refresh,expires:number}}); removing auth.json and continuing without it" >&2
-            rm -f ~/.local/share/opencode/auth.json
+            rm -f "$HOME/.local/share/opencode/auth.json"
           elif command -v opencode >/dev/null 2>&1 && ! opencode --help >/dev/null 2>&1; then
             echo "::warning::opencode config check failed with provided auth.json; removing auth.json and continuing" >&2
-            rm -f ~/.local/share/opencode/auth.json
+            rm -f "$HOME/.local/share/opencode/auth.json"
           fi
+        fi
+        if [[ -s "$HOME/.local/share/opencode/auth.json" ]]; then
+          printf 'OpenCode auth file is present\n'
+        else
+          printf 'OpenCode auth content is not configured\n'
         fi

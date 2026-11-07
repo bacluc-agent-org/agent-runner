@@ -644,16 +644,16 @@ class TestCandidatePriority:
         assert model_availability.candidate_priority("opencode-go-openai-2/qwen3.8-flash") == 1
 
     def test_opencode_free_before_openrouter_free(self):
-        assert model_availability.candidate_priority("opencode/a-free") == 2
+        assert model_availability.candidate_priority("opencode/a-free") == 1
         assert model_availability.candidate_priority("openrouter/zai/GLM-4.5:free") == 3
 
     def test_opencode_paid(self):
         assert model_availability.candidate_priority("opencode/paid-model") == 4
 
     def test_openai_models(self):
-        assert model_availability.candidate_priority("openai/gpt-5.6-luna") == 4
-        assert model_availability.candidate_priority("openai/gpt-6-luna") == 4
-        assert model_availability.candidate_priority("openai/gpt-5.4") == 4
+        assert model_availability.candidate_priority("openai/gpt-5.6-luna") == 2
+        assert model_availability.candidate_priority("openai/gpt-6-luna") == 2
+        assert model_availability.candidate_priority("openai/gpt-5.4") == 2
 
     def test_go_openai_providers(self):
         assert model_availability.candidate_priority("opencode-go-openai/glm-5.3") == 5
@@ -674,7 +674,7 @@ class TestCandidatePriority:
         assert model_availability.candidate_priority("opencode-go-openai-2/glm-5.3") == 5
 
     def test_openai_non_gpt_priority(self):
-        assert model_availability.candidate_priority("openai/other-model") == 4
+        assert model_availability.candidate_priority("openai/other-model") == 2
 
     def test_go_anthropic_providers(self):
         assert model_availability.candidate_priority("opencode-go-anthropic/glm-5.3") == 6
@@ -686,6 +686,13 @@ class TestCandidatePriority:
 
 
 class TestPrioritizeCandidates:
+    def test_opencode_free_candidates_are_probed_before_openai_oauth(self):
+        candidates = ["openai/gpt-6-luna", "opencode/a-free"]
+        assert model_availability.prioritize_candidates(candidates) == [
+            "opencode/a-free",
+            "openai/gpt-6-luna",
+        ]
+
     def test_sorts_by_priority(self):
         candidates = [
             "openrouter/anthropic/claude-sonnet-4.5",
@@ -706,6 +713,17 @@ class TestPrioritizeCandidates:
 
 
 class TestSelectPending:
+    def test_opencode_free_candidates_fit_budget_before_openai_models(self):
+        now = datetime(2026, 9, 6, 15, 0, tzinfo=timezone.utc)
+        candidates = [f"openai/gpt-{i}" for i in range(model_availability.PROBE_BUDGET)]
+        candidates.extend(["opencode/free-a-free", "opencode/free-b-free"])
+
+        pending, skipped = model_availability.select_pending(candidates, {}, now)
+
+        assert pending[:2] == ["opencode/free-a-free", "opencode/free-b-free"]
+        assert len(pending) == model_availability.PROBE_BUDGET
+        assert skipped == 2
+
     def test_stale_highest_priority_first(self):
         now = datetime(2026, 9, 6, 15, 0, tzinfo=timezone.utc)
         cache = {
@@ -981,6 +999,20 @@ class TestLoadProviderBaseUrls:
 
 
 class TestProbeModelLogging:
+    def test_failed_free_probe_logs_only_sanitized_error_category(self, tmp_path, capsys):
+        probe_dir = tmp_path / "model-probes"
+        probe_dir.mkdir()
+        (probe_dir / "probe-opencode-a-free.log").write_text(
+            "request failed with HTTP 429: quota exhausted; secret-value"
+        )
+
+        model_availability.log_failed_free_probes({"opencode/a-free": False}, str(tmp_path))
+
+        diagnostic = capsys.readouterr().err
+        assert "opencode/a-free" in diagnostic
+        assert "HTTP 429" in diagnostic
+        assert "secret-value" not in diagnostic
+
     def test_writes_probe_log_with_stdout_and_stderr(self, tmp_path, monkeypatch):
         class FakeResult:
             returncode = 0
@@ -1179,10 +1211,9 @@ class TestModelAvailabilityAction:
         root = Path(__file__).parents[3]
         setup = (root / ".github/actions/setup-opencode/action.yml").read_text()
         assert "umask 077" in setup
-        assert (
-            "printf '%s' \"$OPENCODE_AUTH_CONTENT\" > ~/.local/share/opencode/auth.json"
-            in setup
-        )
+        assert "write_auth_content" in setup
+        assert 'PYTHONPATH="$GITHUB_WORKSPACE/scripts"' in setup
+        assert "OpenCode auth content is not configured" in setup
         assert "printf '%s\\n' \"$OPENCODE_AUTH_CONTENT\"" not in setup
         action = Path(__file__).with_name("action.yml").read_text()
         assert "OPENCODE_AUTH_CONTENT" not in action

@@ -476,19 +476,47 @@ jobs:
           rm -f "$RUNNER_TEMP/opencode-fatal.json"
 
           coordinator_session_title='coordinator-run'
-          PROMPT=$(printf 'model: %s \n%s\n\n%s' "$MODEL" "$PROMPT" "$(cat "$RUNNER_TEMP/agent-runner/scripts/progress-reporting.txt")")
+          original_prompt="$PROMPT"
+          coordinator_standalone_args=()
+          if [[ "$MODEL" == openai/* ]]; then
+            coordinator_standalone_args+=(--standalone)
+          fi
           stop_token="$(openssl rand -hex 32)"
           : "${stop_token:?stop-commands fence token generation failed}"
           printf '::stop-commands::%s\n' "$stop_token"
-          printf 'Final coordinator command: opencode run --agent coordinator --model %q --title %q\n' "$MODEL" "$coordinator_session_title"
+          printf 'Final coordinator command: opencode run %s --agent coordinator --model %q --title %q\n' "${coordinator_standalone_args[*]}" "$MODEL" "$coordinator_session_title"
+          PROMPT=$(printf 'model: %s \n%s\n\n%s' "$MODEL" "$original_prompt" "$(cat "$RUNNER_TEMP/agent-runner/scripts/progress-reporting.txt")")
           printf 'Coordinator prompt:\n%s\n' "$PROMPT"
           set +e
-          timeout "${COORDINATOR_TIMEOUT}m" opencode run --agent coordinator --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
+          timeout "${COORDINATOR_TIMEOUT}m" opencode run "${coordinator_standalone_args[@]}" --agent coordinator --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
           coordinator_statuses=("${PIPESTATUS[@]}")
           printf '::%s::\n' "$stop_token"
           coordinator_status=${coordinator_statuses[0]}
           coordinator_tee_status=${coordinator_statuses[1]}
           set -e
+          if ((coordinator_status != 0 && coordinator_tee_status == 0)) \
+            && [[ -f "$RUNNER_TEMP/opencode-fatal.json" ]] \
+            && jq -e '.reason == "balance" and (.model | startswith("opencode-go-"))' "$RUNNER_TEMP/opencode-fatal.json" >/dev/null; then
+            deny_file="$RUNNER_TEMP/agent-runner/scripts/model-deny-list.txt"
+            deny_re="$(awk '!/^[[:space:]]*(#|$)/' "$deny_file" | paste -sd'|' - || true)"
+            retry_model="$(grep -E '^opencode/[^[:space:]]*(big-pickle|(-free|:free))$' "$RUNNER_TEMP/available-models.txt" | grep -Ev "${deny_re:-^$}" | head -n 1 || true)"
+            if [[ -n "$retry_model" ]]; then
+              printf 'Confirmed OpenCode Go balance/usage limit for %s; retrying once with verified free model %s.\n' "$MODEL" "$retry_model"
+              MODEL="$retry_model"
+              PROMPT=$(printf 'model: %s \n%s\n\n%s' "$MODEL" "$original_prompt" "$(cat "$RUNNER_TEMP/agent-runner/scripts/progress-reporting.txt")")
+              rm -f "$RUNNER_TEMP/opencode-fatal.json"
+              : > "$RUNNER_TEMP/coordinator.out"
+              set +e
+              timeout "${COORDINATOR_TIMEOUT}m" opencode run --agent coordinator --model "$MODEL" --title "coordinator-quota-fallback" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
+              coordinator_statuses=("${PIPESTATUS[@]}")
+              set -e
+              coordinator_status=${coordinator_statuses[0]}
+              coordinator_tee_status=${coordinator_statuses[1]}
+              echo "quota_retry_model=${MODEL}" >> "$GITHUB_OUTPUT"
+            else
+              printf '%s\n' 'Confirmed OpenCode Go balance/usage limit, but no verified non-denylisted free OpenCode model is available; not retrying.'
+            fi
+          fi
           printf 'Coordinator statuses: opencode=%s tee=%s\n' "$coordinator_status" "$coordinator_tee_status"
           echo "coordinator_status=${coordinator_status}" >> "$GITHUB_OUTPUT"
           echo "coordinator_tee_status=${coordinator_tee_status}" >> "$GITHUB_OUTPUT"

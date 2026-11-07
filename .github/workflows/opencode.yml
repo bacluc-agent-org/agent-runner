@@ -473,6 +473,18 @@ jobs:
             --mode ensure \
             --github-output "$GITHUB_OUTPUT"
 
+      - name: Capture worktree baseline
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          baseline_dir="$RUNNER_TEMP/agent-runner-baselines"
+          mkdir -p "$baseline_dir"
+          while IFS= read -r gitdir; do
+            repo_dir="$(dirname "$gitdir")"
+            key="$(printf '%s' "$repo_dir" | sha256sum | cut -d' ' -f1)"
+            git -C "$repo_dir" status --porcelain=v1 --untracked-files=all > "$baseline_dir/$key"
+          done < <(find "$GITHUB_WORKSPACE" -maxdepth 5 -name ".git" -type d 2>/dev/null)
+
       - name: Run coordinator
         id: coordinator
         shell: bash
@@ -605,7 +617,25 @@ jobs:
             fi
 
             git checkout -B "$BRANCH_NAME" 2>/dev/null || git checkout "$BRANCH_NAME"
-            git add -A
+            baseline_file="$RUNNER_TEMP/agent-runner-baselines/$(printf '%s' "$repo_dir" | sha256sum | cut -d' ' -f1)"
+            declare -A baseline=()
+            if [[ -f "$baseline_file" ]]; then
+              while IFS= read -r status; do
+                [[ -n "$status" ]] && baseline["${status:3}"]="$status"
+              done < "$baseline_file"
+            fi
+            mapfile -t intended_paths < <(
+              while IFS= read -r status; do
+                [[ -n "$status" ]] || continue
+                path="${status:3}"
+                if [[ -z "${baseline[$path]+present}" || "${baseline[$path]}" != "$status" ]]; then
+                  printf '%s\n' "$path"
+                fi
+              done < <(git status --porcelain=v1 --untracked-files=all)
+            )
+            if ((${#intended_paths[@]})); then
+              git add -- "${intended_paths[@]}"
+            fi
             git commit -m "agent-run: automated commit for issue #${ISSUE_NUMBER} (run ${GITHUB_RUN_ID})" || true
             remote_url=$(git remote get-url origin 2>/dev/null || true)
             git push -u origin "$BRANCH_NAME" 2>/dev/null || {

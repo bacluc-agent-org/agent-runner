@@ -113,6 +113,29 @@ def test_rejects_no_code_report_without_body():
         validate_delivery(delivery)
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        "<!-- agent-progress -->\n### Management summary\nvalid report text\n### Design decisions\nvalid decision text\n### Open PR\nnone\n### Verification evidence\nnone\n### Action runs\n| Run | Model | What happened | Result | Failure reason |\nmalformed",
+        "<!-- agent-progress -->\n### Management summary\nvalid report text\n### Design decisions\nvalid decision text\n### Open PR\nnone\n### Verification evidence\nnone\n### Action runs\n| Run | Model | What happened | Result | Failure reason |\n| --- | ----- | ------------- | ------ | -------------- |\n| https://github.com/bacluc-agent-org/agent-runner/actions/runs/999 | test | old report for another run | completed | none |",
+    ],
+)
+def test_rejects_malformed_or_stale_progress(body):
+    with pytest.raises(DeliveryError):
+        validate_delivery(_delivery(changed=False, prs=[], pushed=False, branch="", progress={"body": body}))
+
+
+def test_accepts_zero_step_early_completion_with_current_run_evidence():
+    delivery = _delivery(
+        changed=False,
+        prs=[],
+        pushed=False,
+        branch="",
+        coordinator={"outcome": "success", "fatal": "", "steps": 0},
+    )
+    assert validate_delivery(delivery) == "report"
+
+
 def test_workflow_wires_fail_closed_validation_before_completion():
     workflow = Path(__file__).parents[1] / ".github/workflows/opencode.yml"
     body = workflow.read_text(encoding="utf-8")
@@ -124,6 +147,7 @@ def test_workflow_wires_fail_closed_validation_before_completion():
     assert 'gh api --paginate "repos/$ISSUE_REPOSITORY/issues/$ISSUE_NUMBER/comments"' in body
     assert 'slugs="$GITHUB_REPOSITORY"' in body
     assert body.index('if grep -Eq "$deny_re" <<<"$model"') < body.index('if [[ "$model" == openai/*')
+    assert "git add -A" not in body
 
 
 def test_setup_pins_default_release_and_keeps_branch_override():

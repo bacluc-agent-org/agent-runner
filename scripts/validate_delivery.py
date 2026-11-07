@@ -38,14 +38,48 @@ def _valid_progress(progress: Any, target_issue: str, target_run: str) -> bool:
     if not isinstance(progress, dict):
         return False
     body = str(progress.get("body") or "")
-    if body.count(MARKER) != 1 or any(body.count(heading) != 1 for heading in HEADINGS):
+    lines = body.splitlines()
+    if not lines or lines[0] != MARKER or lines.count(MARKER) != 1:
         return False
-    summary = body.split("### Management summary", 1)[1].split("### ", 1)[0]
-    return (
-        _substantive(summary)
-        and "| Run | Model | What happened | Result | Failure reason |" in body
-        and _references(body, target_issue, target_run)
-    )
+    positions = [[index for index, line in enumerate(lines) if line == heading] for heading in HEADINGS]
+    if any(len(found) != 1 for found in positions):
+        return False
+    heading_positions = [found[0] for found in positions]
+    if heading_positions != sorted(heading_positions):
+        return False
+    if any(line.startswith("### ") and line not in HEADINGS for line in lines):
+        return False
+    sections = {
+        heading: lines[start + 1 : end]
+        for heading, start, end in zip(HEADINGS, heading_positions, heading_positions[1:] + [len(lines)])
+    }
+    if not _substantive("\n".join(sections[HEADINGS[0]])):
+        return False
+    if not "\n".join(sections[HEADINGS[1]]).strip() or not _references(body, target_issue, target_run):
+        return False
+    table = sections[HEADINGS[-1]]
+    try:
+        header = next(index for index, line in enumerate(table) if line == "| Run | Model | What happened | Result | Failure reason |")
+    except StopIteration:
+        return False
+    if header + 1 >= len(table) or not (
+        table[header + 1].startswith("|")
+        and table[header + 1].endswith("|")
+        and len(table[header + 1][1:-1].split("|")) == 5
+        and all(re.fullmatch(r"\s*-+\s*", cell) for cell in table[header + 1][1:-1].split("|"))
+    ):
+        return False
+    rows = []
+    for line in table[header + 2 :]:
+        if not line:
+            break
+        if not (line.startswith("|") and line.endswith("|")):
+            return False
+        cells = [cell.strip() for cell in line[1:-1].split("|")]
+        if len(cells) != 5 or not all(cells[:4]):
+            return False
+        rows.append(cells)
+    return any(row[0] == target_run and row[2] and row[3] for row in rows)
 
 
 def validate_delivery(delivery: dict[str, Any]) -> str:

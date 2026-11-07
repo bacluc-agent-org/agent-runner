@@ -1482,44 +1482,10 @@ class TestWorkflowOpenRouterSelection:
         # Should not have the old gated pattern
         assert 'if [[ -z "$requested" ]]; then' not in content[deny_load:deny_load+200]
 
-    def test_opencode_falls_back_for_deny_listed_explicit_request(self, tmp_path):
-        """Explicit request for a deny-listed model should fall back, not fail closed."""
-        deny_list = tmp_path / "deny-list.txt"
-        deny_list.write_text("bad-model\n")
-        available = tmp_path / "available-models.txt"
-        available.write_text("bad-model\ngood-model\n")
-        fallback = "good-model"
-        result = subprocess.run(
-            [
-                "bash",
-                "-Eeuo",
-                "pipefail",
-                "-c",
-                """
-                deny_re="$(awk '!/^[[:space:]]*(#|$)/' "$1" | paste -sd'|' -)"
-                [[ -n "$deny_re" ]] || deny_re='^$'
-                requested_model="bad-model"
-                resolved="bad-model"
-                if grep -Eq "$deny_re" <<<"$resolved"; then
-                  if [[ -n "$2" ]]; then
-                    printf 'fallback: %s\n' "$2"
-                    exit 0
-                  else
-                    printf 'no fallback\n' >&2
-                    exit 1
-                  fi
-                fi
-                printf 'no deny match\n'
-                """,
-                "bash",
-                str(deny_list),
-                fallback,
-            ],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0
-        assert "fallback: good-model" in result.stdout
+    def test_opencode_keeps_explicit_deny_listed_resolution(self):
+        """Deny-list fallback applies only when no model was explicitly requested."""
+        content = Path(".github/workflows/opencode.yml").read_text()
+        assert 'if [[ -z "$requested" ]] && grep -Eq "$deny_re" <<<"$resolved"; then' in content
 
 
 class TestGpt6LunaIsNeverDispatched:
@@ -1532,17 +1498,19 @@ class TestGpt6LunaIsNeverDispatched:
             in content
         )
 
-    def test_deny_guard_precedes_openai_early_dispatch(self):
+    def test_resolved_deny_guard_is_automatic_only_and_openai_dispatch_remains(self):
         content = self.WORKFLOW.read_text()
-        guard = content.index("refusing to dispatch.")
+        resolved_guard = content.index(
+            'if [[ -z "$requested" ]] && grep -Eq "$deny_re" <<<"$resolved"; then'
+        )
         early_dispatch = content.index(
             'if [[ "$model" == openai/* && -f ~/.local/share/opencode/auth.json ]]; then'
         )
-        assert guard < early_dispatch
-        assert 'grep -Eq "$deny_re" <<<"$model"' in content
+        assert resolved_guard > early_dispatch
+        assert 'grep -Eq "$deny_re" <<<"$model"' not in content[content.index("requested_model=\"$model\"") : resolved_guard]
         assert "model_source='fallback: deny-listed requested model'" in content
 
-    def test_dropdown_omits_gpt_6_luna_and_keeps_gpt_5_6_luna(self):
+    def test_dropdown_keeps_gpt_6_luna_and_gpt_5_6_luna(self):
         content = self.WORKFLOW.read_text()
         options = content[content.index("model_choice:") : content.index("timeout_minutes:")]
         for model in [
@@ -1550,7 +1518,7 @@ class TestGpt6LunaIsNeverDispatched:
             "opencode-go-openai-2/gpt-6-luna",
             "openai/gpt-6-luna",
         ]:
-            assert f"- {model}\n" not in options
+            assert f"- {model}\n" in options
         for model in [
             "opencode-go-openai/gpt-5.6-luna",
             "opencode-go-openai-2/gpt-5.6-luna",

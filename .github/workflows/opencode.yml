@@ -688,7 +688,7 @@ jobs:
           delivery_file="$RUNNER_TEMP/delivery.json"
           prs='[]'
           if [[ -n "${BRANCH:-}" ]]; then
-            slugs="$GITHUB_REPOSITORY"
+            slugs="${PUSHED_SLUGS:-}"
             while IFS= read -r repo; do
               [[ -n "$repo" ]] || continue
               result=$(gh pr list -R "$repo" --head "$BRANCH" --state open --json url,state,body 2>/dev/null || printf '%s\n' '[]')

@@ -505,7 +505,7 @@ jobs:
           if ((coordinator_status != 0)); then
             exit "$coordinator_status"
           fi
-          exit "$coordinator_tee_status"
+          exit 0
 
       - name: Fatal guard
         id: fatal-guard
@@ -663,6 +663,8 @@ jobs:
           COMMENT_ID: ${{ steps.run-start-comment.outputs.comment_id }}
           MODEL: ${{ steps.select-model.outputs.model }}
           COORDINATOR_OUTCOME: ${{ steps.coordinator.outcome }}
+          COORDINATOR_STATUS: ${{ steps.coordinator.outputs.coordinator_status }}
+          COORDINATOR_TEE_STATUS: ${{ steps.coordinator.outputs.coordinator_tee_status }}
           FATAL_REASON: ${{ steps.fatal-guard.outputs.fatal-reason }}
           BRANCH: ${{ steps.push-work.outputs.branch_name }}
           PUSHED_REPOS: ${{ steps.push-work.outputs.pushed_repos }}
@@ -673,14 +675,7 @@ jobs:
 
           RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
-          # Determine status
-          if [[ "${COORDINATOR_OUTCOME:-}" == "success" ]]; then
-            STATUS="✅ completed"
-          elif [[ -n "${FATAL_REASON:-}" ]]; then
-            STATUS="❌ fatal error: $FATAL_REASON"
-          else
-            STATUS="⚠️ failed (coordinator exit ${COORDINATOR_OUTCOME:-})"
-          fi
+          STATUS=$(python3 "$RUNNER_TEMP/agent-runner/scripts/run_status.py")
 
           # Check for existing PRs in every repo this run pushed to, not just this one.
           # ponytail: 34 repos scanned per run, cache the repo list in an artifact if this shows up in run times

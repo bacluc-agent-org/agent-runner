@@ -1330,6 +1330,38 @@ class TestRefineIssuesNoCandidates:
         )
 
 
+class TestIterativeRefinement:
+    REFINE_WORKFLOW = Path(__file__).parents[3] / ".github/workflows/refine-issues.yml"
+    OPENCODE_WORKFLOW = Path(__file__).parents[3] / ".github/workflows/opencode.yml"
+
+    def test_ready_issues_without_refined_label_remain_refinement_candidates(self):
+        content = self.REFINE_WORKFLOW.read_text()
+        query = next(line for line in content.splitlines() if "search/issues?q=" in line)
+        assert "+-label:agent-refined+" in query
+        assert "+-label:agent-ignore+" in query
+        assert "-label:ready-for-implementation" not in query
+
+    def test_feedback_filter_excludes_bots_progress_markers_and_old_comments(self):
+        content = self.OPENCODE_WORKFLOW.read_text()
+        assert "gh api --paginate --slurp" in content
+        assert '.user.type != "Bot"' in content
+        assert 'contains("<!-- agent-progress -->")' in content
+        assert 'select(.created_at > $updated)' in content
+
+    def test_label_removal_follows_successful_acknowledgement(self):
+        content = self.OPENCODE_WORKFLOW.read_text()
+        acknowledgement = content.index('gh issue comment "$ISSUE_NUMBER"')
+        removal = content.index('gh issue edit "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --remove-label agent-refined')
+        assert acknowledgement < removal
+        assert "if gh issue comment" in content
+
+    def test_feedback_reply_uses_the_qualifying_comment(self):
+        content = self.OPENCODE_WORKFLOW.read_text()
+        comments_json = content.index('comments_json="$RUNNER_TEMP/issue-comments.json"')
+        reply_body = content.index("last_human_body=$(jq", comments_json)
+        assert reply_body < content.index('gh issue comment "$ISSUE_NUMBER"', reply_body)
+
+
 class TestWorkflowOpenRouterSelection:
     WORKFLOWS = [
         ".github/workflows/opencode.yml",

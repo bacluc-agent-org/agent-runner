@@ -731,7 +731,11 @@ jobs:
           new_comment_needed="false"
           if [[ -n "${COMMENT_ID:-}" ]]; then
             bot_comment_updated=$(gh api "repos/$ISSUE_REPOSITORY/issues/comments/$COMMENT_ID" --jq '.updated_at // .created_at' 2>/dev/null || echo '')
-            last_human_comment=$(gh issue view "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --json comments --jq '[.comments[] | select(.author.login != "bacluc-agent")] | max_by(.createdAt) | .createdAt // "none"' 2>/dev/null || echo 'none')
+            comments_json="$RUNNER_TEMP/issue-comments.json"
+            gh api --paginate --slurp "repos/$ISSUE_REPOSITORY/issues/$ISSUE_NUMBER/comments?per_page=100" \
+              --jq '[.[].[] | select(.user.type != "Bot" and (((.body // "") | contains("<!-- agent-progress -->")) | not))]' \
+              > "$comments_json" 2>/dev/null || printf '[]\n' > "$comments_json"
+            last_human_comment=$(jq -r --arg updated "$bot_comment_updated" '[.[] | select(.created_at > $updated)] | max_by(.created_at) | .created_at // "none"' "$comments_json")
             if [[ -n "$last_human_comment" && "$last_human_comment" != "none" && -n "$bot_comment_updated" ]]; then
               # Compare timestamps lexicographically (ISO 8601 works for this)
               if [[ "$last_human_comment" > "$bot_comment_updated" ]]; then
@@ -743,10 +747,12 @@ jobs:
           if [[ "$new_comment_needed" == "true" ]]; then
             # A human answered after our last update: reply with the quoted comment plus one
             # acknowledgement line. The run report belongs in the progress comment, never here.
-            last_human_body=$(gh issue view "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --json comments --jq '[.comments[] | select(.author.login != "bacluc-agent")] | max_by(.createdAt) | .body // empty' 2>/dev/null || echo '')
+            last_human_body=$(jq -r --arg updated "$bot_comment_updated" '[.[] | select(.created_at > $updated)] | max_by(.created_at) | .body // empty' "$comments_json")
             reply_body="Thanks for the feedback — picking it up."
             if [[ -n "$last_human_body" && "$last_human_body" != "null" ]]; then
               reply_body="${reply_body}"$'\n\n'"$(printf '%s\n' "$last_human_body" | sed 's/^/> /')"
             fi
-            gh issue comment "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --body "$reply_body"
+            if gh issue comment "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --body "$reply_body"; then
+              gh issue edit "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --remove-label agent-refined
+            fi
           fi

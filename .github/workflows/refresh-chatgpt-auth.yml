@@ -62,7 +62,7 @@ jobs:
           if (( status == 0 )); then
             auth_json=$(cat "$RUNNER_TEMP/auth.json")
             [[ -n "${auth_json:-}" ]] && printf '::add-mask::%s\n' "$auth_json"
-            printf '%s\n' "$auth_json" | jq -e '.openai.type == "oauth" and .openai.access != "" and .openai.refresh != "" and (.openai.expires | type == "number")' >/dev/null
+            printf '%s\n' "$auth_json" | jq -e '.openai.type == "oauth" and (.openai.access | type == "string" and length > 0) and (.openai.refresh | type == "string" and length > 0) and (.openai.expires | type == "number")' >/dev/null
             echo "refreshed=true" >> "$GITHUB_OUTPUT"
             printf 'Auth candidate produced via refresh token, validating with opencode\n'
           else
@@ -128,7 +128,7 @@ jobs:
           fi
           auth_json=$(cat "$RUNNER_TEMP/auth.json")
           [[ -n "${auth_json:-}" ]] && printf '::add-mask::%s\n' "$auth_json"
-          printf '%s\n' "$auth_json" | jq -e '.openai.type == "oauth" and .openai.access != "" and .openai.refresh != "" and (.openai.expires | type == "number")' >/dev/null
+          printf '%s\n' "$auth_json" | jq -e '.openai.type == "oauth" and (.openai.access | type == "string" and length > 0) and (.openai.refresh | type == "string" and length > 0) and (.openai.expires | type == "number")' >/dev/null
           GH_TOKEN="$BACLUC_AGENT_GITHUB_TOKEN" gh secret set OPENCODE_AUTH_JSON --repo "$GITHUB_REPOSITORY" --body "$auth_json"
           printf 'Auth refreshed via browser login\n'
 

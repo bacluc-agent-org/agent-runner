@@ -428,6 +428,37 @@ def test_refresh_workflow_suppresses_failed_auth_output_and_masks_stored_auth():
         assert 'gh secret set OPENCODE_AUTH_JSON' in block
 
 
+@pytest.mark.parametrize("invalid_value", [None, 123, {}, ""])
+@pytest.mark.parametrize("token_name", ["access", "refresh"])
+def test_refresh_workflow_rejects_nonempty_string_tokens_before_storage(invalid_value, token_name):
+    workflow = (
+        Path(__file__).parents[1] / ".github/workflows/refresh-chatgpt-auth.yml"
+    ).read_text(encoding="utf-8")
+    validation = (
+        '.openai.type == "oauth" and (.openai.access | type == "string" and length > 0) '
+        'and (.openai.refresh | type == "string" and length > 0) '
+        'and (.openai.expires | type == "number")'
+    )
+    assert workflow.count(validation) == 3
+    pre_storage = workflow[: workflow.index("- name: Require refreshed authentication")]
+    assert pre_storage.count(validation) == 2
+    assert '.openai.access != ""' not in workflow
+    assert '.openai.refresh != ""' not in workflow
+
+    auth = {
+        "openai": {"type": "oauth", "access": "access", "refresh": "refresh", "expires": 123}
+    }
+    auth["openai"][token_name] = invalid_value
+    result = subprocess.run(
+        ["jq", "-e", validation],
+        input=json.dumps(auth),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+
+
 def test_primitives_fallback_observes_retries_and_validates_login_output():
     workflow = (
         Path(__file__).parents[1] / ".github/workflows/refresh-chatgpt-auth.yml"

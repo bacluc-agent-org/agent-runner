@@ -22,30 +22,33 @@ recover_blocking_login() {
   local session='chatgpt-auth-recovery'
   local cdp_port="${OPENAI_CDP_PORT:-9222}"
   local snapshot_file="$RUNNER_TEMP/chatgpt-login-recovery.snapshot"
+  local attached=false
 
-  if ! playwright-cli "-s=$session" attach "--cdp=http://127.0.0.1:$cdp_port" > /dev/null; then
+  cleanup_recovery() {
+    if [[ "$attached" == true ]]; then
+      playwright-cli "-s=$session" detach > /dev/null 2>&1 || true
+      attached=false
+    fi
+  }
+  trap cleanup_recovery RETURN
+
+  if ! playwright-cli "-s=$session" attach "--cdp=http://127.0.0.1:$cdp_port" > /dev/null 2>&1; then
     printf 'Playwright CLI could not attach to the login browser\n' >&2
     return 1
   fi
-  if ! playwright-cli "-s=$session" snapshot > "$snapshot_file"; then
-    playwright-cli "-s=$session" detach > /dev/null 2>&1 || true
+  attached=true
+  if ! playwright-cli "-s=$session" snapshot > "$snapshot_file" 2> /dev/null; then
     printf 'Playwright CLI could not capture the login page\n' >&2
     return 1
   fi
-  if ! playwright-cli "-s=$session" reload > /dev/null; then
-    playwright-cli "-s=$session" detach > /dev/null 2>&1 || true
-    printf 'Playwright CLI could not reload the login page\n' >&2
-    return 1
-  fi
-  if ! playwright-cli "-s=$session" snapshot > /dev/null; then
-    playwright-cli "-s=$session" detach > /dev/null 2>&1 || true
-    printf 'Playwright CLI could not capture the recovered login page\n' >&2
-    return 1
-  fi
-  if ! playwright-cli "-s=$session" detach > /dev/null; then
+  chmod 600 "$snapshot_file"
+  if ! playwright-cli "-s=$session" detach > /dev/null 2>&1; then
     printf 'Playwright CLI could not detach from the login browser\n' >&2
     return 1
   fi
+  attached=false
+  trap - RETURN
+  printf 'Playwright handoff snapshot retained at %s; inspect it and continue with the login status/step primitives\n' "$snapshot_file" >&2
 }
 
 for attempt in $(seq 1 120); do

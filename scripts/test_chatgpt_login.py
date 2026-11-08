@@ -598,6 +598,8 @@ case "${3:-}" in
     trap 'touch "$RUNNER_TEMP/stopped"; exit 143' TERM INT
     if [[ "$FAKE_MODE" == success || "$FAKE_MODE" == recovered ]]; then
       printf '%s\\n' '{"openai":{"type":"oauth","access":"test-access","refresh":"test-refresh","expires":123}}'
+    elif [[ "$FAKE_MODE" == invalid-output ]]; then
+      printf '%s\\n' '{"openai":{"type":"oauth","access":"","refresh":"blocked-refresh","expires":123}}'
     else
       printf '%s\\n' '{"openai":{"type":"oauth","access":"blocked-access","refresh":"blocked-refresh","expires":123}}'
     fi
@@ -605,12 +607,15 @@ case "${3:-}" in
     if [[ "$FAKE_MODE" == blocked ]]; then exit 1; fi
     ;;
   status)
-    if [[ "$FAKE_MODE" == success ]]; then
+    if [[ "$FAKE_MODE" == success || "$FAKE_MODE" == invalid-output ]]; then
       touch "$RUNNER_TEMP/release-start"
       printf '%s\\n' '{"step":"done","blocking":null,"code_ready":true}'
     elif [[ "$FAKE_MODE" == recovered && -e "$RUNNER_TEMP/recovered" ]]; then
       touch "$RUNNER_TEMP/release-start"
       printf '%s\\n' '{"step":"done","blocking":null,"code_ready":true}'
+    elif [[ "$FAKE_MODE" == invalid-status ]]; then
+      touch "$RUNNER_TEMP/release-start"
+      printf '%s\\n' 'not-json'
     else
       touch "$RUNNER_TEMP/release-start"
       printf '%s\\n' '{"step":"email","blocking":"challenge","code_ready":false}'
@@ -640,10 +645,16 @@ printf '%s\\n' "$*" > "$RUNNER_TEMP/gh-call"
 set -Eeuo pipefail
 printf '%s\\n' "$*" >> "$RUNNER_TEMP/playwright-cli-calls"
 if [[ "$FAKE_MODE" == cli-failure ]]; then
+  printf '%s\\n' 'secret-password cli failure' >&2
   exit 1
 fi
-if [[ "$FAKE_MODE" == recovered && "${2:-}" == reload ]]; then
+if [[ "$FAKE_MODE" == snapshot-failure && "${2:-}" == snapshot ]]; then
+  printf '%s\\n' 'secret-password snapshot failure' >&2
+  exit 1
+fi
+if [[ "$FAKE_MODE" == recovered && "${2:-}" == snapshot ]]; then
   touch "$RUNNER_TEMP/recovered"
+  printf '%s\\n' 'inspectable snapshot'
 fi
 """,
         encoding="utf-8",
@@ -674,10 +685,25 @@ fi
     )
     assert recovered.returncode == 0
     assert "test-access" in (tmp_path / "auth.json").read_text()
+    snapshot = tmp_path / "chatgpt-login-recovery.snapshot"
+    assert snapshot.read_text() == "inspectable snapshot\n"
+    assert snapshot.stat().st_mode & 0o777 == 0o600
     assert (tmp_path / "playwright-cli-calls").read_text().splitlines() == [
         "-s=chatgpt-auth-recovery attach --cdp=http://127.0.0.1:9222",
         "-s=chatgpt-auth-recovery snapshot",
-        "-s=chatgpt-auth-recovery reload",
+        "-s=chatgpt-auth-recovery detach",
+    ]
+    assert "Playwright handoff snapshot" in recovered.stderr
+    assert "reload" not in recovered.stderr.lower()
+
+    (tmp_path / "playwright-cli-calls").unlink()
+    snapshot_failure = subprocess.run(
+        ["bash", str(helper)], env={**env, "FAKE_MODE": "snapshot-failure"}, capture_output=True, text=True, timeout=10
+    )
+    assert snapshot_failure.returncode != 0
+    assert "secret-password" not in snapshot_failure.stderr
+    assert (tmp_path / "playwright-cli-calls").read_text().splitlines() == [
+        "-s=chatgpt-auth-recovery attach --cdp=http://127.0.0.1:9222",
         "-s=chatgpt-auth-recovery snapshot",
         "-s=chatgpt-auth-recovery detach",
     ]
@@ -693,8 +719,6 @@ fi
     assert (tmp_path / "playwright-cli-calls").read_text().splitlines() == [
         "-s=chatgpt-auth-recovery attach --cdp=http://127.0.0.1:9222",
         "-s=chatgpt-auth-recovery snapshot",
-        "-s=chatgpt-auth-recovery reload",
-        "-s=chatgpt-auth-recovery snapshot",
         "-s=chatgpt-auth-recovery detach",
     ]
 
@@ -705,6 +729,7 @@ fi
     )
     assert cli_failure.returncode != 0
     assert (tmp_path / "stopped").exists()
+    assert "secret-password" not in cli_failure.stderr
     assert (tmp_path / "playwright-cli-calls").read_text().splitlines() == [
         "-s=chatgpt-auth-recovery attach --cdp=http://127.0.0.1:9222",
     ]
@@ -717,3 +742,10 @@ fi
     )
     assert missing.returncode != 0
     assert "credentials" in missing.stderr.lower()
+
+    for mode in ("invalid-status", "invalid-output"):
+        invalid = subprocess.run(
+            ["bash", str(helper)], env={**env, "FAKE_MODE": mode}, capture_output=True, text=True, timeout=10
+        )
+        assert invalid.returncode != 0
+        assert not (tmp_path / "gh-call").exists()

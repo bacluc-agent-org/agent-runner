@@ -586,7 +586,7 @@ def test_full_login_retries_the_password_error_page_before_treating_it_as_blocki
     )
 
 
-def test_primitives_fallback_success_writes_valid_auth_and_blocked_login_cleans_up(tmp_path):
+def test_primitives_fallback_recovers_or_fails_closed_and_cleans_up(tmp_path):
     helper = Path(__file__).with_name("chatgpt-login-primitives-fallback.sh")
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -596,7 +596,7 @@ set -Eeuo pipefail
 case "${3:-}" in
   start)
     trap 'touch "$RUNNER_TEMP/stopped"; exit 143' TERM INT
-    if [[ "$FAKE_MODE" == success ]]; then
+    if [[ "$FAKE_MODE" == success || "$FAKE_MODE" == recovered ]]; then
       printf '%s\\n' '{"openai":{"type":"oauth","access":"test-access","refresh":"test-refresh","expires":123}}'
     else
       printf '%s\\n' '{"openai":{"type":"oauth","access":"blocked-access","refresh":"blocked-refresh","expires":123}}'
@@ -606,6 +606,9 @@ case "${3:-}" in
     ;;
   status)
     if [[ "$FAKE_MODE" == success ]]; then
+      touch "$RUNNER_TEMP/release-start"
+      printf '%s\\n' '{"step":"done","blocking":null,"code_ready":true}'
+    elif [[ "$FAKE_MODE" == recovered && -e "$RUNNER_TEMP/recovered" ]]; then
       touch "$RUNNER_TEMP/release-start"
       printf '%s\\n' '{"step":"done","blocking":null,"code_ready":true}'
     else
@@ -639,6 +642,9 @@ printf '%s\\n' "$*" >> "$RUNNER_TEMP/playwright-cli-calls"
 if [[ "$FAKE_MODE" == cli-failure ]]; then
   exit 1
 fi
+if [[ "$FAKE_MODE" == recovered && "${2:-}" == reload ]]; then
+  touch "$RUNNER_TEMP/recovered"
+fi
 """,
         encoding="utf-8",
     )
@@ -663,6 +669,21 @@ fi
     assert "test-access" in (tmp_path / "auth.json").read_text()
 
     (tmp_path / "gh-call").unlink()
+    recovered = subprocess.run(
+        ["bash", str(helper)], env={**env, "FAKE_MODE": "recovered"}, capture_output=True, text=True, timeout=10
+    )
+    assert recovered.returncode == 0
+    assert "test-access" in (tmp_path / "auth.json").read_text()
+    assert (tmp_path / "playwright-cli-calls").read_text().splitlines() == [
+        "-s=chatgpt-auth-recovery attach --cdp=http://127.0.0.1:9222",
+        "-s=chatgpt-auth-recovery snapshot",
+        "-s=chatgpt-auth-recovery reload",
+        "-s=chatgpt-auth-recovery snapshot",
+        "-s=chatgpt-auth-recovery detach",
+    ]
+
+    (tmp_path / "gh-call").unlink()
+    (tmp_path / "playwright-cli-calls").unlink()
     blocked = subprocess.run(
         ["bash", str(helper)], env={**env, "FAKE_MODE": "blocked"}, capture_output=True, text=True, timeout=10
     )
@@ -671,6 +692,8 @@ fi
     assert not (tmp_path / "gh-call").exists()
     assert (tmp_path / "playwright-cli-calls").read_text().splitlines() == [
         "-s=chatgpt-auth-recovery attach --cdp=http://127.0.0.1:9222",
+        "-s=chatgpt-auth-recovery snapshot",
+        "-s=chatgpt-auth-recovery reload",
         "-s=chatgpt-auth-recovery snapshot",
         "-s=chatgpt-auth-recovery detach",
     ]

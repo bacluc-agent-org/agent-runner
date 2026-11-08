@@ -32,6 +32,16 @@ recover_blocking_login() {
     printf 'Playwright CLI could not capture the login page\n' >&2
     return 1
   fi
+  if ! playwright-cli "-s=$session" reload > /dev/null; then
+    playwright-cli "-s=$session" detach > /dev/null 2>&1 || true
+    printf 'Playwright CLI could not reload the login page\n' >&2
+    return 1
+  fi
+  if ! playwright-cli "-s=$session" snapshot > /dev/null; then
+    playwright-cli "-s=$session" detach > /dev/null 2>&1 || true
+    printf 'Playwright CLI could not capture the recovered login page\n' >&2
+    return 1
+  fi
   if ! playwright-cli "-s=$session" detach > /dev/null; then
     printf 'Playwright CLI could not detach from the login browser\n' >&2
     return 1

@@ -67,15 +67,15 @@ idea (issue in agent-todo)
 
 ### Workflows (the schedule)
 
-| Workflow                                                   | When it runs                                | What it does                                                                                                                                                                                            |
-| ---------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ci.yml`                                                   | every push to `main` and every pull request | Quality gate: runs the completion check (formatting, workflow lint, tests). Nothing merges if this fails.                                                                                               |
-| [`refine-issues.yml`](.github/workflows/refine-issues.yml) | scheduled workflow                          | Rewrites vague issues into `## Goal` + `## How to implement` and labels them `ready-for-implementation`.                                                                                                |
-| [`hourly-issue.yml`](.github/workflows/hourly-issue.yml)   | scheduled workflow                          | Picks one ready issue, claims it with `agent-running` for the run, and starts the implementation.                                                                                                       |
-| `opencode.yml`                                             | called by the other workflows               | The core runner: checks model availability, selects a model, runs the coordinator agent, pushes the work, keeps one structured progress comment on the issue, and only short replies to human comments. |
-| [`review-fixes.yml`](.github/workflows/review-fixes.yml)   | scheduled workflow                          | Finds open pull requests with review comments and re-dispatches the agent to apply them.                                                                                                                |
-| `refresh-chatgpt-auth.yml`                                 | 1st and 15th of each month                  | Keeps the OpenAI login working by refreshing the OAuth token (browser login as fallback).                                                                                                               |
-| `renew-interaction-limits.yml`                             | 1st of each month                           | Renews the repository interaction limit so collaborators can keep working.                                                                                                                              |
+| Workflow                                                   | When it runs                      | What it does                                                                                                                                                                                            |
+| ---------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ci.yml`                                                   | every push and every pull request | Quality gate: runs the completion check (formatting, workflow lint, tests). Nothing merges if this fails.                                                                                               |
+| [`refine-issues.yml`](.github/workflows/refine-issues.yml) | scheduled workflow                | Rewrites vague issues into `## Goal` + `## How to implement` and labels them `ready-for-implementation`.                                                                                                |
+| [`hourly-issue.yml`](.github/workflows/hourly-issue.yml)   | scheduled workflow                | Picks one ready issue, claims it with `agent-running` for the run, and starts the implementation.                                                                                                       |
+| `opencode.yml`                                             | called by the other workflows     | The core runner: checks model availability, selects a model, runs the coordinator agent, pushes the work, keeps one structured progress comment on the issue, and only short replies to human comments. |
+| [`review-fixes.yml`](.github/workflows/review-fixes.yml)   | scheduled workflow                | Finds open pull requests with review comments and re-dispatches the agent to apply them.                                                                                                                |
+| `refresh-chatgpt-auth.yml`                                 | 1st and 15th of each month        | Keeps the OpenAI login working by refreshing the OAuth token (browser login as fallback).                                                                                                               |
+| `renew-interaction-limits.yml`                             | 1st of each month                 | Renews the repository interaction limit so collaborators can keep working.                                                                                                                              |
 
 ### Actions (reusable building blocks)
 
@@ -200,8 +200,8 @@ in Docker and exits non-zero if any check fails:
 - OpenCode plugin tests (`node --test`)
 - pytest (script tests)
 
-`.github/workflows/ci.yml` runs the same script on every push to `main` and
-every pull request.
+`.github/workflows/ci.yml` runs the same script on every push and every pull
+request.
 
 ## Examples: from idea to merged change
 

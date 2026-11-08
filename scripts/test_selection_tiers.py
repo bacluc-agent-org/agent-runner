@@ -67,7 +67,7 @@ def test_workflow_uses_run_scoped_claims_and_filters_them_from_candidates():
     assert 'gh issue edit "$issue_number" -R "$ISSUE_REPOSITORY" --add-label "agent-running:${CURRENT_RUN_ID}",agent-attempted' in content
     assert 'any(startswith("agent-running:"))' in content
     assert 'gh run view "$run_id"' in content
-    assert 'if [[ "$run_status" != "in_progress" && "$run_status" != "queued" ]]' in content
+    assert 'if [[ "$run_status" != "in_progress" && "$run_status" != "queued" && "$run_status" != "unknown" ]]' in content
     assert 'if [[ "$label" == "agent-running:${CURRENT_RUN_ID}" ]]' in content
     assert "--limit 1000 --json number,labels" in content
     assert '([.labels[]?.name | select(startswith("agent-running:"))] | join(","))' in content

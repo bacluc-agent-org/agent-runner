@@ -110,7 +110,7 @@ jobs:
               run_id="${label#agent-running:}"
               [[ "$run_id" == "$label" ]] && continue
               run_status="$(gh run view "$run_id" -R bacluc-agent-org/agent-runner --json status --jq .status 2>/dev/null || echo "unknown")"
-              if [[ "$run_status" != "in_progress" && "$run_status" != "queued" ]]; then
+              if [[ "$run_status" != "in_progress" && "$run_status" != "queued" && "$run_status" != "unknown" ]]; then
                 gh issue edit "$issue_num" -R "$ISSUE_REPOSITORY" --remove-label "$label" 2>/dev/null || true
               fi
             done

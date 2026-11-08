@@ -17,6 +17,27 @@ cleanup() {
 }
 trap cleanup EXIT
 
+blocking_recovery_attempted=false
+recover_blocking_login() {
+  local session='chatgpt-auth-recovery'
+  local cdp_port="${OPENAI_CDP_PORT:-9222}"
+  local snapshot_file="$RUNNER_TEMP/chatgpt-login-recovery.snapshot"
+
+  if ! playwright-cli "-s=$session" attach "--cdp=http://127.0.0.1:$cdp_port" > /dev/null; then
+    printf 'Playwright CLI could not attach to the login browser\n' >&2
+    return 1
+  fi
+  if ! playwright-cli "-s=$session" snapshot > "$snapshot_file"; then
+    playwright-cli "-s=$session" detach > /dev/null 2>&1 || true
+    printf 'Playwright CLI could not capture the login page\n' >&2
+    return 1
+  fi
+  if ! playwright-cli "-s=$session" detach > /dev/null; then
+    printf 'Playwright CLI could not detach from the login browser\n' >&2
+    return 1
+  fi
+}
+
 for attempt in $(seq 1 120); do
   if ! kill -0 "$start_pid" 2> /dev/null; then
     if ! wait "$start_pid"; then
@@ -41,6 +62,12 @@ for attempt in $(seq 1 120); do
     exit 1
   }
   if [[ -n "$(jq -r '.blocking // empty' <<< "$status_json")" ]]; then
+    if [[ "$blocking_recovery_attempted" == true ]]; then
+      printf 'Primitive login remained blocked after Playwright recovery\n' >&2
+      exit 1
+    fi
+    blocking_recovery_attempted=true
+    recover_blocking_login || exit 1
     sleep 5
     continue
   fi

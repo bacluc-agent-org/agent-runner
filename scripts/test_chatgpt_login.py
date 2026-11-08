@@ -462,7 +462,7 @@ def test_primitives_fallback_steps_after_a_blocking_status():
     ).read_text(encoding="utf-8")
     helper = (Path(__file__).with_name("chatgpt-login-primitives-fallback.sh")).read_text(encoding="utf-8")
     blocking_start = helper.index("if [[ -n \"$(jq -r '.blocking // empty' <<< \"$status_json\")\" ]]; then")
-    blocking_end = helper.index("fi", blocking_start)
+    blocking_end = helper.index("continue", blocking_start)
     assert "sleep 5" in helper[blocking_start:blocking_end]
 
 
@@ -632,6 +632,17 @@ printf '%s\\n' "$*" > "$RUNNER_TEMP/gh-call"
         encoding="utf-8",
     )
     (fake_bin / "gh").chmod(0o755)
+    (fake_bin / "playwright-cli").write_text(
+        """#!/usr/bin/env bash
+set -Eeuo pipefail
+printf '%s\\n' "$*" >> "$RUNNER_TEMP/playwright-cli-calls"
+if [[ "$FAKE_MODE" == cli-failure ]]; then
+  exit 1
+fi
+""",
+        encoding="utf-8",
+    )
+    (fake_bin / "playwright-cli").chmod(0o755)
 
     env = {
         **os.environ,
@@ -658,6 +669,22 @@ printf '%s\\n' "$*" > "$RUNNER_TEMP/gh-call"
     assert blocked.returncode != 0
     assert (tmp_path / "stopped").exists()
     assert not (tmp_path / "gh-call").exists()
+    assert (tmp_path / "playwright-cli-calls").read_text().splitlines() == [
+        "-s=chatgpt-auth-recovery attach --cdp=http://127.0.0.1:9222",
+        "-s=chatgpt-auth-recovery snapshot",
+        "-s=chatgpt-auth-recovery detach",
+    ]
+
+    (tmp_path / "stopped").unlink()
+    (tmp_path / "playwright-cli-calls").unlink()
+    cli_failure = subprocess.run(
+        ["bash", str(helper)], env={**env, "FAKE_MODE": "cli-failure"}, capture_output=True, text=True, timeout=10
+    )
+    assert cli_failure.returncode != 0
+    assert (tmp_path / "stopped").exists()
+    assert (tmp_path / "playwright-cli-calls").read_text().splitlines() == [
+        "-s=chatgpt-auth-recovery attach --cdp=http://127.0.0.1:9222",
+    ]
 
     missing_credentials = dict(env)
     missing_credentials.pop("CHATGPT_EMAIL")

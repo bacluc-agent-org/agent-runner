@@ -49,3 +49,4 @@ def test_opencode_workflow_escapes_adversarial_task_delimiters():
     assert "\n</user-task>\n" not in escaped_task
     assert "&lt;/user-task&gt;" in escaped_task
     assert '"$task_prompt"' in prompt
+    assert workflow.count('"$task_prompt"') >= 2

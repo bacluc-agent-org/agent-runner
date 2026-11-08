@@ -6,6 +6,7 @@ on:
       - ".github/workflows/refresh-chatgpt-auth.yml"
       - "scripts/refresh-token.py"
       - "scripts/chatgpt-login.py"
+      - "scripts/chatgpt-login-primitives-fallback.sh"
       - "scripts/opencode_auth.py"
   workflow_dispatch:
     inputs:
@@ -27,6 +28,8 @@ jobs:
     timeout-minutes: 15
     env:
       BACLUC_AGENT_GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
+      # renovate: datasource=npm depName=@playwright/cli
+      PLAYWRIGHT_CLI_VERSION: 0.1.21
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,6 +43,9 @@ jobs:
 
       - name: Install playwright browsers
         run: uv run playwright install --with-deps chrome
+
+      - name: Install playwright CLI
+        run: npm install --global "@playwright/cli@${PLAYWRIGHT_CLI_VERSION}"
 
       - name: Try token refresh (no browser)
         id: refresh
@@ -137,16 +143,7 @@ jobs:
           OPENAI_PASSWORD: ${{ secrets.OPENAI_PASSWORD }}
           OPENAI_2FA_KEY: ${{ secrets.OPENAI_2FA_KEY }}
           CHATGPT_TOTP_KEY: ${{ secrets.CHATGPT_TOTP_KEY }}
+          CHATGPT_HEADLESS: "true"
         run: |
           set -Eeuo pipefail
-          # Fallback: use agent-usable primitives to try login manually
-          # start launches Chrome with CDP, status reports step, step performs one action
-          echo "Agent fallback: attempting login via primitives..."
-          stop_token="$(openssl rand -hex 32)"
-          : "${stop_token:?stop-commands fence token generation failed}"
-          printf '::stop-commands::%s\n' "$stop_token"
-          uv run scripts/chatgpt-login.py start || true
-          uv run scripts/chatgpt-login.py status || true
-          uv run scripts/chatgpt-login.py step || true
-          printf '::%s::\n' "$stop_token"
-          printf 'Agent primitives fallback attempted\n'
+          xvfb-run -a bash scripts/chatgpt-login-primitives-fallback.sh

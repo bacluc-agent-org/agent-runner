@@ -203,3 +203,23 @@ def test_runtime_helpers_are_checked_out_at_workflow_revision():
     checkout = body.index("repository: bacluc-agent-org/agent-runner")
     assert "ref: ${{ github.sha }}" in body[checkout : checkout + 300]
     assert 'python3 "$RUNNER_TEMP/agent-runner/scripts/validate_delivery.py"' in body
+
+
+def test_coordinator_retries_exit_zero_without_a_delivery_report():
+    workflow = Path(__file__).parents[1] / ".github/workflows/opencode.yml"
+    body = workflow.read_text(encoding="utf-8")
+    assert "coordinator_delivery_valid=false" in body
+    assert "coordinator_delivery_valid=true" in body
+    assert "Delivery validation feedback from the previous attempt" in body
+    assert 'if [[ "$coordinator_delivery_valid" == true ]]' in body
+    assert "for attempt in 1 2" in body
+
+
+def test_baseline_staging_compares_content_and_clears_preexisting_index():
+    workflow = Path(__file__).parents[1] / ".github/workflows/opencode.yml"
+    body = workflow.read_text(encoding="utf-8")
+    assert 'git hash-object -- "$path"' in body
+    assert 'baseline["$path"]=' in body
+    assert 'git reset --quiet' in body
+    assert 'git add -- "${intended_paths[@]}"' in body
+    assert 'git status --porcelain=v1 --untracked-files=all > "$baseline_dir/$key"' not in body

@@ -521,7 +521,15 @@ jobs:
           while IFS= read -r gitdir; do
             repo_dir="$(dirname "$gitdir")"
             key="$(printf '%s' "$repo_dir" | sha256sum | cut -d' ' -f1)"
-            git -C "$repo_dir" status --porcelain=v1 --untracked-files=all > "$baseline_dir/$key"
+            : > "$baseline_dir/$key"
+            while IFS= read -r -d '' path; do
+              if [[ -e "$repo_dir/$path" || -L "$repo_dir/$path" ]]; then
+                hash="$(git -C "$repo_dir" hash-object -- "$path")"
+              else
+                hash=__missing__
+              fi
+              printf '%s\t%s\0' "$path" "$hash" >> "$baseline_dir/$key"
+            done < <(git -C "$repo_dir" ls-files --cached --others --exclude-standard -z)
           done < <(find "$GITHUB_WORKSPACE" -maxdepth 5 -name ".git" -type d 2>/dev/null)
 
       - name: Run coordinator
@@ -549,6 +557,7 @@ jobs:
           coordinator_status=1
           coordinator_tee_status=1
           coordinator_feedback=''
+          coordinator_delivery_valid=false
           for attempt in 1 2; do
             if ((attempt > 1)); then
               PROMPT=$(printf '%s\n\nDelivery validation feedback from the previous attempt: the coordinator did not produce a valid completed delivery. Review the previous output below, correct the underlying problem, and complete the task without claiming success until the delivery is real.\n<previous-output>\n%s\n</previous-output>' "$base_prompt" "$coordinator_feedback")
@@ -563,7 +572,17 @@ jobs:
             set -e
             cp "$RUNNER_TEMP/coordinator-$attempt.out" "$RUNNER_TEMP/coordinator.out"
             if ((coordinator_status == 0 && coordinator_tee_status == 0)); then
-              break
+              coordinator_delivery_valid=true
+              for heading in '### Management summary' '### Design decisions' '### Open PR' '### Verification evidence' '### Action runs'; do
+                if ! grep -Fq -- "$heading" "$RUNNER_TEMP/coordinator-$attempt.out"; then
+                  coordinator_delivery_valid=false
+                  break
+                fi
+              done
+              if [[ "$coordinator_delivery_valid" == true ]] && grep -Fq -- '<!-- agent-progress -->' "$RUNNER_TEMP/coordinator-$attempt.out"; then
+                break
+              fi
+              coordinator_delivery_valid=false
             fi
             coordinator_feedback="$(tail -n 80 "$RUNNER_TEMP/coordinator-$attempt.out")"
           done
@@ -573,10 +592,13 @@ jobs:
           if ((coordinator_status == 124)); then
             echo "failure_mode=timeout" >> "$GITHUB_OUTPUT"
           fi
-          if ((coordinator_status != 0)); then
+          if ((coordinator_status != 0 || coordinator_tee_status != 0 || coordinator_delivery_valid != true)); then
+            if ((coordinator_status == 0)); then
+              coordinator_status=1
+            fi
             exit "$coordinator_status"
           fi
-          exit "$coordinator_tee_status"
+          exit 0
 
       - name: Fatal guard
         id: fatal-guard
@@ -674,22 +696,39 @@ jobs:
             git checkout -B "$BRANCH_NAME" 2>/dev/null || git checkout "$BRANCH_NAME"
             baseline_file="$RUNNER_TEMP/agent-runner-baselines/$(printf '%s' "$repo_dir" | sha256sum | cut -d' ' -f1)"
             declare -A baseline=()
+            declare -A current=()
             if [[ -f "$baseline_file" ]]; then
-              while IFS= read -r status; do
-                [[ -n "$status" ]] && baseline["${status:3}"]="$status"
+              while IFS= read -r -d '' record; do
+                path="${record%$'\t'*}"
+                baseline["$path"]="${record##*$'\t'}"
               done < "$baseline_file"
             fi
-            mapfile -t intended_paths < <(
-              while IFS= read -r status; do
-                [[ -n "$status" ]] || continue
-                path="${status:3}"
-                if [[ -z "${baseline[$path]+present}" || "${baseline[$path]}" != "$status" ]]; then
-                  printf '%s\n' "$path"
-                fi
-              done < <(git status --porcelain=v1 --untracked-files=all)
-            )
+            git reset --quiet
+            while IFS= read -r -d '' path; do
+              if [[ -e "$path" || -L "$path" ]]; then
+                hash="$(git hash-object -- "$path")"
+              else
+                hash=__missing__
+              fi
+              current["$path"]="$hash"
+            done < <(git ls-files --cached --others --exclude-standard -z)
+            intended_paths=()
+            for path in "${!current[@]}"; do
+              if [[ -z "${baseline[$path]+present}" || "${baseline[$path]}" != "${current[$path]}" ]]; then
+                intended_paths+=("$path")
+              fi
+            done
+            for path in "${!baseline[@]}"; do
+              if [[ -z "${current[$path]+present}" ]] && git ls-files --error-unmatch -- "$path" >/dev/null 2>&1; then
+                intended_paths+=("$path")
+              fi
+            done
             if ((${#intended_paths[@]})); then
               git add -- "${intended_paths[@]}"
+            else
+              printf 'No coordinator changes to commit in %s\n' "$repo_dir"
+              cd - >/dev/null
+              continue
             fi
             git commit -m "agent-run: automated commit for issue #${ISSUE_NUMBER} (run ${GITHUB_RUN_ID})" || true
             remote_url=$(git remote get-url origin 2>/dev/null || true)

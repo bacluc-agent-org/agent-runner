@@ -23,22 +23,33 @@ recover_blocking_login() {
   local cdp_port="${OPENAI_CDP_PORT:-9222}"
   local snapshot_file="$RUNNER_TEMP/chatgpt-login-recovery.snapshot"
   local handoff_file="$RUNNER_TEMP/chatgpt-login-recovery.handoff"
+  local command_file="$RUNNER_TEMP/chatgpt-login-recovery.commands"
   local snapshot_tmp=''
   local handoff_tmp=''
+  local command_tmp=''
   local attached=false
+  local handoff_timeout="${PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS:-300}"
+
+  if [[ ! "$handoff_timeout" =~ ^[1-9][0-9]*$ || "$handoff_timeout" -gt 300 ]]; then
+    printf 'Invalid Playwright handoff timeout\n' >&2
+    return 1
+  fi
 
   cleanup_recovery() {
     if [[ "$attached" == true ]]; then
       playwright-cli "-s=$session" detach > /dev/null 2>&1 || true
       attached=false
     fi
-    rm -f -- "$snapshot_tmp" "$handoff_tmp"
+    rm -f -- "$snapshot_tmp" "$handoff_tmp" "$command_tmp" "$snapshot_file" "$handoff_file" "$command_file"
   }
   trap cleanup_recovery RETURN
-  rm -f -- "$snapshot_file" "$handoff_file"
+  rm -f -- "$snapshot_file" "$handoff_file" "$command_file"
   snapshot_tmp=$(mktemp "$snapshot_file.XXXXXX")
   handoff_tmp=$(mktemp "$handoff_file.XXXXXX")
-  chmod 600 "$snapshot_tmp" "$handoff_tmp"
+  command_tmp=$(mktemp "$command_file.XXXXXX")
+  chmod 600 "$snapshot_tmp" "$handoff_tmp" "$command_tmp"
+  mv -f -- "$command_tmp" "$command_file"
+  command_tmp=''
 
   if ! playwright-cli "-s=$session" attach "--cdp=http://127.0.0.1:$cdp_port" > /dev/null 2>&1; then
     printf 'Playwright CLI could not attach to the login browser\n' >&2
@@ -49,7 +60,6 @@ recover_blocking_login() {
     printf 'Playwright CLI could not capture the login page\n' >&2
     return 1
   fi
-  mv -f -- "$snapshot_tmp" "$snapshot_file"
   cat > "$handoff_tmp" << EOF
 session=$session
 cdp=http://127.0.0.1:$cdp_port
@@ -59,13 +69,74 @@ inspect=playwright-cli -s=$session snapshot
 status=uv run scripts/chatgpt-login.py status
 step=uv run scripts/chatgpt-login.py step
 detach=playwright-cli -s=$session detach
+commands=$command_file
+timeout_seconds=$handoff_timeout
 EOF
-  mv -f -- "$handoff_tmp" "$handoff_file"
+  printf 'Playwright handoff is live at %s; write bounded commands to %s\n' "$handoff_tmp" "$command_file" >&2
+  local deadline=$((SECONDS + handoff_timeout))
+  while ((SECONDS < deadline)); do
+    if [[ -s "$command_file" ]]; then
+      local batch_file
+      batch_file=$(mktemp "$command_file.batch.XXXXXX")
+      chmod 600 "$batch_file"
+      mv -f -- "$command_file" "$batch_file"
+      : > "$command_file"
+      chmod 600 "$command_file"
+      while IFS= read -r command || [[ -n "$command" ]]; do
+        case "$command" in
+          snapshot)
+            playwright-cli "-s=$session" snapshot > "$snapshot_tmp" 2> /dev/null || return 1
+            ;;
+          click\ e[0-9]*)
+            playwright-cli "-s=$session" click "${command#click }" > /dev/null 2>&1 || return 1
+            ;;
+          hover\ e[0-9]*)
+            playwright-cli "-s=$session" hover "${command#hover }" > /dev/null 2>&1 || return 1
+            ;;
+          press\ [A-Za-z]*)
+            playwright-cli "-s=$session" press "${command#press }" > /dev/null 2>&1 || return 1
+            ;;
+          check\ e[0-9]*)
+            playwright-cli "-s=$session" check "${command#check }" > /dev/null 2>&1 || return 1
+            ;;
+          uncheck\ e[0-9]*)
+            playwright-cli "-s=$session" uncheck "${command#uncheck }" > /dev/null 2>&1 || return 1
+            ;;
+          status)
+            ;;
+          *)
+            rm -f -- "$batch_file"
+            printf 'Playwright handoff rejected an invalid command\n' >&2
+            return 1
+            ;;
+        esac
+      done < "$batch_file"
+      rm -f -- "$batch_file"
+      status_json=$(uv run scripts/chatgpt-login.py status) || return 1
+      if [[ "$(jq -r '.code_ready // false' <<< "$status_json")" == true ]]; then
+        break
+      fi
+    fi
+    sleep 1
+  done
+  rm -f -- "$command_file"
+  if ((SECONDS >= deadline)); then
+    printf 'Playwright handoff timed out\n' >&2
+    return 1
+  fi
   if ! playwright-cli "-s=$session" detach > /dev/null 2>&1; then
     printf 'Playwright CLI could not detach from the login browser\n' >&2
     return 1
   fi
   attached=false
+  if ! mv -f -- "$snapshot_tmp" "$snapshot_file"; then
+    return 1
+  fi
+  snapshot_tmp=''
+  if ! mv -f -- "$handoff_tmp" "$handoff_file"; then
+    return 1
+  fi
+  handoff_tmp=''
   trap - RETURN
   printf 'Playwright handoff retained at %s; inspect %s and continue with the login status/step primitives\n' "$snapshot_file" "$handoff_file" >&2
 }

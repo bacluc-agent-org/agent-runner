@@ -610,7 +610,7 @@ case "${3:-}" in
     if [[ "$FAKE_MODE" == success || "$FAKE_MODE" == invalid-output ]]; then
       touch "$RUNNER_TEMP/release-start"
       printf '%s\\n' '{"step":"done","blocking":null,"code_ready":true}'
-    elif [[ "$FAKE_MODE" == recovered && -e "$RUNNER_TEMP/recovered" ]]; then
+    elif [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == handoff-write-failure ]] && [[ -e "$RUNNER_TEMP/recovered" ]]; then
       touch "$RUNNER_TEMP/release-start"
       printf '%s\\n' '{"step":"done","blocking":null,"code_ready":true}'
     elif [[ "$FAKE_MODE" == invalid-status ]]; then
@@ -656,9 +656,13 @@ if [[ "$FAKE_MODE" == snapshot-failure && "${2:-}" == snapshot ]]; then
   printf '%s\\n' 'secret-password snapshot failure' >&2
   exit 1
 fi
-if [[ "$FAKE_MODE" == recovered && "${2:-}" == snapshot ]]; then
+if [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == handoff-write-failure ]] && [[ "${2:-}" == snapshot ]]; then
   touch "$RUNNER_TEMP/recovered"
   printf '%s\\n' 'inspectable snapshot'
+  printf '%s\\n' 'snapshot' > "$RUNNER_TEMP/chatgpt-login-recovery.commands"
+fi
+if [[ "$FAKE_MODE" == detach-failure && "${2:-}" == detach ]]; then
+  exit 1
 fi
 """,
         encoding="utf-8",
@@ -674,6 +678,7 @@ fi
         "CHATGPT_EMAIL": "test@example.invalid",
         "CHATGPT_PASSWORD": "test-password",
         "CHATGPT_HEADLESS": "true",
+        "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "1",
     }
 
     success = subprocess.run(
@@ -695,6 +700,7 @@ fi
     assert (tmp_path / "playwright-cli-calls").read_text().splitlines() == [
         "-s=chatgpt-auth-recovery attach --cdp=http://127.0.0.1:9222",
         "-s=chatgpt-auth-recovery snapshot",
+        "-s=chatgpt-auth-recovery snapshot",
         "-s=chatgpt-auth-recovery detach",
     ]
     assert "Playwright handoff retained" in recovered.stderr
@@ -707,9 +713,46 @@ inspect=playwright-cli -s=chatgpt-auth-recovery snapshot
 status=uv run scripts/chatgpt-login.py status
 step=uv run scripts/chatgpt-login.py step
 detach=playwright-cli -s=chatgpt-auth-recovery detach
+commands={tmp_path / "chatgpt-login-recovery.commands"}
+timeout_seconds=1
 """
     assert handoff.stat().st_mode & 0o777 == 0o600
     assert "reload" not in recovered.stderr.lower()
+
+    (tmp_path / "playwright-cli-calls").unlink()
+    (tmp_path / "recovered").unlink()
+    detach_failure = subprocess.run(
+        ["bash", str(helper)], env={**env, "FAKE_MODE": "detach-failure"}, capture_output=True, text=True, timeout=10
+    )
+    assert detach_failure.returncode != 0
+    assert not snapshot.exists()
+    assert not handoff.exists()
+
+    (tmp_path / "playwright-cli-calls").unlink()
+    (tmp_path / "recovered").unlink()
+    handoff_failure_bin = tmp_path / "handoff-failure-bin"
+    handoff_failure_bin.mkdir()
+    (handoff_failure_bin / "mv").write_text(
+        """#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ "${FAKE_MODE:-}" == handoff-write-failure && "${@: -1}" == *chatgpt-login-recovery.handoff ]]; then
+  exit 1
+fi
+exec /bin/mv "$@"
+""",
+        encoding="utf-8",
+    )
+    (handoff_failure_bin / "mv").chmod(0o755)
+    handoff_failure = subprocess.run(
+        ["bash", str(helper)],
+        env={**env, "PATH": f"{handoff_failure_bin}:{env['PATH']}", "FAKE_MODE": "handoff-write-failure"},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert handoff_failure.returncode != 0
+    assert not snapshot.exists()
+    assert not handoff.exists()
 
     (tmp_path / "playwright-cli-calls").unlink()
     snapshot_failure = subprocess.run(

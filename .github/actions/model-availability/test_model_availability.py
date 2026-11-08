@@ -1367,6 +1367,35 @@ class TestIterativeRefinement:
         reply_body = content.index("last_human_body=$(jq", comments_json)
         assert reply_body < content.index('gh issue comment "$ISSUE_NUMBER"', reply_body)
 
+    def test_candidate_searches_merge_and_deduplicate_before_selection(self, tmp_path):
+        first = tmp_path / "first.json"
+        second = tmp_path / "second.json"
+        candidates = tmp_path / "candidates.txt"
+        first.write_text('[{"number": 10}, {"number": 11}]')
+        second.write_text('[{"number": 11}, {"number": 12}]')
+        result = subprocess.run(
+            [
+                "bash",
+                "-Eeuo",
+                "pipefail",
+                "-c",
+                f"jq -r '.[].number | tostring' {first} > {candidates}; "
+                f"jq -r '.[].number | tostring' {second} >> {candidates}; "
+                f"sort -nu {candidates} -o {candidates}",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert candidates.read_text() == "10\n11\n12\n"
+
+    def test_post_validation_labeling_follows_successful_validation(self):
+        content = self.REFINE_WORKFLOW.read_text()
+        validation = content.index("if (( validation_status == 0 )); then")
+        body_update = content.index('gh issue edit "$number" --body-file "$out"', validation)
+        label_update = content.index('gh issue edit "$number" --add-label "agent-refined"', validation)
+        assert validation < body_update < label_update
+
 
 class TestWorkflowOpenRouterSelection:
     WORKFLOWS = [

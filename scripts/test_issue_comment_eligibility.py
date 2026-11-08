@@ -24,6 +24,17 @@ def test_qualifying_comments_exclude_agent_progress_and_bots_and_require_newer_t
     assert qualifying_comments(comments, "2026-11-08T10:03:00Z") == [comments[3]]
 
 
+def test_filtered_prompt_input_never_contains_progress_marker():
+    comments = [
+        comment("human", "2026-11-08T10:04:00Z", "<!-- agent-progress -->\nsecret run"),
+        comment("human", "2026-11-08T10:05:00Z", "fold this feedback"),
+    ]
+    eligible = qualifying_comments(comments, "2026-11-08T10:03:00Z")
+    prompt_feedback = "\n".join(item["body"] for item in eligible)
+    assert "<!-- agent-progress -->" not in prompt_feedback
+    assert "fold this feedback" in prompt_feedback
+
+
 def test_label_eligibility_requires_refined_ready_and_not_ignored():
     feedback = [comment("human", "2026-11-08T10:05:00Z", "feedback")]
     assert is_refined_feedback_candidate(

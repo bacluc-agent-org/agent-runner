@@ -86,7 +86,7 @@ jobs:
           while IFS= read -r number; do
             comments_json="$RUNNER_TEMP/comments-${number}.json"
             gh api --paginate --slurp "repos/$ISSUE_REPOSITORY/issues/$number/comments?per_page=100" \
-              | jq 'add' > "$comments_json"
+              | jq 'add // []' > "$comments_json"
             refined_at=$(gh api --paginate --slurp "repos/$ISSUE_REPOSITORY/issues/$number/events?per_page=100" \
               | jq -r '[.[].[] | select(.event == "labeled" and .label.name == "agent-refined") | .created_at] | max // empty')
             printf '%s\n' "$refined_at" > "$RUNNER_TEMP/refined-at-${number}.txt"

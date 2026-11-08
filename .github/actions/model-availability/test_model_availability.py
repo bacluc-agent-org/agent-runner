@@ -1334,26 +1334,26 @@ class TestIterativeRefinement:
     REFINE_WORKFLOW = Path(__file__).parents[3] / ".github/workflows/refine-issues.yml"
     OPENCODE_WORKFLOW = Path(__file__).parents[3] / ".github/workflows/opencode.yml"
 
-    def test_ready_issues_without_refined_label_remain_refinement_candidates(self):
+    def test_unrefined_search_excludes_ready_issues_and_feedback_search_is_label_scoped(self):
         content = self.REFINE_WORKFLOW.read_text()
         query = next(line for line in content.splitlines() if "search/issues?q=" in line)
         assert "+-label:agent-refined+" in query
         assert "+-label:agent-ignore+" in query
-        assert "-label:ready-for-implementation" not in query
+        assert "+-label:ready-for-implementation+" in query
+        assert "+label:agent-refined+label:ready-for-implementation+" in content
+        assert "issue_comment_eligibility.py" in content
 
     def test_feedback_filter_excludes_bots_progress_markers_and_old_comments(self):
         content = self.OPENCODE_WORKFLOW.read_text()
         assert "gh api --paginate --slurp" in content
         assert '.user.type != "Bot"' in content
+        assert '.user.login != (env.AGENT_GITHUB_LOGIN // "bacluc-agent")' in content
         assert 'contains("<!-- agent-progress -->")' in content
         assert 'select(.created_at > $updated)' in content
 
-    def test_label_removal_follows_successful_acknowledgement(self):
+    def test_feedback_reply_does_not_remove_refinement_eligibility(self):
         content = self.OPENCODE_WORKFLOW.read_text()
-        acknowledgement = content.index('gh issue comment "$ISSUE_NUMBER"')
-        removal = content.index('gh issue edit "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --remove-label agent-refined')
-        assert acknowledgement < removal
-        assert "if gh issue comment" in content
+        assert 'gh issue edit "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --remove-label agent-refined' not in content
 
     def test_feedback_reply_uses_the_qualifying_comment(self):
         content = self.OPENCODE_WORKFLOW.read_text()

@@ -659,6 +659,9 @@ printf '%s\\n' "$*" > "$RUNNER_TEMP/gh-call"
         """#!/usr/bin/env bash
 set -Eeuo pipefail
 if [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == handoff-write-failure ]]; then
+  snapshot=$(<"$RUNNER_TEMP/chatgpt-login-recovery.snapshot")
+  [[ "$snapshot" == 'inspectable snapshot' ]] || exit 1
+  touch "$RUNNER_TEMP/agent-read-snapshot"
   printf '%s\\n' 'snapshot' 'fill_secret e1 email' 'type_secret e2 password' 'otp e3' 'goto https://auth.openai.com/log-in' 'press Enter' 'click e4' > "$RUNNER_TEMP/chatgpt-login-recovery.commands"
 fi
 """,
@@ -722,6 +725,7 @@ fi
     )
     assert recovered.returncode == 0
     assert "test-access" in (tmp_path / "auth.json").read_text()
+    assert (tmp_path / "agent-read-snapshot").exists()
     snapshot = tmp_path / "chatgpt-login-recovery.snapshot"
     assert snapshot.read_text() == "inspectable snapshot\n"
     assert snapshot.stat().st_mode & 0o777 == 0o600

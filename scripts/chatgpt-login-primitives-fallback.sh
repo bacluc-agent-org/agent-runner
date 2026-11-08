@@ -63,6 +63,11 @@ recover_blocking_login() {
     printf 'Playwright CLI could not capture the login page\n' >&2
     return 1
   fi
+  if ! mv -f -- "$snapshot_tmp" "$snapshot_file"; then
+    return 1
+  fi
+  snapshot_tmp=$(mktemp "$snapshot_file.XXXXXX")
+  chmod 600 "$snapshot_tmp"
   cat > "$handoff_tmp" << EOF
 session=$session
 cdp=http://127.0.0.1:$cdp_port

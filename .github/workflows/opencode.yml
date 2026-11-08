@@ -89,6 +89,21 @@ on:
         required: false
         type: number
         default: 120
+      skip_model_availability:
+        description: Skip model availability probing and use the passed values
+        required: false
+        type: boolean
+        default: false
+      available_models:
+        description: Newline-separated models already verified as available
+        required: false
+        type: string
+        default: ""
+      cache_issue:
+        description: Model availability cache issue number
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -161,6 +176,7 @@ jobs:
 
       - name: Check model availability
         id: model-availability
+        if: inputs.skip_model_availability != true
         uses: ./.github/actions/model-availability
 
       - name: Dump model probe debug output
@@ -179,7 +195,7 @@ jobs:
         env:
           MODEL_TEXT: ${{ inputs.model }}
           MODEL_CHOICE: ${{ inputs.model_choice }}
-          AVAILABLE_MODELS: ${{ steps.model-availability.outputs.available-models }}
+          AVAILABLE_MODELS: ${{ inputs.skip_model_availability && inputs.available_models || steps.model-availability.outputs.available-models }}
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
           BACLUC_AGENT_GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
           DISCOVERY_TIMEOUT: ${{ inputs.discovery_timeout_minutes || 5 }}
@@ -526,13 +542,13 @@ jobs:
           fi
 
       - name: Update cache on coordinator failure
-        if: (failure() || steps.fatal-guard.outputs.fatal-model != '') && (steps.select-model.outputs.model != '' || steps.fatal-guard.outputs.fatal-model != '') && steps.model-availability.outputs.cache-issue != ''
+        if: (failure() || steps.fatal-guard.outputs.fatal-model != '') && (steps.select-model.outputs.model != '' || steps.fatal-guard.outputs.fatal-model != '') && (inputs.skip_model_availability && inputs.cache_issue != '' || !inputs.skip_model_availability && steps.model-availability.outputs.cache-issue != '')
         shell: bash
         env:
           MODEL: ${{ steps.fatal-guard.outputs.fatal-model || steps.select-model.outputs.model }}
           FATAL_REASON: ${{ steps.fatal-guard.outputs.fatal-reason }}
           FATAL_PROVIDER: ${{ steps.fatal-guard.outputs.fatal-provider }}
-          CACHE_ISSUE: ${{ steps.model-availability.outputs.cache-issue }}
+          CACHE_ISSUE: ${{ inputs.skip_model_availability && inputs.cache_issue || steps.model-availability.outputs.cache-issue }}
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
         run: |
           set -Eeuo pipefail

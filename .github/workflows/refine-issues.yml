@@ -86,9 +86,9 @@ jobs:
           while IFS= read -r number; do
             comments_json="$RUNNER_TEMP/comments-${number}.json"
             gh api --paginate --slurp "repos/$ISSUE_REPOSITORY/issues/$number/comments?per_page=100" \
-              --jq 'add' > "$comments_json"
+              | jq 'add' > "$comments_json"
             refined_at=$(gh api --paginate --slurp "repos/$ISSUE_REPOSITORY/issues/$number/events?per_page=100" \
-              --jq '[.[].[] | select(.event == "labeled" and .label.name == "agent-refined") | .created_at] | max // empty')
+              | jq -r '[.[].[] | select(.event == "labeled" and .label.name == "agent-refined") | .created_at] | max // empty')
             eligible="$RUNNER_TEMP/feedback-${number}.json"
             if python3 scripts/issue_comment_eligibility.py --comments "$comments_json" \
               --after "$refined_at" --agent-login "$AGENT_GITHUB_LOGIN" --output "$eligible"; then

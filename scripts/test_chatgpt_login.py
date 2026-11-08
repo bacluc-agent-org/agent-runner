@@ -454,6 +454,11 @@ def test_primitives_fallback_observes_retries_and_validates_login_output():
     assert 'gh secret set OPENCODE_AUTH_JSON' in helper
     assert "scripts/chatgpt-login.py status || true" not in helper
     assert "scripts/chatgpt-login.py step || true" not in helper
+    assert "fill_secret\\ e[0-9]*\\ email | fill_secret" in helper
+    assert "type_secret\\ e[0-9]*\\ password" in helper
+    assert "otp\\ e[0-9]*" in helper
+    assert "goto\\ https://auth.openai.com/* | goto" in helper
+    assert 'command_timeout="${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}"' in helper
 
 
 def test_primitives_fallback_steps_after_a_blocking_status():
@@ -594,6 +599,9 @@ def test_primitives_fallback_recovers_or_fails_closed_and_cleans_up(tmp_path):
         """#!/usr/bin/env bash
 set -Eeuo pipefail
 case "${3:-}" in
+  -c)
+    printf '%s\\n' '123456'
+    ;;
   start)
     trap 'touch "$RUNNER_TEMP/stopped"; exit 143' TERM INT
     if [[ "$FAKE_MODE" == success || "$FAKE_MODE" == recovered ]]; then
@@ -643,7 +651,11 @@ printf '%s\\n' "$*" > "$RUNNER_TEMP/gh-call"
     (fake_bin / "playwright-cli").write_text(
         """#!/usr/bin/env bash
 set -Eeuo pipefail
-printf '%s\\n' "$*" >> "$RUNNER_TEMP/playwright-cli-calls"
+call="$*"
+call="${call//test@example.invalid/[redacted]}"
+call="${call//test-password/[redacted]}"
+call="${call//123456/[redacted]}"
+printf '%s\\n' "$call" >> "$RUNNER_TEMP/playwright-cli-calls"
 if [[ "$FAKE_MODE" == cli-failure ]]; then
   printf '%s\\n' 'secret-password cli failure' >&2
   exit 1
@@ -659,7 +671,10 @@ fi
 if [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == handoff-write-failure ]] && [[ "${2:-}" == snapshot ]]; then
   touch "$RUNNER_TEMP/recovered"
   printf '%s\\n' 'inspectable snapshot'
-  printf '%s\\n' 'snapshot' > "$RUNNER_TEMP/chatgpt-login-recovery.commands"
+  if [[ ! -e "$RUNNER_TEMP/commands-written" ]]; then
+    touch "$RUNNER_TEMP/commands-written"
+    printf '%s\\n' 'snapshot' 'fill_secret e1 email' 'type_secret e2 password' 'otp e3' 'goto https://auth.openai.com/log-in' 'press Enter' 'click e4' > "$RUNNER_TEMP/chatgpt-login-recovery.commands"
+  fi
 fi
 if [[ "$FAKE_MODE" == detach-failure && "${2:-}" == detach ]]; then
   exit 1
@@ -701,6 +716,12 @@ fi
         "-s=chatgpt-auth-recovery attach --cdp=http://127.0.0.1:9222",
         "-s=chatgpt-auth-recovery snapshot",
         "-s=chatgpt-auth-recovery snapshot",
+        "-s=chatgpt-auth-recovery fill e1 email [redacted]",
+        "-s=chatgpt-auth-recovery type e2 password [redacted]",
+        "-s=chatgpt-auth-recovery fill e3 [redacted]",
+        "-s=chatgpt-auth-recovery goto https://auth.openai.com/log-in",
+        "-s=chatgpt-auth-recovery press Enter",
+        "-s=chatgpt-auth-recovery click e4",
         "-s=chatgpt-auth-recovery detach",
     ]
     assert "Playwright handoff retained" in recovered.stderr
@@ -714,13 +735,16 @@ status=uv run scripts/chatgpt-login.py status
 step=uv run scripts/chatgpt-login.py step
 detach=playwright-cli -s=chatgpt-auth-recovery detach
 commands={tmp_path / "chatgpt-login-recovery.commands"}
+operations=snapshot|click|fill_secret|type_secret|otp|goto|press|check|uncheck|hover|status
 timeout_seconds=1
+command_timeout_seconds=20
 """
     assert handoff.stat().st_mode & 0o777 == 0o600
     assert "reload" not in recovered.stderr.lower()
 
     (tmp_path / "playwright-cli-calls").unlink()
     (tmp_path / "recovered").unlink()
+    (tmp_path / "commands-written").unlink()
     detach_failure = subprocess.run(
         ["bash", str(helper)], env={**env, "FAKE_MODE": "detach-failure"}, capture_output=True, text=True, timeout=10
     )
@@ -730,6 +754,7 @@ timeout_seconds=1
 
     (tmp_path / "playwright-cli-calls").unlink()
     (tmp_path / "recovered").unlink()
+    (tmp_path / "commands-written").unlink()
     handoff_failure_bin = tmp_path / "handoff-failure-bin"
     handoff_failure_bin.mkdir()
     (handoff_failure_bin / "mv").write_text(

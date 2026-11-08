@@ -29,8 +29,9 @@ recover_blocking_login() {
   local command_tmp=''
   local attached=false
   local handoff_timeout="${PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS:-300}"
+  local command_timeout="${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}"
 
-  if [[ ! "$handoff_timeout" =~ ^[1-9][0-9]*$ || "$handoff_timeout" -gt 300 ]]; then
+  if [[ ! "$handoff_timeout" =~ ^[1-9][0-9]*$ || "$handoff_timeout" -gt 300 || ! "$command_timeout" =~ ^[1-9][0-9]*$ || "$command_timeout" -gt 30 ]]; then
     printf 'Invalid Playwright handoff timeout\n' >&2
     return 1
   fi
@@ -70,7 +71,9 @@ status=uv run scripts/chatgpt-login.py status
 step=uv run scripts/chatgpt-login.py step
 detach=playwright-cli -s=$session detach
 commands=$command_file
+operations=snapshot|click|fill_secret|type_secret|otp|goto|press|check|uncheck|hover|status
 timeout_seconds=$handoff_timeout
+command_timeout_seconds=$command_timeout
 EOF
   printf 'Playwright handoff is live at %s; write bounded commands to %s\n' "$handoff_tmp" "$command_file" >&2
   local deadline=$((SECONDS + handoff_timeout))
@@ -82,25 +85,46 @@ EOF
       mv -f -- "$command_file" "$batch_file"
       : > "$command_file"
       chmod 600 "$command_file"
+      command_count=0
       while IFS= read -r command || [[ -n "$command" ]]; do
+        command_count=$((command_count + 1))
+        ((command_count <= 32)) || return 1
         case "$command" in
           snapshot)
-            playwright-cli "-s=$session" snapshot > "$snapshot_tmp" 2> /dev/null || return 1
+            timeout "$command_timeout" playwright-cli "-s=$session" snapshot > "$snapshot_tmp" 2> /dev/null || return 1
             ;;
           click\ e[0-9]*)
-            playwright-cli "-s=$session" click "${command#click }" > /dev/null 2>&1 || return 1
+            timeout "$command_timeout" playwright-cli "-s=$session" click "${command#click }" > /dev/null 2>&1 || return 1
             ;;
           hover\ e[0-9]*)
-            playwright-cli "-s=$session" hover "${command#hover }" > /dev/null 2>&1 || return 1
+            timeout "$command_timeout" playwright-cli "-s=$session" hover "${command#hover }" > /dev/null 2>&1 || return 1
             ;;
           press\ [A-Za-z]*)
-            playwright-cli "-s=$session" press "${command#press }" > /dev/null 2>&1 || return 1
+            timeout "$command_timeout" playwright-cli "-s=$session" press "${command#press }" > /dev/null 2>&1 || return 1
             ;;
           check\ e[0-9]*)
-            playwright-cli "-s=$session" check "${command#check }" > /dev/null 2>&1 || return 1
+            timeout "$command_timeout" playwright-cli "-s=$session" check "${command#check }" > /dev/null 2>&1 || return 1
             ;;
           uncheck\ e[0-9]*)
-            playwright-cli "-s=$session" uncheck "${command#uncheck }" > /dev/null 2>&1 || return 1
+            timeout "$command_timeout" playwright-cli "-s=$session" uncheck "${command#uncheck }" > /dev/null 2>&1 || return 1
+            ;;
+          fill_secret\ e[0-9]*\ email | fill_secret\ e[0-9]*\ password | type_secret\ e[0-9]*\ email | type_secret\ e[0-9]*\ password)
+            secret_name="${command##* }"
+            secret_value="${CHATGPT_EMAIL:-${OPENAI_USERNAME:-}}"
+            [[ "$secret_name" == password ]] && secret_value="${CHATGPT_PASSWORD:-${OPENAI_PASSWORD:-}}"
+            [[ -n "$secret_value" ]] || return 1
+            cli_operation="fill"
+            [[ "$command" == type_secret\ * ]] && cli_operation="type"
+            timeout "$command_timeout" playwright-cli "-s=$session" "$cli_operation" "${command#* }" "$secret_value" > /dev/null 2>&1 || return 1
+            ;;
+          otp\ e[0-9]*)
+            otp_code=$(CHATGPT_TOTP_KEY="${CHATGPT_TOTP_KEY:-${CHATGPT_2FA_KEY:-${OPENAI_2FA_KEY:-}}}" uv run python -c 'import os, pyotp; print(pyotp.TOTP(os.environ["CHATGPT_TOTP_KEY"]).now())') || return 1
+            [[ "$otp_code" =~ ^[0-9]{6}$ ]] || return 1
+            timeout "$command_timeout" playwright-cli "-s=$session" fill "${command#otp }" "$otp_code" > /dev/null 2>&1 || return 1
+            ;;
+          goto\ https://auth.openai.com/* | goto\ https://chatgpt.com/*)
+            [[ "${command#goto }" != *\?* && "${command#goto }" != *\#* ]] || return 1
+            timeout "$command_timeout" playwright-cli "-s=$session" goto "${command#goto }" > /dev/null 2>&1 || return 1
             ;;
           status)
             ;;

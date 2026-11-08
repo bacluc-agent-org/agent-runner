@@ -648,6 +648,10 @@ if [[ "$FAKE_MODE" == cli-failure ]]; then
   printf '%s\\n' 'secret-password cli failure' >&2
   exit 1
 fi
+if [[ "$FAKE_MODE" == snapshot-partial-failure && "${2:-}" == snapshot ]]; then
+  printf '%s\\n' 'partial snapshot secret-password'
+  exit 1
+fi
 if [[ "$FAKE_MODE" == snapshot-failure && "${2:-}" == snapshot ]]; then
   printf '%s\\n' 'secret-password snapshot failure' >&2
   exit 1
@@ -693,15 +697,28 @@ fi
         "-s=chatgpt-auth-recovery snapshot",
         "-s=chatgpt-auth-recovery detach",
     ]
-    assert "Playwright handoff snapshot" in recovered.stderr
+    assert "Playwright handoff retained" in recovered.stderr
+    handoff = tmp_path / "chatgpt-login-recovery.handoff"
+    assert handoff.read_text() == f"""session=chatgpt-auth-recovery
+cdp=http://127.0.0.1:9222
+snapshot={snapshot}
+attach=playwright-cli -s=chatgpt-auth-recovery attach --cdp=http://127.0.0.1:9222
+inspect=playwright-cli -s=chatgpt-auth-recovery snapshot
+status=uv run scripts/chatgpt-login.py status
+step=uv run scripts/chatgpt-login.py step
+detach=playwright-cli -s=chatgpt-auth-recovery detach
+"""
+    assert handoff.stat().st_mode & 0o777 == 0o600
     assert "reload" not in recovered.stderr.lower()
 
     (tmp_path / "playwright-cli-calls").unlink()
     snapshot_failure = subprocess.run(
-        ["bash", str(helper)], env={**env, "FAKE_MODE": "snapshot-failure"}, capture_output=True, text=True, timeout=10
+        ["bash", str(helper)], env={**env, "FAKE_MODE": "snapshot-partial-failure"}, capture_output=True, text=True, timeout=10
     )
     assert snapshot_failure.returncode != 0
     assert "secret-password" not in snapshot_failure.stderr
+    assert not snapshot.exists()
+    assert not handoff.exists()
     assert (tmp_path / "playwright-cli-calls").read_text().splitlines() == [
         "-s=chatgpt-auth-recovery attach --cdp=http://127.0.0.1:9222",
         "-s=chatgpt-auth-recovery snapshot",

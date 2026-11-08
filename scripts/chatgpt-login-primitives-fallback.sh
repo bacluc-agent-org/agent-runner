@@ -22,6 +22,9 @@ recover_blocking_login() {
   local session='chatgpt-auth-recovery'
   local cdp_port="${OPENAI_CDP_PORT:-9222}"
   local snapshot_file="$RUNNER_TEMP/chatgpt-login-recovery.snapshot"
+  local handoff_file="$RUNNER_TEMP/chatgpt-login-recovery.handoff"
+  local snapshot_tmp=''
+  local handoff_tmp=''
   local attached=false
 
   cleanup_recovery() {
@@ -29,26 +32,42 @@ recover_blocking_login() {
       playwright-cli "-s=$session" detach > /dev/null 2>&1 || true
       attached=false
     fi
+    rm -f -- "$snapshot_tmp" "$handoff_tmp"
   }
   trap cleanup_recovery RETURN
+  rm -f -- "$snapshot_file" "$handoff_file"
+  snapshot_tmp=$(mktemp "$snapshot_file.XXXXXX")
+  handoff_tmp=$(mktemp "$handoff_file.XXXXXX")
+  chmod 600 "$snapshot_tmp" "$handoff_tmp"
 
   if ! playwright-cli "-s=$session" attach "--cdp=http://127.0.0.1:$cdp_port" > /dev/null 2>&1; then
     printf 'Playwright CLI could not attach to the login browser\n' >&2
     return 1
   fi
   attached=true
-  if ! playwright-cli "-s=$session" snapshot > "$snapshot_file" 2> /dev/null; then
+  if ! playwright-cli "-s=$session" snapshot > "$snapshot_tmp" 2> /dev/null; then
     printf 'Playwright CLI could not capture the login page\n' >&2
     return 1
   fi
-  chmod 600 "$snapshot_file"
+  mv -f -- "$snapshot_tmp" "$snapshot_file"
+  cat > "$handoff_tmp" << EOF
+session=$session
+cdp=http://127.0.0.1:$cdp_port
+snapshot=$snapshot_file
+attach=playwright-cli -s=$session attach --cdp=http://127.0.0.1:$cdp_port
+inspect=playwright-cli -s=$session snapshot
+status=uv run scripts/chatgpt-login.py status
+step=uv run scripts/chatgpt-login.py step
+detach=playwright-cli -s=$session detach
+EOF
+  mv -f -- "$handoff_tmp" "$handoff_file"
   if ! playwright-cli "-s=$session" detach > /dev/null 2>&1; then
     printf 'Playwright CLI could not detach from the login browser\n' >&2
     return 1
   fi
   attached=false
   trap - RETURN
-  printf 'Playwright handoff snapshot retained at %s; inspect it and continue with the login status/step primitives\n' "$snapshot_file" >&2
+  printf 'Playwright handoff retained at %s; inspect %s and continue with the login status/step primitives\n' "$snapshot_file" "$handoff_file" >&2
 }
 
 for attempt in $(seq 1 120); do

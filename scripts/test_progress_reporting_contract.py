@@ -9,6 +9,8 @@ def test_progress_reporting_contains_coordinator_completion_contract():
 
     assert "Coordinator completion contract:" in contract
     assert "do not report success" in contract
+    assert "unless the requested changes are implemented and verified" in contract
+    assert "concrete blocker, missing capability, or unresolved uncertainty prevents completion" in contract
     assert "state it plainly" in contract
 
 

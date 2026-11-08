@@ -42,5 +42,3 @@
 /qwen/qwen3\.8-27b
 # poolside/laguna-s-2.1:free: ok:false in cache issue 49; coordinator selection in run 36368492150 (failure indirect).
 /poolside/laguna-s-2\.1
-# gpt-6-luna: abandons tasks; coordinator in runs 42360505733, 42364721366, 42365777506; bacluc-agent/agent-todo#433.
-/gpt-6-luna

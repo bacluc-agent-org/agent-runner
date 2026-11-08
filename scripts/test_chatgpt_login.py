@@ -462,7 +462,7 @@ def test_primitives_fallback_observes_retries_and_validates_login_output():
     assert "goto\\ https://auth.openai.com/* | goto" in helper
     assert 'command_timeout="${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}"' in helper
     assert 'agent_timeout="${PLAYWRIGHT_AGENT_TIMEOUT_SECONDS:-120}"' in helper
-    assert "opencode run --model" in helper
+    assert "opencode run --auto --model" in helper
 
 
 def test_primitives_fallback_steps_after_a_blocking_status():

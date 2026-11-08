@@ -87,7 +87,7 @@ Allowed commands are exactly: snapshot, click eN, fill_secret eN email|password,
 Use symbolic secret commands for credentials and otp for TOTP; never read, print, or write credential values. Use only refs from the snapshot and safe auth URLs without query strings or fragments. Keep the batch at most 32 commands. Do not call playwright-cli directly, modify any other file, or report secrets.
 EOF
   )
-  if ! timeout "$agent_timeout" opencode run --model "$agent_model" --title chatgpt-auth-recovery "$recovery_prompt" > /dev/null 2>&1; then
+  if ! timeout "$agent_timeout" opencode run --auto --model "$agent_model" --title chatgpt-auth-recovery "$recovery_prompt" > /dev/null 2>&1; then
     printf 'Playwright recovery agent failed or timed out\n' >&2
     return 1
   fi

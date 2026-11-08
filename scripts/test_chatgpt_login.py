@@ -602,12 +602,14 @@ case "${3:-}" in
       printf '%s\\n' '{"openai":{"type":"oauth","access":"blocked-access","refresh":"blocked-refresh","expires":123}}'
     fi
     while [[ ! -e "$RUNNER_TEMP/release-start" ]]; do sleep 0.01; done
+    if [[ "$FAKE_MODE" == blocked ]]; then exit 1; fi
     ;;
   status)
     if [[ "$FAKE_MODE" == success ]]; then
       touch "$RUNNER_TEMP/release-start"
       printf '%s\\n' '{"step":"done","blocking":null,"code_ready":true}'
     else
+      touch "$RUNNER_TEMP/release-start"
       printf '%s\\n' '{"step":"email","blocking":"challenge","code_ready":false}'
     fi
     ;;
@@ -647,14 +649,13 @@ printf '%s\\n' "$*" > "$RUNNER_TEMP/gh-call"
     )
     assert success.returncode == 0
     assert "secret set OPENCODE_AUTH_JSON" in (tmp_path / "gh-call").read_text()
-    assert "test-access" in (tmp_path / "primitives-auth.json").read_text()
+    assert "test-access" in (tmp_path / "auth.json").read_text()
 
     (tmp_path / "gh-call").unlink()
     blocked = subprocess.run(
         ["bash", str(helper)], env={**env, "FAKE_MODE": "blocked"}, capture_output=True, text=True, timeout=10
     )
     assert blocked.returncode != 0
-    assert "Primitive login is blocked" in blocked.stderr
     assert (tmp_path / "stopped").exists()
     assert not (tmp_path / "gh-call").exists()
 

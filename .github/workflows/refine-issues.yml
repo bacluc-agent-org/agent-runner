@@ -89,6 +89,7 @@ jobs:
               | jq 'add' > "$comments_json"
             refined_at=$(gh api --paginate --slurp "repos/$ISSUE_REPOSITORY/issues/$number/events?per_page=100" \
               | jq -r '[.[].[] | select(.event == "labeled" and .label.name == "agent-refined") | .created_at] | max // empty')
+            printf '%s\n' "$refined_at" > "$RUNNER_TEMP/refined-at-${number}.txt"
             eligible="$RUNNER_TEMP/feedback-${number}.json"
             if python3 scripts/issue_comment_eligibility.py --comments "$comments_json" \
               --after "$refined_at" --agent-login "$AGENT_GITHUB_LOGIN" --output "$eligible"; then
@@ -178,6 +179,10 @@ jobs:
               printf '%s\n' ''
               printf '%s\n' 'Current body:'
               printf '%s\n' "$body"
+              prior_refinement="$RUNNER_TEMP/refined-at-${number}.txt"
+              if [[ -s "$prior_refinement" ]] && [[ -n "$(< "$prior_refinement")" ]]; then
+                printf '\nThis issue was refined previously at %s; incorporate the newer feedback below into the replacement body.\n' "$(< "$prior_refinement")"
+              fi
               feedback="$RUNNER_TEMP/feedback-${number}.json"
               if [[ -s "$feedback" ]] && [[ "$(jq 'length' "$feedback")" -gt 0 ]]; then
                 printf '\nReviewer comments (feedback to fold into the Goal and steps; do not quote them wholesale):\n'

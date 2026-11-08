@@ -41,7 +41,7 @@ def is_refined_feedback_candidate(
 
 def qualifying_comments(
     comments: list[dict], after: str | None = None, agent_login: str = DEFAULT_AGENT_LOGIN
-) -> list[dict]: 
+) -> list[dict]:
     cutoff = parse_timestamp(after) if after else None
     return [
         comment

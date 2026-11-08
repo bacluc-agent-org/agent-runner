@@ -1351,6 +1351,12 @@ class TestIterativeRefinement:
         assert 'contains("<!-- agent-progress -->")' in content
         assert 'select(.created_at > $updated)' in content
 
+    def test_refinement_prompt_includes_prior_refinement_context(self):
+        content = self.REFINE_WORKFLOW.read_text()
+        assert 'refined-at-${number}.txt' in content
+        assert 'This issue was refined previously' in content
+        assert 'newer feedback below' in content
+
     def test_feedback_reply_does_not_remove_refinement_eligibility(self):
         content = self.OPENCODE_WORKFLOW.read_text()
         assert 'gh issue edit "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --remove-label agent-refined' not in content

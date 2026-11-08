@@ -148,7 +148,7 @@ jobs:
           CHATGPT_PASSWORD: ${{ secrets.CHATGPT_PASSWORD || secrets.OPENAI_PASSWORD }}
           CHATGPT_TOTP_KEY: ${{ secrets.CHATGPT_TOTP_KEY || secrets.CHATGPT_2FA_KEY || secrets.OPENAI_2FA_KEY }}
           CHATGPT_HEADLESS: "true"
-          PLAYWRIGHT_AGENT_MODEL: openai/gpt-5.6-luna
+          PLAYWRIGHT_AGENT_MODEL: opencode-go-openai/gpt-5.6-luna
           OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
           OPENCODE_GO_2_API_KEY: ${{ secrets.OPENCODE_GO_2_API_KEY }}
           BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}

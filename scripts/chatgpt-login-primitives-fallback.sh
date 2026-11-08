@@ -31,7 +31,7 @@ recover_blocking_login() {
   local handoff_timeout="${PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS:-300}"
   local command_timeout="${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}"
   local agent_timeout="${PLAYWRIGHT_AGENT_TIMEOUT_SECONDS:-120}"
-  local agent_model="${PLAYWRIGHT_AGENT_MODEL:-openai/gpt-5.6-luna}"
+  local agent_model="${PLAYWRIGHT_AGENT_MODEL:-opencode-go-openai/gpt-5.6-luna}"
 
   if [[ ! "$handoff_timeout" =~ ^[1-9][0-9]*$ || "$handoff_timeout" -gt 300 || ! "$command_timeout" =~ ^[1-9][0-9]*$ || "$command_timeout" -gt 30 || ! "$agent_timeout" =~ ^[1-9][0-9]*$ || "$agent_timeout" -gt 300 ]]; then
     printf 'Invalid Playwright handoff timeout\n' >&2

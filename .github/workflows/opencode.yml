@@ -592,7 +592,7 @@ jobs:
           if ((coordinator_status == 124)); then
             echo "failure_mode=timeout" >> "$GITHUB_OUTPUT"
           fi
-          if ((coordinator_status != 0 || coordinator_tee_status != 0 || coordinator_delivery_valid != true)); then
+          if [[ "$coordinator_delivery_valid" != true ]] || ((coordinator_status != 0 || coordinator_tee_status != 0)); then
             if ((coordinator_status == 0)); then
               coordinator_status=1
             fi

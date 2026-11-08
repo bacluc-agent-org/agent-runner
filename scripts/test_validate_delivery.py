@@ -211,7 +211,8 @@ def test_coordinator_retries_exit_zero_without_a_delivery_report():
     assert "coordinator_delivery_valid=false" in body
     assert "coordinator_delivery_valid=true" in body
     assert "Delivery validation feedback from the previous attempt" in body
-    assert 'if [[ "$coordinator_delivery_valid" == true ]]' in body
+    assert 'if [[ "$coordinator_delivery_valid" != true ]]' in body
+    assert "coordinator_delivery_valid != true" not in body
     assert "for attempt in 1 2" in body
 
 

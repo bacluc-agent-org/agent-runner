@@ -438,6 +438,8 @@ def test_primitives_fallback_observes_retries_and_validates_login_output():
     helper = (Path(__file__).with_name("chatgpt-login-primitives-fallback.sh")).read_text(encoding="utf-8")
     assert "if: ${{ !cancelled() && (inputs.force_primitives || steps.browser-login.outcome == 'failure') }}" in primitives
     assert "scripts/chatgpt-login-primitives-fallback.sh" in primitives
+    assert "Set up Playwright recovery agent" in workflow
+    assert "uses: ./.github/actions/setup-opencode" in workflow
     assert "scripts/chatgpt-login.py start >" in helper
     assert 'CHATGPT_HEADLESS: "true"' in primitives
     assert "credentials are not configured" in helper
@@ -459,6 +461,8 @@ def test_primitives_fallback_observes_retries_and_validates_login_output():
     assert "otp\\ e[0-9]*" in helper
     assert "goto\\ https://auth.openai.com/* | goto" in helper
     assert 'command_timeout="${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}"' in helper
+    assert 'agent_timeout="${PLAYWRIGHT_AGENT_TIMEOUT_SECONDS:-120}"' in helper
+    assert "opencode run --model" in helper
 
 
 def test_primitives_fallback_steps_after_a_blocking_status():
@@ -612,7 +616,10 @@ case "${3:-}" in
       printf '%s\\n' '{"openai":{"type":"oauth","access":"blocked-access","refresh":"blocked-refresh","expires":123}}'
     fi
     while [[ ! -e "$RUNNER_TEMP/release-start" ]]; do sleep 0.01; done
-    if [[ "$FAKE_MODE" == blocked ]]; then exit 1; fi
+    if [[ "$FAKE_MODE" == blocked ]]; then
+      while [[ ! -e "$RUNNER_TEMP/stopped" ]]; do sleep 0.01; done
+      exit 1
+    fi
     ;;
   status)
     if [[ "$FAKE_MODE" == success || "$FAKE_MODE" == invalid-output ]]; then
@@ -648,6 +655,16 @@ printf '%s\\n' "$*" > "$RUNNER_TEMP/gh-call"
         encoding="utf-8",
     )
     (fake_bin / "gh").chmod(0o755)
+    (fake_bin / "opencode").write_text(
+        """#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == handoff-write-failure ]]; then
+  printf '%s\\n' 'snapshot' 'fill_secret e1 email' 'type_secret e2 password' 'otp e3' 'goto https://auth.openai.com/log-in' 'press Enter' 'click e4' > "$RUNNER_TEMP/chatgpt-login-recovery.commands"
+fi
+""",
+        encoding="utf-8",
+    )
+    (fake_bin / "opencode").chmod(0o755)
     (fake_bin / "playwright-cli").write_text(
         """#!/usr/bin/env bash
 set -Eeuo pipefail
@@ -671,10 +688,6 @@ fi
 if [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == handoff-write-failure ]] && [[ "${2:-}" == snapshot ]]; then
   touch "$RUNNER_TEMP/recovered"
   printf '%s\\n' 'inspectable snapshot'
-  if [[ ! -e "$RUNNER_TEMP/commands-written" ]]; then
-    touch "$RUNNER_TEMP/commands-written"
-    printf '%s\\n' 'snapshot' 'fill_secret e1 email' 'type_secret e2 password' 'otp e3' 'goto https://auth.openai.com/log-in' 'press Enter' 'click e4' > "$RUNNER_TEMP/chatgpt-login-recovery.commands"
-  fi
 fi
 if [[ "$FAKE_MODE" == detach-failure && "${2:-}" == detach ]]; then
   exit 1
@@ -744,7 +757,6 @@ command_timeout_seconds=20
 
     (tmp_path / "playwright-cli-calls").unlink()
     (tmp_path / "recovered").unlink()
-    (tmp_path / "commands-written").unlink()
     detach_failure = subprocess.run(
         ["bash", str(helper)], env={**env, "FAKE_MODE": "detach-failure"}, capture_output=True, text=True, timeout=10
     )
@@ -754,13 +766,12 @@ command_timeout_seconds=20
 
     (tmp_path / "playwright-cli-calls").unlink()
     (tmp_path / "recovered").unlink()
-    (tmp_path / "commands-written").unlink()
     handoff_failure_bin = tmp_path / "handoff-failure-bin"
     handoff_failure_bin.mkdir()
     (handoff_failure_bin / "mv").write_text(
         """#!/usr/bin/env bash
 set -Eeuo pipefail
-if [[ "${FAKE_MODE:-}" == handoff-write-failure && "${@: -1}" == *chatgpt-login-recovery.handoff ]]; then
+if [[ "${FAKE_MODE:-}" == handoff-write-failure && "${@: -1}" == *handoff* ]]; then
   exit 1
 fi
 exec /bin/mv "$@"

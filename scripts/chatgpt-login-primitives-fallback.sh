@@ -30,8 +30,10 @@ recover_blocking_login() {
   local attached=false
   local handoff_timeout="${PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS:-300}"
   local command_timeout="${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}"
+  local agent_timeout="${PLAYWRIGHT_AGENT_TIMEOUT_SECONDS:-120}"
+  local agent_model="${PLAYWRIGHT_AGENT_MODEL:-openai/gpt-5.6-luna}"
 
-  if [[ ! "$handoff_timeout" =~ ^[1-9][0-9]*$ || "$handoff_timeout" -gt 300 || ! "$command_timeout" =~ ^[1-9][0-9]*$ || "$command_timeout" -gt 30 ]]; then
+  if [[ ! "$handoff_timeout" =~ ^[1-9][0-9]*$ || "$handoff_timeout" -gt 300 || ! "$command_timeout" =~ ^[1-9][0-9]*$ || "$command_timeout" -gt 30 || ! "$agent_timeout" =~ ^[1-9][0-9]*$ || "$agent_timeout" -gt 300 ]]; then
     printf 'Invalid Playwright handoff timeout\n' >&2
     return 1
   fi
@@ -76,7 +78,21 @@ timeout_seconds=$handoff_timeout
 command_timeout_seconds=$command_timeout
 EOF
   printf 'Playwright handoff is live at %s; write bounded commands to %s\n' "$handoff_tmp" "$command_file" >&2
+  local recovery_prompt
+  recovery_prompt=$(
+    cat << EOF
+Drive the blocked ChatGPT login through the attached Playwright session.
+Read only the snapshot at $snapshot_file. Write only newline-delimited commands to $command_file, then exit.
+Allowed commands are exactly: snapshot, click eN, fill_secret eN email|password, type_secret eN email|password, otp eN, goto https://auth.openai.com/PATH, goto https://chatgpt.com/PATH, press WORD, check eN, uncheck eN, hover eN, status.
+Use symbolic secret commands for credentials and otp for TOTP; never read, print, or write credential values. Use only refs from the snapshot and safe auth URLs without query strings or fragments. Keep the batch at most 32 commands. Do not call playwright-cli directly, modify any other file, or report secrets.
+EOF
+  )
+  if ! timeout "$agent_timeout" opencode run --model "$agent_model" --title chatgpt-auth-recovery "$recovery_prompt" > /dev/null 2>&1; then
+    printf 'Playwright recovery agent failed or timed out\n' >&2
+    return 1
+  fi
   local deadline=$((SECONDS + handoff_timeout))
+  local handoff_ready=false
   while ((SECONDS < deadline)); do
     if [[ -s "$command_file" ]]; then
       local batch_file
@@ -138,13 +154,14 @@ EOF
       rm -f -- "$batch_file"
       status_json=$(uv run scripts/chatgpt-login.py status) || return 1
       if [[ "$(jq -r '.code_ready // false' <<< "$status_json")" == true ]]; then
+        handoff_ready=true
         break
       fi
     fi
     sleep 1
   done
   rm -f -- "$command_file"
-  if ((SECONDS >= deadline)); then
+  if [[ "$handoff_ready" != true ]]; then
     printf 'Playwright handoff timed out\n' >&2
     return 1
   fi

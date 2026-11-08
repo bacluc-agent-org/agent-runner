@@ -132,6 +132,15 @@ jobs:
           GH_TOKEN="$BACLUC_AGENT_GITHUB_TOKEN" gh secret set OPENCODE_AUTH_JSON --repo "$GITHUB_REPOSITORY" --body "$auth_json"
           printf 'Auth refreshed via browser login\n'
 
+      - name: Set up Playwright recovery agent
+        if: ${{ !cancelled() && (inputs.force_primitives || steps.browser-login.outcome == 'failure') }}
+        uses: ./.github/actions/setup-opencode
+        env:
+          GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
+          OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+          OPENCODE_GO_2_API_KEY: ${{ secrets.OPENCODE_GO_2_API_KEY }}
+          BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
+
       - name: Agent-usable primitives fallback (start/status/step)
         if: ${{ !cancelled() && (inputs.force_primitives || steps.browser-login.outcome == 'failure') }}
         env:
@@ -139,6 +148,10 @@ jobs:
           CHATGPT_PASSWORD: ${{ secrets.CHATGPT_PASSWORD || secrets.OPENAI_PASSWORD }}
           CHATGPT_TOTP_KEY: ${{ secrets.CHATGPT_TOTP_KEY || secrets.CHATGPT_2FA_KEY || secrets.OPENAI_2FA_KEY }}
           CHATGPT_HEADLESS: "true"
+          PLAYWRIGHT_AGENT_MODEL: openai/gpt-5.6-luna
+          OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+          OPENCODE_GO_2_API_KEY: ${{ secrets.OPENCODE_GO_2_API_KEY }}
+          BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
         run: |
           set -Eeuo pipefail
           scripts/chatgpt-login-primitives-fallback.sh

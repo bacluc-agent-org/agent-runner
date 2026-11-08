@@ -24,7 +24,7 @@ jobs:
       prompt: >-
         Manage the Kanban GitHub Project for implementation work. The project owner is
         bacluc-agent-org, the project number is
-        ${{ vars.KANBAN_PROJECT_NUMBER }}, the issue repository is
+        ${{ vars.KANBAN_PROJECT_NUMBER || '2' }}, the issue repository is
         ${{ vars.ISSUE_REPOSITORY || github.repository }}, and the maximum
         number of new agent dispatches for this run is
         ${{ vars.MAX_AGENT_DISPATCHES || '5' }}.

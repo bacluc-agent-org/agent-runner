@@ -26,7 +26,7 @@ jobs:
         and the complete instructions in
         .opencode/agent/standing-issue-manager.md. The project owner is
         bacluc-agent-org, the project number is
-        ${{ vars.STANDING_PROJECT_NUMBER }}, the issue repository is
+        ${{ vars.STANDING_PROJECT_NUMBER || '1' }}, the issue repository is
         ${{ vars.ISSUE_REPOSITORY || github.repository }}, and the maximum
         number of new agent dispatches for this run is
         ${{ vars.MAX_AGENT_DISPATCHES || '5' }}.

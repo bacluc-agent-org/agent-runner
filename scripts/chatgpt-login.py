@@ -746,7 +746,9 @@ def cmd_step() -> int:
         password = _credential("CHATGPT_PASSWORD", "OPENAI_PASSWORD")
         totp_key = _credential("CHATGPT_TOTP_KEY", "CHATGPT_2FA_KEY", "OPENAI_2FA_KEY")
         if not email or not password:
-            print("CHATGPT_EMAIL/OPENAI_USERNAME and CHATGPT_PASSWORD/OPENAI_PASSWORD must be set", file=sys.stderr)
+            message = "CHATGPT_EMAIL/OPENAI_USERNAME and CHATGPT_PASSWORD/OPENAI_PASSWORD must be set"
+            json.dump({"error": message}, sys.stdout)
+            print(message, file=sys.stderr)
             return 1
 
         page_errors = _watch_page_errors(page)

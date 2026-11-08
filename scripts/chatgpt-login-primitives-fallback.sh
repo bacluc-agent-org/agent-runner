@@ -3,6 +3,10 @@ set -Eeuo pipefail
 
 auth_file="$RUNNER_TEMP/auth.json"
 stderr_file="$RUNNER_TEMP/primitives-login.stderr"
+if [[ -z "${OPENAI_USERNAME:-}" && -z "${CHATGPT_EMAIL:-}" ]] || [[ -z "${OPENAI_PASSWORD:-}" && -z "${CHATGPT_PASSWORD:-}" ]]; then
+  printf 'Primitive login credentials are not configured; set an email and password secret\n' >&2
+  exit 1
+fi
 uv run scripts/chatgpt-login.py start > "$auth_file" 2> "$stderr_file" &
 start_pid=$!
 

@@ -1,6 +1,8 @@
 import importlib.util
 import inspect
 import json
+import os
+import subprocess
 import types
 from pathlib import Path
 
@@ -438,6 +440,7 @@ def test_primitives_fallback_observes_retries_and_validates_login_output():
     assert "scripts/chatgpt-login-primitives-fallback.sh" in primitives
     assert "scripts/chatgpt-login.py start >" in helper
     assert 'CHATGPT_HEADLESS: "true"' in primitives
+    assert "credentials are not configured" in helper
     assert "Primitive login startup failed; safe diagnostics:" in helper
     assert 'cat "$stderr_file" >&2' in helper
     assert "Primitive login step failed with status" in helper
@@ -581,3 +584,85 @@ def test_full_login_retries_the_password_error_page_before_treating_it_as_blocki
     assert full_login.index("OpenAI error page after password submit") < full_login.index(
         "Login blocked after password"
     )
+
+
+def test_primitives_fallback_success_writes_valid_auth_and_blocked_login_cleans_up(tmp_path):
+    helper = Path(__file__).with_name("chatgpt-login-primitives-fallback.sh")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "uv").write_text(
+        """#!/usr/bin/env bash
+set -Eeuo pipefail
+case "${3:-}" in
+  start)
+    trap 'touch "$RUNNER_TEMP/stopped"; exit 143' TERM INT
+    if [[ "$FAKE_MODE" == success ]]; then
+      printf '%s\\n' '{"openai":{"type":"oauth","access":"test-access","refresh":"test-refresh","expires":123}}'
+    else
+      printf '%s\\n' '{"openai":{"type":"oauth","access":"blocked-access","refresh":"blocked-refresh","expires":123}}'
+    fi
+    while [[ ! -e "$RUNNER_TEMP/release-start" ]]; do sleep 0.01; done
+    ;;
+  status)
+    if [[ "$FAKE_MODE" == success ]]; then
+      touch "$RUNNER_TEMP/release-start"
+      printf '%s\\n' '{"step":"done","blocking":null,"code_ready":true}'
+    else
+      printf '%s\\n' '{"step":"email","blocking":"challenge","code_ready":false}'
+    fi
+    ;;
+  step)
+    printf '%s\\n' '{"step":"email","blocking":null,"code_ready":false}'
+    ;;
+  stop)
+    touch "$RUNNER_TEMP/stopped"
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    (fake_bin / "uv").chmod(0o755)
+    (fake_bin / "gh").write_text(
+        """#!/usr/bin/env bash
+set -Eeuo pipefail
+printf '%s\\n' "$*" > "$RUNNER_TEMP/gh-call"
+""",
+        encoding="utf-8",
+    )
+    (fake_bin / "gh").chmod(0o755)
+
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "RUNNER_TEMP": str(tmp_path),
+        "GITHUB_REPOSITORY": "example/repository",
+        "BACLUC_AGENT_GITHUB_TOKEN": "test-token",
+        "CHATGPT_EMAIL": "test@example.invalid",
+        "CHATGPT_PASSWORD": "test-password",
+        "CHATGPT_HEADLESS": "true",
+    }
+
+    success = subprocess.run(
+        ["bash", str(helper)], env={**env, "FAKE_MODE": "success"}, capture_output=True, text=True, timeout=10
+    )
+    assert success.returncode == 0
+    assert "secret set OPENCODE_AUTH_JSON" in (tmp_path / "gh-call").read_text()
+    assert "test-access" in (tmp_path / "primitives-auth.json").read_text()
+
+    (tmp_path / "gh-call").unlink()
+    blocked = subprocess.run(
+        ["bash", str(helper)], env={**env, "FAKE_MODE": "blocked"}, capture_output=True, text=True, timeout=10
+    )
+    assert blocked.returncode != 0
+    assert "Primitive login is blocked" in blocked.stderr
+    assert (tmp_path / "stopped").exists()
+    assert not (tmp_path / "gh-call").exists()
+
+    missing_credentials = dict(env)
+    missing_credentials.pop("CHATGPT_EMAIL")
+    missing_credentials.pop("CHATGPT_PASSWORD")
+    missing = subprocess.run(
+        ["bash", str(helper)], env={**missing_credentials, "FAKE_MODE": "success"}, capture_output=True, text=True, timeout=10
+    )
+    assert missing.returncode != 0
+    assert "credentials" in missing.stderr.lower()

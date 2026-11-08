@@ -1472,3 +1472,40 @@ class TestWorkflowOpenRouterSelection:
             text=True,
         )
         assert kept.returncode == 0, "opencode/big-pickle must be kept"
+
+
+class TestWorkflowModelAvailabilityHandoff:
+    OPENCODE_WORKFLOW = Path(__file__).parents[3] / ".github/workflows/opencode.yml"
+    HOURLY_WORKFLOW = Path(__file__).parents[3] / ".github/workflows/hourly-issue.yml"
+    REVIEW_WORKFLOW = Path(__file__).parents[3] / ".github/workflows/review-fixes.yml"
+
+    def test_reusable_workflow_accepts_passed_availability(self):
+        content = self.OPENCODE_WORKFLOW.read_text()
+        for input_name in ("skip_model_availability", "available_models", "cache_issue"):
+            assert f"      {input_name}:" in content
+        assert "if: inputs.skip_model_availability != true" in content
+        assert (
+            "${{ inputs.skip_model_availability && inputs.available_models || "
+            "steps.model-availability.outputs.available-models }}"
+        ) in content
+        assert (
+            "${{ inputs.skip_model_availability && inputs.cache_issue || "
+            "steps.model-availability.outputs.cache-issue }}"
+        ) in content
+
+    def test_hourly_workflow_passes_probe_outputs_to_reusable_workflow(self):
+        content = self.HOURLY_WORKFLOW.read_text()
+        assert "skip_model_availability: ${{ true }}" in content
+        assert "available_models: ${{ steps.model-availability.outputs.available-models }}" in content
+        assert "cache_issue: ${{ steps.model-availability.outputs.cache-issue }}" in content
+        assert "skip_model_availability: ${{ needs.select.outputs.skip_model_availability }}" in content
+        assert "available_models: ${{ needs.select.outputs.available_models }}" in content
+        assert "cache_issue: ${{ needs.select.outputs.cache_issue }}" in content
+        assert "if: always() && needs.select.outputs.issue_number != ''" in content
+
+    def test_direct_and_review_dispatch_keep_probe_default(self):
+        opencode = self.OPENCODE_WORKFLOW.read_text()
+        review = self.REVIEW_WORKFLOW.read_text()
+        assert 'default: false' in opencode[opencode.index("skip_model_availability:") :]
+        assert "skip_model_availability:" not in review
+        assert "model: ${{ inputs.model }}" in review

@@ -7,3 +7,4 @@ loop-metrics.json
 .opencode/node_modules/
 # opencode generates .opencode/.gitignore at runtime (without trailing newline)
 .opencode/.gitignore
+.prettierignore.completion-check.*

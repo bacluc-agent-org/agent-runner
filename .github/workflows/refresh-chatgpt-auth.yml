@@ -10,8 +10,8 @@ on:
       - "scripts/opencode_auth.py"
   workflow_dispatch:
     inputs:
-      force_fallback:
-        description: Skip the token-refresh path and exercise the browser/primitives fallbacks
+      force_primitives:
+        description: Skip token refresh and browser login and exercise the primitives fallback
         type: boolean
         default: false
   schedule:
@@ -49,7 +49,7 @@ jobs:
 
       - name: Try token refresh (no browser)
         id: refresh
-        if: ${{ !inputs.force_fallback }}
+        if: ${{ !inputs.force_primitives }}
         continue-on-error: true
         env:
           OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON }}
@@ -110,40 +110,41 @@ jobs:
 
       - name: Browser login (fallback)
         id: browser-login
-        if: ${{ !cancelled() && (steps.refresh.outputs.refreshed != 'true' || steps.validate.outcome != 'success') }}
+        if: ${{ !cancelled() && !inputs.force_primitives && (steps.refresh.outputs.refreshed != 'true' || steps.validate.outcome != 'success') }}
         env:
-          OPENAI_USERNAME: ${{ secrets.OPENAI_USERNAME }}
-          OPENAI_PASSWORD: ${{ secrets.OPENAI_PASSWORD }}
-          OPENAI_2FA_KEY: ${{ secrets.OPENAI_2FA_KEY }}
+          CHATGPT_EMAIL: ${{ secrets.CHATGPT_EMAIL || secrets.OPENAI_USERNAME }}
+          CHATGPT_PASSWORD: ${{ secrets.CHATGPT_PASSWORD || secrets.OPENAI_PASSWORD }}
+          CHATGPT_TOTP_KEY: ${{ secrets.CHATGPT_TOTP_KEY || secrets.CHATGPT_2FA_KEY || secrets.OPENAI_2FA_KEY }}
+          CHATGPT_HEADLESS: "true"
         run: |
           set -Eeuo pipefail
           set +e
-          xvfb-run -a uv run scripts/chatgpt-login.py > "$RUNNER_TEMP/auth.json" 2> "$RUNNER_TEMP/chatgpt-login.stderr"
+          uv run scripts/chatgpt-login.py > "$RUNNER_TEMP/auth.json" 2> "$RUNNER_TEMP/chatgpt-login.stderr"
           status=$?
           set -e
           if (( status != 0 )); then
             printf 'Browser login failed; authentication output suppressed.\n' >&2
             exit "$status"
           fi
-          # xvfb-run merges the script's stderr into stdout, so drop the
-          # [chatgpt-login] step-log lines before validating the JSON.
-          auth_json=$(grep -v '^\[chatgpt-login\]' "$RUNNER_TEMP/auth.json")
+          auth_json=$(cat "$RUNNER_TEMP/auth.json")
           [[ -n "${auth_json:-}" ]] && printf '::add-mask::%s\n' "$auth_json"
           printf '%s\n' "$auth_json" | jq -e '.openai.type == "oauth" and .openai.access != "" and .openai.refresh != "" and (.openai.expires | type == "number")' >/dev/null
           GH_TOKEN="$BACLUC_AGENT_GITHUB_TOKEN" gh secret set OPENCODE_AUTH_JSON --repo "$GITHUB_REPOSITORY" --body "$auth_json"
           printf 'Auth refreshed via browser login\n'
 
       - name: Agent-usable primitives fallback (start/status/step)
-        if: ${{ !cancelled() && steps.browser-login.outcome == 'failure' }}
+        if: ${{ !cancelled() && (inputs.force_primitives || steps.browser-login.outcome == 'failure') }}
         env:
           CHATGPT_EMAIL: ${{ secrets.CHATGPT_EMAIL || secrets.OPENAI_USERNAME }}
           CHATGPT_PASSWORD: ${{ secrets.CHATGPT_PASSWORD || secrets.OPENAI_PASSWORD }}
-          CHATGPT_2FA_KEY: ${{ secrets.CHATGPT_2FA_KEY || secrets.OPENAI_2FA_KEY }}
-          OPENAI_USERNAME: ${{ secrets.OPENAI_USERNAME }}
-          OPENAI_PASSWORD: ${{ secrets.OPENAI_PASSWORD }}
-          OPENAI_2FA_KEY: ${{ secrets.OPENAI_2FA_KEY }}
-          CHATGPT_TOTP_KEY: ${{ secrets.CHATGPT_TOTP_KEY }}
+          CHATGPT_TOTP_KEY: ${{ secrets.CHATGPT_TOTP_KEY || secrets.CHATGPT_2FA_KEY || secrets.OPENAI_2FA_KEY }}
           CHATGPT_HEADLESS: "true"
         run: |
           set -Eeuo pipefail
-          xvfb-run -a bash scripts/chatgpt-login-primitives-fallback.sh
+          scripts/chatgpt-login-primitives-fallback.sh
+
+      - name: Require refreshed authentication
+        if: ${{ !cancelled() }}
+        run: |
+          set -Eeuo pipefail
+          jq -e '.openai.type == "oauth" and (.openai.access | type == "string" and length > 0) and (.openai.refresh | type == "string" and length > 0) and (.openai.expires | type == "number")' "$RUNNER_TEMP/auth.json" >/dev/null

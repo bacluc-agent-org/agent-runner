@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-auth_file="$RUNNER_TEMP/primitives-auth.json"
+auth_file="$RUNNER_TEMP/auth.json"
 stderr_file="$RUNNER_TEMP/primitives-login.stderr"
 uv run scripts/chatgpt-login.py start > "$auth_file" 2> "$stderr_file" &
 start_pid=$!
@@ -37,8 +37,8 @@ for attempt in $(seq 1 120); do
     exit 1
   }
   if [[ -n "$(jq -r '.blocking // empty' <<< "$status_json")" ]]; then
-    printf 'Primitive login is blocked; stopping fallback\n' >&2
-    exit 1
+    sleep 5
+    continue
   fi
   if [[ "$(jq -r '.code_ready // false' <<< "$status_json")" == true ]]; then
     wait "$start_pid"

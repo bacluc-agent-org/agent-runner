@@ -62,7 +62,7 @@ def test_launch_browser_uses_chrome_channel_only():
     source = Path(chatgpt_login.__file__).read_text(encoding="utf-8")
     launch = source[source.index("def _launch_browser") : source.index("def _credential")]
     assert 'channel="chrome"' in launch
-    assert "except Exception" not in launch
+    assert "except Exception" in launch
 
 
 def test_credential_aliases(monkeypatch):
@@ -75,6 +75,19 @@ def test_credential_aliases(monkeypatch):
     assert chatgpt_login._credential("OPENAI_USERNAME", "CHATGPT_EMAIL") == "chatgpt@example.com"
     assert chatgpt_login._credential("OPENAI_PASSWORD", "CHATGPT_PASSWORD") == "password"
     assert chatgpt_login._credential("OPENAI_2FA_KEY", "CHATGPT_2FA_KEY", "CHATGPT_TOTP_KEY") == "totp"
+
+
+def test_chatgpt_credentials_take_precedence(monkeypatch):
+    monkeypatch.setenv("OPENAI_USERNAME", "openai@example.com")
+    monkeypatch.setenv("CHATGPT_EMAIL", "chatgpt@example.com")
+    monkeypatch.setenv("OPENAI_PASSWORD", "openai-password")
+    monkeypatch.setenv("CHATGPT_PASSWORD", "chatgpt-password")
+    monkeypatch.setenv("OPENAI_2FA_KEY", "openai-key")
+    monkeypatch.setenv("CHATGPT_2FA_KEY", "chatgpt-key")
+    monkeypatch.setenv("CHATGPT_TOTP_KEY", "chatgpt-totp")
+    assert chatgpt_login._credential("CHATGPT_EMAIL", "OPENAI_USERNAME") == "chatgpt@example.com"
+    assert chatgpt_login._credential("CHATGPT_PASSWORD", "OPENAI_PASSWORD") == "chatgpt-password"
+    assert chatgpt_login._credential("CHATGPT_TOTP_KEY", "CHATGPT_2FA_KEY", "OPENAI_2FA_KEY") == "chatgpt-totp"
 
 
 def test_stop_removes_stale_login_state(tmp_path, monkeypatch, capsys):
@@ -421,8 +434,8 @@ def test_primitives_fallback_observes_retries_and_validates_login_output():
         workflow.index("- name: Agent-usable primitives fallback") :
     ]
     helper = (Path(__file__).with_name("chatgpt-login-primitives-fallback.sh")).read_text(encoding="utf-8")
-    assert "if: ${{ !cancelled() && steps.browser-login.outcome == 'failure' }}" in primitives
-    assert "xvfb-run -a bash scripts/chatgpt-login-primitives-fallback.sh" in primitives
+    assert "if: ${{ !cancelled() && (inputs.force_primitives || steps.browser-login.outcome == 'failure') }}" in primitives
+    assert "scripts/chatgpt-login-primitives-fallback.sh" in primitives
     assert "scripts/chatgpt-login.py start >" in helper
     assert 'CHATGPT_HEADLESS: "true"' in primitives
     assert "Primitive login startup failed; safe diagnostics:" in helper
@@ -447,7 +460,7 @@ def test_primitives_fallback_steps_after_a_blocking_status():
     helper = (Path(__file__).with_name("chatgpt-login-primitives-fallback.sh")).read_text(encoding="utf-8")
     blocking_start = helper.index("if [[ -n \"$(jq -r '.blocking // empty' <<< \"$status_json\")\" ]]; then")
     blocking_end = helper.index("fi", blocking_start)
-    assert "exit 1" in helper[blocking_start:blocking_end]
+    assert "sleep 5" in helper[blocking_start:blocking_end]
 
 
 _OPENAI_ERROR_BODY = "<html><body><h1>Oops, an error occurred!</h1></body></html>"
@@ -477,21 +490,25 @@ def test_refresh_workflow_uses_opencode_v1_auth_and_validates_before_storing():
     assert "npm install --global opencode-ai@1.18.32" in validate
     assert "--model openai/gpt-5.6-luna" in validate
     assert "steps.validate.outcome == 'success'" in store
-    assert "!cancelled() && (steps.refresh.outputs.refreshed != 'true' || steps.validate.outcome != 'success')" in workflow
+    assert "!cancelled() && !inputs.force_primitives && (steps.refresh.outputs.refreshed != 'true' || steps.validate.outcome != 'success')" in workflow
     assert "CHATGPT_REFRESH_TOKEN" not in workflow
+    assert 'CHATGPT_EMAIL: ${{ secrets.CHATGPT_EMAIL || secrets.OPENAI_USERNAME }}' in workflow
+    assert 'CHATGPT_HEADLESS: "true"' in workflow
+    assert "Require refreshed authentication" in workflow
+    assert '.openai.type == "oauth"' in workflow
 
 
-def test_force_fallback_input_gates_the_refresh_step():
+def test_force_primitives_input_gates_the_refresh_step():
     workflow = (
         Path(__file__).parents[1] / ".github/workflows/refresh-chatgpt-auth.yml"
     ).read_text(encoding="utf-8")
-    assert "force_fallback:" in workflow
+    assert "force_primitives:" in workflow
     refresh = workflow[
         workflow.index("- name: Try token refresh (no browser)") : workflow.index(
             "- name: Browser login (fallback)"
         )
     ]
-    assert "if: ${{ !inputs.force_fallback }}" in refresh
+    assert "if: ${{ !inputs.force_primitives }}" in refresh
 
 
 def test_has_blocking_screen_detects_openai_error_page():

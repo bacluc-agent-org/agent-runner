@@ -95,7 +95,10 @@ def _launch_browser(p, headless: bool, cdp_port: int | None = None):
     args = ["--disable-blink-features=AutomationControlled", "--no-sandbox"]
     if cdp_port is not None:
         args.append(f"--remote-debugging-port={cdp_port}")
-    return p.chromium.launch(headless=headless, channel="chrome", args=args)
+    try:
+        return p.chromium.launch(headless=headless, channel="chrome", args=args)
+    except Exception:
+        return p.chromium.launch(headless=headless, args=args)
 
 
 def _credential(name: str, *aliases: str) -> str | None:
@@ -739,11 +742,11 @@ def cmd_step() -> int:
             json.dump({"step": "done"}, sys.stdout)
             return 0
 
-        email = _credential("OPENAI_USERNAME", "CHATGPT_EMAIL")
-        password = _credential("OPENAI_PASSWORD", "CHATGPT_PASSWORD")
-        totp_key = _credential("OPENAI_2FA_KEY", "CHATGPT_2FA_KEY", "CHATGPT_TOTP_KEY")
+        email = _credential("CHATGPT_EMAIL", "OPENAI_USERNAME")
+        password = _credential("CHATGPT_PASSWORD", "OPENAI_PASSWORD")
+        totp_key = _credential("CHATGPT_TOTP_KEY", "CHATGPT_2FA_KEY", "OPENAI_2FA_KEY")
         if not email or not password:
-            print("OPENAI_USERNAME/CHATGPT_EMAIL and OPENAI_PASSWORD/CHATGPT_PASSWORD must be set", file=sys.stderr)
+            print("CHATGPT_EMAIL/OPENAI_USERNAME and CHATGPT_PASSWORD/OPENAI_PASSWORD must be set", file=sys.stderr)
             return 1
 
         page_errors = _watch_page_errors(page)
@@ -778,12 +781,12 @@ def cmd_step() -> int:
 
 
 def _full_login() -> int:
-    email = _credential("OPENAI_USERNAME", "CHATGPT_EMAIL")
-    password = _credential("OPENAI_PASSWORD", "CHATGPT_PASSWORD")
-    totp_key = _credential("OPENAI_2FA_KEY", "CHATGPT_2FA_KEY", "CHATGPT_TOTP_KEY")
+    email = _credential("CHATGPT_EMAIL", "OPENAI_USERNAME")
+    password = _credential("CHATGPT_PASSWORD", "OPENAI_PASSWORD")
+    totp_key = _credential("CHATGPT_TOTP_KEY", "CHATGPT_2FA_KEY", "OPENAI_2FA_KEY")
 
     if not email or not password:
-        print("OPENAI_USERNAME/CHATGPT_EMAIL and OPENAI_PASSWORD/CHATGPT_PASSWORD must be set", file=sys.stderr)
+        print("CHATGPT_EMAIL/OPENAI_USERNAME and CHATGPT_PASSWORD/OPENAI_PASSWORD must be set", file=sys.stderr)
         return 1
 
     verifier, _ = _generate_pkce()

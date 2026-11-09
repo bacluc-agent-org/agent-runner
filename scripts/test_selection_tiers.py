@@ -5,6 +5,12 @@ from tempfile import TemporaryDirectory
 from selection_tiers import Candidate, is_standing, parse_branches, render_prompt, select_tier, tier
 
 WORKFLOW = Path(__file__).parents[1] / ".github/workflows/hourly-issue.yml"
+REVIEW_WORKFLOW = Path(__file__).parents[1] / ".github/workflows/review-fixes.yml"
+EXCLUDED_REPOSITORIES = (
+    "bacluc-agent/agent-runner",
+    "bacluc-agent/agent-runner-1",
+    "bacluc-agent/agent-runner-2",
+)
 
 
 def candidate(number=1, **values):
@@ -118,6 +124,24 @@ def test_pr_lookup_variables_are_initialised_before_the_pr_feedback_lookup():
     content = WORKFLOW.read_text()
     assert content.index('pr_number=""') < content.index('gh pr view "$pr_number"')
     assert content.index('pr_repo=""') < content.index('gh pr view "$pr_number"')
+
+
+def test_automatic_repository_discovery_excludes_only_canonical_agent_runners():
+    hourly = WORKFLOW.read_text()
+    review = REVIEW_WORKFLOW.read_text()
+    for content in (hourly, review):
+        helper = content.index("is_excluded_repository()")
+        lookup_or_dispatch = content.index("gh repo view" if content is hourly else "declare -A seen")
+        assert helper < lookup_or_dispatch
+        for repository in EXCLUDED_REPOSITORIES:
+            assert repository in content
+        assert "bacluc/provision-machines" in content or "gh pr view" in content
+    assert hourly.index("is_excluded_repository \"$repo\" && continue") < hourly.index("gh repo view")
+    final_filter = hourly.index('for repo in "${repo_list[@]}"; do', hourly.index("filtered_repo_list"))
+    assert final_filter < hourly.index("is_excluded_repository \"$repo\" && continue", final_filter)
+    assert review.index('is_excluded_repository "${pr%#*}" && continue') < review.index("seen[$pr]=1")
+    assert "bacluc-agent/ecamp3" in hourly
+    assert "bacluc/provision-machines" in hourly
 
 
 def test_workflow_uses_latest_commit_and_created_at_when_pr_has_no_commits():

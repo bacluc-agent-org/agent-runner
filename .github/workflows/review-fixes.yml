@@ -59,10 +59,17 @@ jobs:
 
           prs_file="$RUNNER_TEMP/prs.json"
 
+          is_excluded_repository() {
+            case "$1" in
+              bacluc-agent/agent-runner|bacluc-agent/agent-runner-1|bacluc-agent/agent-runner-2) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
           declare -A seen
 
           while IFS= read -r pr; do
             [[ -n "$pr" ]] || continue
+            is_excluded_repository "${pr%#*}" && continue
             seen[$pr]=1
           done < <(
             gh api --paginate \
@@ -72,6 +79,7 @@ jobs:
 
           while IFS= read -r pr; do
             [[ -n "$pr" ]] || continue
+            is_excluded_repository "${pr%#*}" && continue
             seen[$pr]=1
           done < <(
             gh api --paginate \

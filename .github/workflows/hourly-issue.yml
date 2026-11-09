@@ -182,6 +182,12 @@ jobs:
           # referenced in candidate issue bodies (e.g. upstream ecamp/ecamp3).
           # Extracted mentions are filtered by existence on GitHub to drop path-like
           # noise (e.g. api/camps, e2e/tests) that the grep pattern also matches.
+          is_excluded_repository() {
+            case "$1" in
+              bacluc-agent/agent-runner|bacluc-agent/agent-runner-1|bacluc-agent/agent-runner-2) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
           repo_list=("$GITHUB_REPOSITORY" "$ISSUE_REPOSITORY" bacluc/provision-machines bacluc-agent/ecamp3)
           mapfile -t body_repos < <(jq -r '.[].body // ""' "$search_json" \
             | sed 's|https\?://[^/]*/||g; s|git@[^:]*:||g; s|github\.com/||g; s|\.git\b||g' \
@@ -190,6 +196,7 @@ jobs:
             | sort -u)
           existing_repos=()
           for repo in "${body_repos[@]}"; do
+            is_excluded_repository "$repo" && continue
             if gh repo view "$repo" --json nameWithOwner --jq .nameWithOwner >/dev/null 2>&1; then
               existing_repos+=("$repo")
             fi
@@ -201,6 +208,12 @@ jobs:
               *) repo_list+=("$repo") ;;
             esac
           done
+          filtered_repo_list=()
+          for repo in "${repo_list[@]}"; do
+            is_excluded_repository "$repo" && continue
+            filtered_repo_list+=("$repo")
+          done
+          repo_list=("${filtered_repo_list[@]}")
           if (( ${#repo_list[@]} > 20 )); then
             repo_list=("${repo_list[@]:0:20}")
           fi

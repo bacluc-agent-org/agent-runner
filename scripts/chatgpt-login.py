@@ -86,6 +86,14 @@ def _is_headless() -> bool:
     return os.environ.get("CHATGPT_HEADLESS", "").lower() in ("1", "true")
 
 
+def _credential(name: str, *aliases: str) -> str | None:
+    for key in (name, *aliases):
+        value = os.environ.get(key)
+        if value:
+            return value
+    return None
+
+
 _DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.7103.92 Safari/537.36"
 _DESKTOP_VIEWPORT = {"width": 1440, "height": 900}
 
@@ -230,7 +238,15 @@ def _step_for_path(path: str) -> str:
 
 
 def _redact_debug_text(value: str) -> str:
-    for name in ("OPENAI_USERNAME", "OPENAI_PASSWORD", "OPENAI_2FA_KEY"):
+    for name in (
+        "OPENAI_USERNAME",
+        "OPENAI_PASSWORD",
+        "OPENAI_2FA_KEY",
+        "CHATGPT_EMAIL",
+        "CHATGPT_PASSWORD",
+        "CHATGPT_2FA_KEY",
+        "CHATGPT_TOTP_KEY",
+    ):
         secret = os.environ.get(name)
         if secret:
             value = value.replace(secret, "[redacted]")
@@ -589,13 +605,10 @@ def cmd_start() -> int:
             return 1
 
         _log_step(page, "authorize")
-        blocking = _wait_for_blocking_clear(page, timeout_s=120)
+        blocking = _has_blocking_screen(page)
         if blocking:
             _capture_debug(page, "start", "authorize", blocking, page_errors)
             print(f"Login blocked: {blocking}", file=sys.stderr)
-            browser.close()
-            callback.close()
-            return 2
         print(
             f"[chatgpt-login] attach: playwright-cli attach --cdp=http://localhost:{cdp_port}; "
             f"drive: scripts/chatgpt-login.py status|step",
@@ -719,11 +732,11 @@ def cmd_step() -> int:
             json.dump({"step": "done"}, sys.stdout)
             return 0
 
-        email = os.environ.get("OPENAI_USERNAME")
-        password = os.environ.get("OPENAI_PASSWORD")
-        totp_key = os.environ.get("OPENAI_2FA_KEY")
+        email = _credential("CHATGPT_EMAIL", "OPENAI_USERNAME")
+        password = _credential("CHATGPT_PASSWORD", "OPENAI_PASSWORD")
+        totp_key = _credential("CHATGPT_TOTP_KEY", "CHATGPT_2FA_KEY", "OPENAI_2FA_KEY")
         if not email or not password:
-            print("OPENAI_USERNAME and OPENAI_PASSWORD must be set", file=sys.stderr)
+            print("CHATGPT_EMAIL/OPENAI_USERNAME and CHATGPT_PASSWORD/OPENAI_PASSWORD must be set", file=sys.stderr)
             return 1
 
         page_errors = _watch_page_errors(page)
@@ -758,12 +771,12 @@ def cmd_step() -> int:
 
 
 def _full_login() -> int:
-    email = os.environ.get("OPENAI_USERNAME")
-    password = os.environ.get("OPENAI_PASSWORD")
-    totp_key = os.environ.get("OPENAI_2FA_KEY")
+    email = _credential("CHATGPT_EMAIL", "OPENAI_USERNAME")
+    password = _credential("CHATGPT_PASSWORD", "OPENAI_PASSWORD")
+    totp_key = _credential("CHATGPT_TOTP_KEY", "CHATGPT_2FA_KEY", "OPENAI_2FA_KEY")
 
     if not email or not password:
-        print("OPENAI_USERNAME and OPENAI_PASSWORD must be set", file=sys.stderr)
+        print("CHATGPT_EMAIL/OPENAI_USERNAME and CHATGPT_PASSWORD/OPENAI_PASSWORD must be set", file=sys.stderr)
         return 1
 
     verifier, _ = _generate_pkce()

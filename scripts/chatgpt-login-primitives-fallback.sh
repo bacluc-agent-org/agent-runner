@@ -57,8 +57,7 @@ for name in ("CHATGPT_EMAIL", "CHATGPT_PASSWORD", "CHATGPT_TOTP_KEY"):
     if value:
         text = text.replace(value, "[redacted]")
 text = re.sub(r"(?i)(authorization|cookie|token|code|password|secret)\s*[:=]\s*[^\s,]+", r"\1=[redacted]", text)
-sys.stdout.write(text)' \
-    > "$snapshot_file"
+    sys.stdout.write(text)'
 }
 
 capture_snapshot() {

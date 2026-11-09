@@ -19,9 +19,9 @@ actions_file="$RUNNER_TEMP/chatgpt-login-recovery.actions"
 
 cleanup() {
   if [[ "$attached" == true ]]; then
-    timeout 20 playwright-cli "-s=$session" detach > /dev/null 2>&1 || true
+    run_bounded "${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}" playwright-cli "-s=$session" detach > /dev/null 2>&1 || true
   fi
-  uv run scripts/chatgpt-login.py stop > /dev/null 2>&1 || true
+  run_bounded "${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}" uv run scripts/chatgpt-login.py stop > /dev/null 2>&1 || true
   kill "$start_pid" > /dev/null 2>&1 || true
   wait "$start_pid" > /dev/null 2>&1 || true
   rm -f -- "$snapshot_file" "$actions_file" "$stderr_file"
@@ -166,6 +166,7 @@ recover() {
 }
 
 for _ in $(seq 1 120); do
+  remaining > /dev/null || break
   if ! kill -0 "$start_pid" > /dev/null 2>&1; then
     wait "$start_pid" || {
       printf 'Primitive login startup failed\n' >&2
@@ -173,7 +174,7 @@ for _ in $(seq 1 120); do
     }
     break
   fi
-  status_json=$(uv run scripts/chatgpt-login.py status 2> /dev/null) || status_json=''
+  status_json=$(run_bounded "${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}" uv run scripts/chatgpt-login.py status 2> /dev/null) || status_json=''
   if [[ -n "$status_json" ]] && jq -e 'type == "object" and (.error == null) and (.step | type == "string")' <<< "$status_json" > /dev/null; then
     if [[ -n "$(jq -r '.blocking // empty' <<< "$status_json")" ]]; then
       recover || {
@@ -187,7 +188,7 @@ for _ in $(seq 1 120); do
       uv run scripts/chatgpt-login.py step > /dev/null 2>&1 || true
     fi
   fi
-  sleep 1
+  run_bounded 1 sleep 1 || true
 done
 
 kill -0 "$start_pid" > /dev/null 2>&1 && {

@@ -23,7 +23,17 @@ cleanup() {
   fi
   run_bounded "${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}" uv run scripts/chatgpt-login.py stop > /dev/null 2>&1 || true
   kill "$start_pid" > /dev/null 2>&1 || true
-  wait "$start_pid" > /dev/null 2>&1 || true
+  for _ in $(seq 1 10); do
+    kill -0 "$start_pid" > /dev/null 2>&1 || {
+      wait "$start_pid" > /dev/null 2>&1 || true
+      break
+    }
+    run_bounded 1 sleep 0.1 || true
+  done
+  if kill -0 "$start_pid" > /dev/null 2>&1; then
+    kill -KILL "$start_pid" > /dev/null 2>&1 || true
+    wait "$start_pid" > /dev/null 2>&1 || true
+  fi
   rm -f -- "$snapshot_file" "$actions_file" "$stderr_file"
 }
 trap cleanup EXIT
@@ -185,7 +195,7 @@ for _ in $(seq 1 120); do
       wait "$start_pid"
       break
     else
-      uv run scripts/chatgpt-login.py step > /dev/null 2>&1 || true
+      run_bounded "${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}" uv run scripts/chatgpt-login.py step > /dev/null 2>&1 || true
     fi
   fi
   run_bounded 1 sleep 1 || true

@@ -22,6 +22,9 @@ if [[ ${3:-} == start ]]; then
   if [[ $mode == secret-action ]]; then
     while [[ ! -e "$RUNNER_TEMP/chatgpt-login-recovery.actions" ]]; do sleep 1; done
     printf '%s\\n' '{"openai":{"type":"oauth","access":"access","refresh":"refresh","expires":1}}'
+  elif [[ $mode == cleanup-hang ]]; then
+    trap '' TERM
+    while :; do sleep 1; done
   else
     trap 'exit 0' TERM
     while :; do sleep 1; done
@@ -30,6 +33,8 @@ elif [[ ${3:-} == status ]]; then
   printf 'status\\n' >> "$LOG_FILE"
   if [[ $mode == secret-action && -e "$RUNNER_TEMP/chatgpt-login-recovery.actions" ]]; then
     printf '%s\\n' '{"step":"authorize","code_ready":true}'
+  elif [[ $mode == step-hang ]]; then
+    printf '%s\\n' '{"step":"authorize"}'
   else
     printf '%s\\n' '{"step":"authorize","blocking":"login"}'
   fi
@@ -38,6 +43,7 @@ elif [[ ${3:-} == stop ]]; then
   printf 'stop %s %s\\n' "${CHATGPT_PASSWORD:-}" "${BACLUC_AGENT_GITHUB_TOKEN:-}" >> "$LOG_FILE"
   [[ $mode == stop-hang ]] && sleep 30
 elif [[ ${3:-} == step ]]; then
+  [[ $mode != step-hang ]] || sleep 30
   exit 0
 fi
 """,
@@ -59,10 +65,10 @@ esac
 set -eu
 printf 'opencode %s %s\\n' "${CHATGPT_PASSWORD:-}" "${BACLUC_AGENT_GITHUB_TOKEN:-}" >> "$LOG_FILE"
 case "$MODE" in
-  invalid-url|detach-hang|stop-hang) printf '%s\\n' '{"action":"goto","url":"https://evil.example/"}' > "$RUNNER_TEMP/chatgpt-login-recovery.actions" ;;
+  invalid-url|detach-hang|stop-hang|cleanup-hang) printf '%s\\n' '{"action":"goto","url":"https://evil.example/"}' > "$RUNNER_TEMP/chatgpt-login-recovery.actions" ;;
   secret-action) printf '%s\\n' '{"action":"fill_secret","ref":"e1","kind":"email"}' > "$RUNNER_TEMP/chatgpt-login-recovery.actions" ;;
 esac
-[[ $MODE == secret-action || $MODE == invalid-url || $MODE == detach-hang || $MODE == stop-hang ]] || exit 1
+[[ $MODE == secret-action || $MODE == invalid-url || $MODE == detach-hang || $MODE == stop-hang || $MODE == cleanup-hang ]] || exit 1
 """,
         encoding="utf-8",
     )
@@ -137,6 +143,19 @@ def test_status_and_cleanup_stop_share_handoff_deadline(tmp_path):
 
 def test_cleanup_stop_is_bounded_after_recovery_failure(tmp_path):
     result, elapsed, log = run_fallback(tmp_path, "stop-hang")
+    assert result.returncode != 0
+    assert elapsed < 5
+    assert "stop" in log
+
+
+def test_step_is_bounded_by_handoff_deadline(tmp_path):
+    result, elapsed, _ = run_fallback(tmp_path, "step-hang")
+    assert result.returncode != 0
+    assert elapsed < 5
+
+
+def test_cleanup_escalates_when_startup_ignores_term(tmp_path):
+    result, elapsed, log = run_fallback(tmp_path, "cleanup-hang")
     assert result.returncode != 0
     assert elapsed < 5
     assert "stop" in log

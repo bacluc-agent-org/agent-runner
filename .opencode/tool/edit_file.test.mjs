@@ -1,6 +1,12 @@
 import editFile from "./edit_file.ts";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -91,4 +97,26 @@ test("path escaping the worktree is rejected", async (t) => {
   assert.ok(typeof res === "string");
   assert.match(res, /outside the worktree/);
   assert.equal(readFileSync(file, "utf8"), "keep me\n");
+});
+
+test("symlink targets outside the worktree are rejected", async (t) => {
+  const ctx = mkCtx();
+  const outsideDir = mkdtempSync(join(tmpdir(), "edit-file-outside-"));
+  t.after(() => {
+    rmSync(ctx.worktree, { recursive: true, force: true });
+    rmSync(outsideDir, { recursive: true, force: true });
+  });
+  const outsideFile = join(outsideDir, "sentinel.txt");
+  const link = join(ctx.worktree, "linked.txt");
+  writeFileSync(outsideFile, "keep me\n");
+  symlinkSync(outsideFile, link);
+
+  const res = await editFile.execute(
+    { path: "linked.txt", search: "keep", replace: "changed" },
+    ctx,
+  );
+
+  assert.ok(typeof res === "string");
+  assert.match(res, /outside the worktree/);
+  assert.equal(readFileSync(outsideFile, "utf8"), "keep me\n");
 });

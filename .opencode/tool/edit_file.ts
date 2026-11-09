@@ -1,5 +1,5 @@
 import { tool } from "@opencode-ai/plugin";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 
 const contextPad = 3;
@@ -47,13 +47,21 @@ export default tool({
     }
     const base = context.worktree ?? context.directory;
     const abs = resolve(base, args.path);
-    const rel = relative(base, abs);
+    let realBase: string;
+    let realAbs: string;
+    try {
+      realBase = realpathSync(base);
+      realAbs = realpathSync(abs);
+    } catch (err) {
+      return `Cannot read '${args.path}': ${(err as Error).message}`;
+    }
+    const rel = relative(realBase, realAbs);
     if (rel.startsWith("..") || isAbsolute(rel)) {
       return `Path '${args.path}' is outside the worktree ${base}`;
     }
     let content: string;
     try {
-      content = readFileSync(abs, "utf8");
+      content = readFileSync(realAbs, "utf8");
     } catch (err) {
       return `Cannot read '${args.path}': ${(err as Error).message}`;
     }
@@ -81,7 +89,7 @@ export default tool({
       args.all === true
         ? content.replaceAll(args.search, replaceLiteral)
         : content.replace(args.search, replaceLiteral);
-    writeFileSync(abs, updated);
+    writeFileSync(realAbs, updated);
     const updatedLines = splitLines(updated);
     const endLine = startLine + args.replace.split("\n").length - 1;
     const from = Math.max(1, startLine - contextPad);

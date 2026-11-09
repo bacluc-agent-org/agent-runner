@@ -808,6 +808,25 @@ class TestAvailableModels:
             now,
         ) == []
 
+    def test_excludes_stale_provider_discovered_positive_entries(self):
+        now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)
+        cache = {
+            "opencode-go-openai/stale-model": {
+                "ok": True,
+                "checked": "2026-09-06T10:00:00Z",
+            },
+            "opencode-go-openai/fresh-model": {
+                "ok": True,
+                "checked": "2026-09-07T10:00:00Z",
+            },
+        }
+        assert model_availability.available_models(
+            cache,
+            [],
+            {"opencode-go-openai": ["stale-model", "fresh-model"]},
+            now,
+        ) == ["opencode-go-openai/fresh-model"]
+
 
 class TestResolveCacheIssue:
     def test_env_var_wins(self, monkeypatch):

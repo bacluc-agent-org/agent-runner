@@ -656,7 +656,7 @@ case "${3:-}" in
     if [[ "$FAKE_MODE" == success || "$FAKE_MODE" == invalid-output ]]; then
       touch "$RUNNER_TEMP/release-start"
       printf '%s\\n' '{"step":"done","blocking":null,"code_ready":true}'
-    elif [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == handoff-write-failure || "$FAKE_MODE" == agent-timeout-retry ]] && [[ -e "$RUNNER_TEMP/recovered" ]]; then
+    elif [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == handoff-write-failure || "$FAKE_MODE" == agent-timeout-retry || "$FAKE_MODE" == slow-command ]] && [[ -e "$RUNNER_TEMP/recovered" ]]; then
       touch "$RUNNER_TEMP/release-start"
       printf '%s\\n' '{"step":"done","blocking":null,"code_ready":true}'
     elif [[ "$FAKE_MODE" == changing-snapshot ]]; then
@@ -701,6 +701,9 @@ printf '%s\\n' "$*" > "$RUNNER_TEMP/gh-call"
     (fake_bin / "opencode").write_text(
         """#!/usr/bin/env bash
 set -Eeuo pipefail
+for name in BACLUC_AGENT_GITHUB_TOKEN BRAVE_API_KEY CHATGPT_EMAIL CHATGPT_PASSWORD CHATGPT_TOTP_KEY CHATGPT_2FA_KEY GH_TOKEN GITHUB_TOKEN OPENAI_2FA_KEY OPENAI_PASSWORD OPENAI_USERNAME OPENCODE_AUTH_CONTENT OPENCODE_GO_API_KEY OPENCODE_GO_2_API_KEY OPENROUTER_API_KEY; do
+  [[ -z "${!name:-}" ]] || { touch "$RUNNER_TEMP/agent-secret-env"; exit 1; }
+done
 if [[ "$FAKE_MODE" == agent-timeout-retry && ! -e "$RUNNER_TEMP/agent-retried" ]]; then
   touch "$RUNNER_TEMP/agent-retried"
   sleep 2
@@ -718,6 +721,8 @@ elif [[ "$FAKE_MODE" == changing-snapshot ]]; then
   printf '%s\\n' 'snapshot' 'fill_secret e1 email' > "$RUNNER_TEMP/chatgpt-login-recovery.commands"
 elif [[ "$FAKE_MODE" == agent-timeout-retry && -e "$RUNNER_TEMP/agent-retried" ]]; then
   printf '%s\\n' 'fill_secret e1 email' > "$RUNNER_TEMP/chatgpt-login-recovery.commands"
+elif [[ "$FAKE_MODE" == slow-command ]]; then
+  printf '%s\\n' 'click e1' > "$RUNNER_TEMP/chatgpt-login-recovery.commands"
 fi
 """,
         encoding="utf-8",
@@ -734,6 +739,10 @@ printf '%s\\n' "$call" >> "$RUNNER_TEMP/playwright-cli-calls"
 if [[ "$FAKE_MODE" == cli-failure ]]; then
   printf '%s\\n' 'secret-password cli failure' >&2
   exit 1
+fi
+if [[ "$FAKE_MODE" == slow-command && "${2:-}" == click ]]; then
+  sleep 2
+  touch "$RUNNER_TEMP/recovered"
 fi
 if [[ "$FAKE_MODE" == snapshot-partial-failure && "${2:-}" == snapshot ]]; then
   printf '%s\\n' 'partial snapshot secret-password'
@@ -778,6 +787,9 @@ fi
         "CHATGPT_EMAIL": "test@example.invalid",
         "CHATGPT_PASSWORD": "test-password",
         "CHATGPT_HEADLESS": "true",
+        "CHATGPT_TOTP_KEY": "test-totp-key",
+        "OPENCODE_GO_API_KEY": "test-api-key",
+        "BACLUC_AGENT_GITHUB_TOKEN": "test-token",
         "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "1",
     }
 
@@ -795,9 +807,9 @@ fi
     assert recovered.returncode == 0
     assert "test-access" in (tmp_path / "auth.json").read_text()
     assert (tmp_path / "agent-read-snapshot").exists()
+    assert not (tmp_path / "agent-secret-env").exists()
     snapshot = tmp_path / "chatgpt-login-recovery.snapshot"
-    assert snapshot.read_text() == "inspectable snapshot\n"
-    assert snapshot.stat().st_mode & 0o777 == 0o600
+    assert not snapshot.exists()
     assert (tmp_path / "playwright-cli-calls").read_text().splitlines() == [
         "-s=chatgpt-auth-recovery attach --cdp=http://127.0.0.1:9222",
         "-s=chatgpt-auth-recovery snapshot",
@@ -810,22 +822,10 @@ fi
         "-s=chatgpt-auth-recovery click e4",
         "-s=chatgpt-auth-recovery detach",
     ]
-    assert "Playwright handoff retained" in recovered.stderr
+    assert "Playwright handoff retained" not in recovered.stderr
     handoff = tmp_path / "chatgpt-login-recovery.handoff"
-    assert handoff.read_text() == f"""session=chatgpt-auth-recovery
-cdp=http://127.0.0.1:9222
-snapshot={snapshot}
-attach=playwright-cli -s=chatgpt-auth-recovery attach --cdp=http://127.0.0.1:9222
-inspect=playwright-cli -s=chatgpt-auth-recovery snapshot
-status=uv run scripts/chatgpt-login.py status
-step=uv run scripts/chatgpt-login.py step
-detach=playwright-cli -s=chatgpt-auth-recovery detach
-commands={tmp_path / "chatgpt-login-recovery.commands"}
-operations=snapshot|click|fill_secret|type_secret|otp|goto|press|check|uncheck|hover|status
-timeout_seconds=1
-command_timeout_seconds=20
-"""
-    assert handoff.stat().st_mode & 0o777 == 0o600
+    assert not handoff.exists()
+    assert not (tmp_path / "chatgpt-login-recovery.commands").exists()
     assert "reload" not in recovered.stderr.lower()
 
     (tmp_path / "playwright-cli-calls").unlink()
@@ -979,3 +979,23 @@ exec /bin/mv "$@"
         for path in tmp_path.rglob("*")
         if path.is_file() and fake_bin not in path.parents
     )
+
+    for path in tmp_path.iterdir():
+        if path.is_file():
+            path.unlink()
+    slow_command = subprocess.run(
+        ["bash", str(helper)],
+        env={
+            **env,
+            "FAKE_MODE": "slow-command",
+            "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "1",
+            "PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS": "2",
+            "PLAYWRIGHT_AGENT_TIMEOUT_SECONDS": "1",
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert slow_command.returncode != 0
+    assert not (tmp_path / "chatgpt-login-recovery.snapshot").exists()
+    assert not (tmp_path / "chatgpt-login-recovery.handoff").exists()

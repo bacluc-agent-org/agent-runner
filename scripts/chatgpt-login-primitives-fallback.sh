@@ -85,7 +85,25 @@ EOF
   local deadline=$((SECONDS + handoff_timeout))
   local handoff_ready=false
   while ((SECONDS < deadline)); do
-    if ! timeout "$command_timeout" playwright-cli "-s=$session" snapshot > "$snapshot_tmp" 2> /dev/null; then
+    run_with_deadline() {
+      local max_timeout="$1"
+      shift
+      local remaining=$((deadline - SECONDS))
+      ((remaining > 0)) || return 1
+      local operation_timeout="$max_timeout"
+      ((operation_timeout > remaining)) && operation_timeout=$remaining
+      timeout "$operation_timeout" "$@"
+    }
+    run_agent_with_deadline() {
+      local max_timeout="$1"
+      shift
+      local remaining=$((deadline - SECONDS))
+      ((remaining > 0)) || return 1
+      local operation_timeout="$max_timeout"
+      ((operation_timeout > remaining)) && operation_timeout=$remaining
+      env -u BACLUC_AGENT_GITHUB_TOKEN -u BRAVE_API_KEY -u CHATGPT_EMAIL -u CHATGPT_PASSWORD -u CHATGPT_TOTP_KEY -u CHATGPT_2FA_KEY -u GH_TOKEN -u GITHUB_TOKEN -u OPENAI_2FA_KEY -u OPENAI_PASSWORD -u OPENAI_USERNAME -u OPENCODE_AUTH_CONTENT -u OPENCODE_GO_API_KEY -u OPENCODE_GO_2_API_KEY -u OPENROUTER_API_KEY timeout "$operation_timeout" "$@"
+    }
+    if ! run_with_deadline "$command_timeout" playwright-cli "-s=$session" snapshot > "$snapshot_tmp" 2> /dev/null; then
       printf 'Playwright CLI could not capture the login page\n' >&2
       return 1
     fi
@@ -99,7 +117,7 @@ EOF
     ((remaining > 0)) || break
     local run_timeout="$agent_timeout"
     ((run_timeout > remaining)) && run_timeout=$remaining
-    if ! timeout "$run_timeout" opencode run --auto --model "$agent_model" --title chatgpt-auth-recovery "$recovery_prompt" > /dev/null 2>&1; then
+    if ! run_agent_with_deadline "$run_timeout" opencode run --auto --model "$agent_model" --title chatgpt-auth-recovery "$recovery_prompt" > /dev/null 2>&1; then
       ((SECONDS < deadline)) && sleep 1
       continue
     fi
@@ -116,25 +134,25 @@ EOF
         ((command_count <= 32)) || return 1
         case "$command" in
           snapshot)
-            timeout "$command_timeout" playwright-cli "-s=$session" snapshot > "$snapshot_tmp" 2> /dev/null || return 1
+            run_with_deadline "$command_timeout" playwright-cli "-s=$session" snapshot > "$snapshot_tmp" 2> /dev/null || return 1
             mv -f -- "$snapshot_tmp" "$snapshot_file" || return 1
             snapshot_tmp=$(mktemp "$snapshot_file.XXXXXX")
             chmod 600 "$snapshot_tmp"
             ;;
           click\ e[0-9]*)
-            timeout "$command_timeout" playwright-cli "-s=$session" click "${command#click }" > /dev/null 2>&1 || return 1
+            run_with_deadline "$command_timeout" playwright-cli "-s=$session" click "${command#click }" > /dev/null 2>&1 || return 1
             ;;
           hover\ e[0-9]*)
-            timeout "$command_timeout" playwright-cli "-s=$session" hover "${command#hover }" > /dev/null 2>&1 || return 1
+            run_with_deadline "$command_timeout" playwright-cli "-s=$session" hover "${command#hover }" > /dev/null 2>&1 || return 1
             ;;
           press\ [A-Za-z]*)
-            timeout "$command_timeout" playwright-cli "-s=$session" press "${command#press }" > /dev/null 2>&1 || return 1
+            run_with_deadline "$command_timeout" playwright-cli "-s=$session" press "${command#press }" > /dev/null 2>&1 || return 1
             ;;
           check\ e[0-9]*)
-            timeout "$command_timeout" playwright-cli "-s=$session" check "${command#check }" > /dev/null 2>&1 || return 1
+            run_with_deadline "$command_timeout" playwright-cli "-s=$session" check "${command#check }" > /dev/null 2>&1 || return 1
             ;;
           uncheck\ e[0-9]*)
-            timeout "$command_timeout" playwright-cli "-s=$session" uncheck "${command#uncheck }" > /dev/null 2>&1 || return 1
+            run_with_deadline "$command_timeout" playwright-cli "-s=$session" uncheck "${command#uncheck }" > /dev/null 2>&1 || return 1
             ;;
           fill_secret\ e[0-9]*\ email | fill_secret\ e[0-9]*\ password | type_secret\ e[0-9]*\ email | type_secret\ e[0-9]*\ password)
             secret_name="${command##* }"
@@ -143,16 +161,16 @@ EOF
             [[ -n "$secret_value" ]] || return 1
             cli_operation="fill"
             [[ "$command" == type_secret\ * ]] && cli_operation="type"
-            timeout "$command_timeout" playwright-cli "-s=$session" "$cli_operation" "${command#* }" "$secret_value" > /dev/null 2>&1 || return 1
+            run_with_deadline "$command_timeout" playwright-cli "-s=$session" "$cli_operation" "${command#* }" "$secret_value" > /dev/null 2>&1 || return 1
             ;;
           otp\ e[0-9]*)
             otp_code=$(CHATGPT_TOTP_KEY="${CHATGPT_TOTP_KEY:-${CHATGPT_2FA_KEY:-${OPENAI_2FA_KEY:-}}}" uv run python -c 'import os, pyotp; print(pyotp.TOTP(os.environ["CHATGPT_TOTP_KEY"]).now())') || return 1
             [[ "$otp_code" =~ ^[0-9]{6}$ ]] || return 1
-            timeout "$command_timeout" playwright-cli "-s=$session" fill "${command#otp }" "$otp_code" > /dev/null 2>&1 || return 1
+            run_with_deadline "$command_timeout" playwright-cli "-s=$session" fill "${command#otp }" "$otp_code" > /dev/null 2>&1 || return 1
             ;;
           goto\ https://auth.openai.com/* | goto\ https://chatgpt.com/*)
             [[ "${command#goto }" != *\?* && "${command#goto }" != *\#* ]] || return 1
-            timeout "$command_timeout" playwright-cli "-s=$session" goto "${command#goto }" > /dev/null 2>&1 || return 1
+            run_with_deadline "$command_timeout" playwright-cli "-s=$session" goto "${command#goto }" > /dev/null 2>&1 || return 1
             ;;
           status)
             ;;
@@ -165,13 +183,15 @@ EOF
       done < "$batch_file"
       rm -f -- "$batch_file"
     fi
-    status_json=$(uv run scripts/chatgpt-login.py status) || return 1
+    status_json=$(run_with_deadline "$command_timeout" uv run scripts/chatgpt-login.py status) || return 1
     printf '%s\n' "$status_json" | jq -e 'type == "object" and (.error == null) and (.step | type == "string")' > /dev/null || return 1
     if [[ "$(jq -r '.code_ready // false' <<< "$status_json")" == true ]]; then
       handoff_ready=true
       break
     fi
-    sleep 1
+    remaining=$((deadline - SECONDS))
+    ((remaining > 0)) || break
+    sleep $((remaining < 1 ? remaining : 1))
   done
   rm -f -- "$command_file"
   if [[ "$handoff_ready" != true ]]; then
@@ -187,8 +207,6 @@ EOF
     return 1
   fi
   handoff_tmp=''
-  trap - RETURN
-  printf 'Playwright handoff retained at %s; inspect %s and continue with the login status/step primitives\n' "$snapshot_file" "$handoff_file" >&2
 }
 
 for attempt in $(seq 1 120); do

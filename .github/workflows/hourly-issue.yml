@@ -360,7 +360,7 @@ jobs:
     with:
       prompt: ${{ needs.select.outputs.prompt }}
       issue_number: ${{ needs.select.outputs.issue_number }}
-      skip_model_availability: ${{ needs.select.outputs.skip_model_availability }}
+      skip_model_availability: ${{ fromJSON(needs.select.outputs.skip_model_availability) }}
       available_models: ${{ needs.select.outputs.available_models }}
       cache_issue: ${{ needs.select.outputs.cache_issue }}
     secrets: inherit

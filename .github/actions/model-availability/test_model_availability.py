@@ -1498,7 +1498,10 @@ class TestWorkflowModelAvailabilityHandoff:
         assert "skip_model_availability: ${{ true }}" in content
         assert "available_models: ${{ steps.model-availability.outputs.available-models }}" in content
         assert "cache_issue: ${{ steps.model-availability.outputs.cache-issue }}" in content
-        assert "skip_model_availability: ${{ needs.select.outputs.skip_model_availability }}" in content
+        assert (
+            "skip_model_availability: ${{ fromJSON(needs.select.outputs.skip_model_availability) }}"
+            in content
+        )
         assert "available_models: ${{ needs.select.outputs.available_models }}" in content
         assert "cache_issue: ${{ needs.select.outputs.cache_issue }}" in content
         assert "if: always() && needs.select.outputs.issue_number != ''" in content

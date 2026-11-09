@@ -166,6 +166,20 @@ jobs:
         run: |
           mv "$GITHUB_WORKSPACE/$DIAGNOSTICS_CHECKOUT" "$RUNNER_TEMP/agent-runner"
 
+      - name: Select coordinator progress checker
+        shell: bash
+        run: |
+          case "$GITHUB_REPOSITORY" in
+            bacluc-agent/agent-runner|bacluc-agent-org/agent-runner)
+              checker="$GITHUB_WORKSPACE/scripts/check_coordinator_progress.py"
+              ;;
+            *)
+              checker="$RUNNER_TEMP/agent-runner/scripts/check_coordinator_progress.py"
+              ;;
+          esac
+          [[ -f "$checker" ]] || { printf 'Missing coordinator progress checker: %s\n' "$checker" >&2; exit 1; }
+          printf 'COORDINATOR_PROGRESS_CHECKER=%s\n' "$checker" >> "$GITHUB_ENV"
+
       - name: Set up OpenCode
         uses: ./.github/actions/setup-opencode
 
@@ -487,7 +501,7 @@ jobs:
         if: steps.select-model.outcome == 'success'
         shell: bash
         run: |
-          python3 "$RUNNER_TEMP/agent-runner/scripts/check_coordinator_progress.py" \
+          python3 "$COORDINATOR_PROGRESS_CHECKER" \
             --snapshot \
             --workspace "$GITHUB_WORKSPACE" \
             --baseline "$RUNNER_TEMP/coordinator-baseline.json"
@@ -546,7 +560,7 @@ jobs:
           fi
 
           set +e
-          python3 "$RUNNER_TEMP/agent-runner/scripts/check_coordinator_progress.py" \
+          python3 "$COORDINATOR_PROGRESS_CHECKER" \
             --check \
             --workspace "$GITHUB_WORKSPACE" \
             --output "$RUNNER_TEMP/coordinator.out" \
@@ -573,7 +587,7 @@ jobs:
             exit "$coordinator_tee_status"
           fi
           set +e
-          python3 "$RUNNER_TEMP/agent-runner/scripts/check_coordinator_progress.py" \
+          python3 "$COORDINATOR_PROGRESS_CHECKER" \
             --check \
             --workspace "$GITHUB_WORKSPACE" \
             --output "$RUNNER_TEMP/coordinator.out" \

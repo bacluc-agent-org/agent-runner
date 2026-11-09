@@ -1485,13 +1485,23 @@ class TestWorkflowModelAvailabilityHandoff:
             assert f"      {input_name}:" in content
         assert "if: inputs.skip_model_availability != true" in content
         assert (
-            "${{ inputs.skip_model_availability && inputs.available_models || "
-            "steps.model-availability.outputs.available-models }}"
+            'SKIP_MODEL_AVAILABILITY: ${{ inputs.skip_model_availability }}'
         ) in content
+        assert 'PASSED_AVAILABLE_MODELS: ${{ inputs.available_models }}' in content
+        assert 'PROBED_AVAILABLE_MODELS: ${{ steps.model-availability.outputs.available-models }}' in content
         assert (
-            "${{ inputs.skip_model_availability && inputs.cache_issue || "
-            "steps.model-availability.outputs.cache-issue }}"
+            'AVAILABLE_MODELS="$PASSED_AVAILABLE_MODELS"' in content
+            and 'AVAILABLE_MODELS="$PROBED_AVAILABLE_MODELS"' in content
+        )
+        assert (
+            'SKIP_MODEL_AVAILABILITY: ${{ inputs.skip_model_availability }}'
         ) in content
+        assert 'PASSED_CACHE_ISSUE: ${{ inputs.cache_issue }}' in content
+        assert 'PROBED_CACHE_ISSUE: ${{ steps.model-availability.outputs.cache-issue }}' in content
+        assert (
+            'CACHE_ISSUE="$PASSED_CACHE_ISSUE"' in content
+            and 'CACHE_ISSUE="$PROBED_CACHE_ISSUE"' in content
+        )
 
     def test_hourly_workflow_passes_probe_outputs_to_reusable_workflow(self):
         content = self.HOURLY_WORKFLOW.read_text()
@@ -1512,3 +1522,8 @@ class TestWorkflowModelAvailabilityHandoff:
         assert 'default: false' in opencode[opencode.index("skip_model_availability:") :]
         assert "skip_model_availability:" not in review
         assert "model: ${{ inputs.model }}" in review
+
+        for path in (".github/workflows/kanban-manager.yml", ".github/workflows/standing-issue-manager.yml"):
+            caller = Path(path).read_text()
+            assert "uses: ./.github/workflows/opencode.yml" in caller
+            assert "skip_model_availability:" not in caller

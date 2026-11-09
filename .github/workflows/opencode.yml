@@ -208,7 +208,9 @@ jobs:
         env:
           MODEL_TEXT: ${{ inputs.model }}
           MODEL_CHOICE: ${{ inputs.model_choice }}
-          AVAILABLE_MODELS: ${{ inputs.skip_model_availability && inputs.available_models || steps.model-availability.outputs.available-models }}
+          SKIP_MODEL_AVAILABILITY: ${{ inputs.skip_model_availability }}
+          PASSED_AVAILABLE_MODELS: ${{ inputs.available_models }}
+          PROBED_AVAILABLE_MODELS: ${{ steps.model-availability.outputs.available-models }}
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
           BACLUC_AGENT_GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
           DISCOVERY_TIMEOUT: ${{ inputs.discovery_timeout_minutes || 5 }}
@@ -229,6 +231,11 @@ jobs:
             printf 'OPENCODE_AUTH_CONTENT is empty'
           fi
 
+          if [[ "$SKIP_MODEL_AVAILABILITY" == true ]]; then
+            AVAILABLE_MODELS="$PASSED_AVAILABLE_MODELS"
+          else
+            AVAILABLE_MODELS="$PROBED_AVAILABLE_MODELS"
+          fi
           available_models_file="$RUNNER_TEMP/available-models.txt"
           printf '%s\n' "$AVAILABLE_MODELS" > "$available_models_file"
           printf '\n\n\n\n\n\n'
@@ -562,10 +569,17 @@ jobs:
           MODEL: ${{ steps.fatal-guard.outputs.fatal-model || steps.select-model.outputs.model }}
           FATAL_REASON: ${{ steps.fatal-guard.outputs.fatal-reason }}
           FATAL_PROVIDER: ${{ steps.fatal-guard.outputs.fatal-provider }}
-          CACHE_ISSUE: ${{ inputs.skip_model_availability && inputs.cache_issue || steps.model-availability.outputs.cache-issue }}
+          SKIP_MODEL_AVAILABILITY: ${{ inputs.skip_model_availability }}
+          PASSED_CACHE_ISSUE: ${{ inputs.cache_issue }}
+          PROBED_CACHE_ISSUE: ${{ steps.model-availability.outputs.cache-issue }}
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
         run: |
           set -Eeuo pipefail
+          if [[ "$SKIP_MODEL_AVAILABILITY" == true ]]; then
+            CACHE_ISSUE="$PASSED_CACHE_ISSUE"
+          else
+            CACHE_ISSUE="$PROBED_CACHE_ISSUE"
+          fi
           cache_json=$(gh issue view "$CACHE_ISSUE" -R "$ISSUE_REPOSITORY" --json body --jq '.body' 2>/dev/null || echo '{}')
           checked="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           if [[ "$FATAL_REASON" == balance || "$FATAL_REASON" == auth ]]; then

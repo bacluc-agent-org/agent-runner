@@ -101,3 +101,42 @@ def test_successful_unchanged_run_is_incomplete(tmp_path):
 
     assert result.returncode == 1
     assert "incomplete" in result.stdout
+
+
+def test_nested_repository_artifacts_and_pointer_changes_are_ignored(tmp_path):
+    workspace = make_repo(tmp_path)
+    nested = workspace / "nested"
+    nested.mkdir()
+    git("init", cwd=nested)
+    git("config", "user.email", "test@example.com", cwd=nested)
+    git("config", "user.name", "Test", cwd=nested)
+    (nested / "nested.txt").write_text("before\n")
+    git("add", ".", cwd=nested)
+    git("commit", "-m", "nested initial", cwd=nested)
+    baseline = tmp_path / "baseline.json"
+    output = tmp_path / "coordinator.out"
+    snapshot(workspace, baseline)
+
+    (nested / "nested.txt").write_text("after\n")
+    output.write_text("completed\n")
+
+    result = run_check(workspace, output, baseline)
+
+    assert result.returncode == 1
+    assert "incomplete" in result.stdout
+
+
+def test_new_root_commit_is_observable_delivery(tmp_path):
+    workspace = make_repo(tmp_path)
+    baseline = tmp_path / "baseline.json"
+    output = tmp_path / "coordinator.out"
+    snapshot(workspace, baseline)
+    (workspace / "delivered.txt").write_text("delivered\n")
+    git("add", ".", cwd=workspace)
+    git("commit", "-m", "deliver", cwd=workspace)
+    output.write_text("completed\n")
+
+    result = run_check(workspace, output, baseline)
+
+    assert result.returncode == 0
+    assert "delivery" in result.stdout

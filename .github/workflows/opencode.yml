@@ -525,6 +525,7 @@ jobs:
               timeout "${timeout_minutes}m" opencode run --agent "$AGENT" --model "$MODEL" --title "$coordinator_session_title" "$3" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
             fi
             coordinator_statuses=("${PIPESTATUS[@]}")
+            printf '::%s::\n' "$stop_token"
             set -e
             coordinator_status=${coordinator_statuses[0]}
             coordinator_tee_status=${coordinator_statuses[1]}

@@ -24,6 +24,46 @@ def repository_roots(workspace):
     return sorted(roots)
 
 
+def nested_repository_paths(root):
+    result = subprocess.run(
+        ["git", "-C", root, "ls-files", "-s"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    paths = {
+        str(Path(root, line.split("\t", 1)[1]).resolve())
+        for line in result.stdout.splitlines()
+        if line.startswith("160000 ") and "\t" in line
+    }
+    paths.update(
+        candidate
+        for candidate in repository_roots(root)
+        if candidate != str(Path(root).resolve())
+    )
+    return sorted(paths)
+
+
+def relevant_status(root):
+    nested_paths = nested_repository_paths(root)
+    result = subprocess.run(
+        ["git", "-C", root, "status", "--porcelain=v1", "--untracked-files=all"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    status = []
+    for line in result.stdout.splitlines():
+        path = line[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        absolute_path = Path(root, path).resolve()
+        if any(absolute_path == nested or nested in absolute_path.parents for nested in nested_paths):
+            continue
+        status.append(line)
+    return "\n".join(status)
+
+
 def repository_state(root):
     head = subprocess.run(
         ["git", "-C", root, "rev-parse", "HEAD"],
@@ -31,22 +71,19 @@ def repository_state(root):
         capture_output=True,
         text=True,
     ).stdout.strip()
-    status = subprocess.run(
-        ["git", "-C", root, "status", "--porcelain=v1", "--untracked-files=all"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-    return {"head": head, "status": status}
+    return {"head": head, "status": relevant_status(root)}
 
 
 def snapshot(workspace):
-    return {root: repository_state(root) for root in repository_roots(workspace)}
+    root = str(Path(workspace).resolve())
+    return {root: repository_state(root)}
 
 
 def has_delivery(baseline, current):
     for root, state in current.items():
-        if root not in baseline or baseline[root] != state:
+        if root not in baseline:
+            return True
+        if state["head"] != baseline[root]["head"] or state["status"] != baseline[root]["status"]:
             return True
     return False
 

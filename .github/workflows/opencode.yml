@@ -620,6 +620,7 @@ jobs:
           BRANCH_NAME="agent-run/${ISSUE_NUMBER}-${GITHUB_RUN_ID}"
           PUSHED_REPOS=""
           PUSHED_SLUGS=""
+          PUSHED_BRANCH=""
           WORK_BRANCH=""
 
           # Find all git repos in the workspace (including subdirs)
@@ -641,7 +642,9 @@ jobs:
             if git diff --quiet HEAD 2>/dev/null && git diff --cached --quiet 2>/dev/null && [[ -z "$(git ls-files --others --exclude-standard)" ]]; then
               if [[ -n "$WORK_BRANCH" && "$current_branch" == "$WORK_BRANCH" ]]; then
                 remote_url=$(git remote get-url origin 2>/dev/null || true)
+                PUSHED_REPOS="${PUSHED_REPOS}${repo_dir} (${WORK_BRANCH})\n"
                 PUSHED_SLUGS="${PUSHED_SLUGS}$(printf '%s' "$remote_url" | sed -E 's#^.*github\.com[:/]+##; s#\.git$##')\n"
+                PUSHED_BRANCH="$WORK_BRANCH"
               fi
               printf 'No changes in %s\n' "$repo_dir"
               cd - >/dev/null
@@ -661,6 +664,7 @@ jobs:
             PUSHED_REPOS="${PUSHED_REPOS}${repo_dir} (${BRANCH_NAME})\n"
             # owner/repo slug of the pushed remote, for the org-wide PR lookup
             PUSHED_SLUGS="${PUSHED_SLUGS}$(printf '%s' "$remote_url" | sed -E 's#^.*github\.com[:/]+##; s#\.git$##')\n"
+            PUSHED_BRANCH="$BRANCH_NAME"
             cd - >/dev/null
           done < <(find "$GITHUB_WORKSPACE" -maxdepth 5 -name ".git" -type d 2>/dev/null)
 
@@ -674,7 +678,7 @@ jobs:
               echo "pushed_slugs<<EOF"
               printf '%b' "$PUSHED_SLUGS"
               echo "EOF"
-              echo "branch_name=${BRANCH_NAME}"
+              echo "branch_name=${PUSHED_BRANCH}"
             } >> "$GITHUB_OUTPUT"
           else
             printf 'No changes to push.\n'

@@ -104,3 +104,14 @@ def test_clean_coordinator_branch_preserves_repository_slug_for_validation():
     no_changes_output = body.index("else\n            printf 'No changes to push.")
     assert body.index("PUSHED_SLUGS=", branch_detection, no_changes_output) < no_changes_output
     assert "echo \"pushed_slugs<<EOF\"" in body[no_changes_output:]
+
+
+def test_clean_coordinator_branch_produces_a_valid_delivery_object():
+    body = Path(".github/workflows/opencode.yml").read_text(encoding="utf-8")
+    branch_detection = body.index('if [[ -z "$WORK_BRANCH"')
+    no_changes_output = body.index("else\n            printf 'No changes to push.")
+    clean_branch = body[branch_detection : body.index("printf 'No changes in", branch_detection)]
+    assert "PUSHED_REPOS=" in clean_branch
+
+    pushed_repos = "/workspace/repo (feature-branch)\n"
+    assert validate_delivery(delivery(pushed=bool(pushed_repos), pushed_slugs=[REPO])) == "code"

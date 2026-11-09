@@ -258,8 +258,14 @@ def auth_has_provider(provider: str, auth_path: str | None = None) -> bool:
 def provider_has_credentials(model_id: str, provider_options: dict, env: dict, auth_path: str | None = None) -> bool:
     """Configured providers require a resolved key; absent built-ins remain probeable."""
     provider = model_id.split("/", 1)[0] if "/" in model_id else ""
-    if not provider or provider not in provider_options:
+    if not provider:
         return True
+    if provider not in provider_options:
+        return (
+            provider in PROVIDER_WHITELISTS
+            or provider in dict(PROVIDERS)
+            or auth_has_provider(provider, auth_path)
+        )
     if auth_has_provider(provider, auth_path):
         return True
     options = provider_options[provider]

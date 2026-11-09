@@ -380,6 +380,17 @@ class TestDiscoverModels:
 EXAMPLE_OPENCODE_WHITELIST = [r"(?:-|:)free$", r"big-pickle", r"glm", r"gpt-5\.6-luna", r"qwen", r"kimi"]
 
 class TestProviderCredentials:
+    def test_unknown_cached_provider_needs_auth_evidence(self, tmp_path):
+        auth_path = tmp_path / "auth.json"
+        auth_path.write_text("{}")
+
+        assert not model_availability.provider_has_credentials(
+            "removed-provider/model", {}, {}, str(auth_path)
+        )
+        assert model_availability.provider_has_credentials(
+            "opencode/big-pickle", {}, {}, str(auth_path)
+        )
+
     def test_configured_provider_requires_resolved_key_and_url(self, tmp_path):
         config = {"custom": {"baseURL": "https://api.example/v1", "apiKey": "{env:A}{env:B}"}}
         path = tmp_path / "auth.json"
@@ -788,6 +799,31 @@ class TestMergeResults:
 
 
 class TestAvailableModels:
+    def test_discovery_fallback_excludes_removed_provider_cache_entries(self, tmp_path, monkeypatch):
+        auth_path = tmp_path / ".local/share/opencode/auth.json"
+        auth_path.parent.mkdir(parents=True)
+        auth_path.write_text('{"oauth-provider":{"access":"token"}}')
+        monkeypatch.setenv("HOME", str(tmp_path))
+        cache = {
+            "removed-provider/model": {"ok": True, "checked": "fresh"},
+            "opencode/big-pickle": {"ok": True, "checked": "fresh"},
+            "oauth-provider/model": {"ok": True, "checked": "fresh"},
+            "configured-provider/model": {"ok": True, "checked": "fresh"},
+        }
+        options = {"configured-provider": {"apiKey": "{env:API_KEY}"}}
+
+        assert model_availability.available_models(
+            cache,
+            list(cache),
+            {},
+            options,
+            {"API_KEY": "configured-key"},
+        ) == [
+            "opencode/big-pickle",
+            "oauth-provider/model",
+            "configured-provider/model",
+        ]
+
     def test_free_first_then_paid(self):
         cache = {
             "opencode-go-openai/glm-5.2": {"ok": True, "checked": "x"},

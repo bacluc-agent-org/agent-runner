@@ -2,7 +2,7 @@ from pathlib import Path
 from subprocess import run
 from tempfile import TemporaryDirectory
 
-from selection_tiers import Candidate, is_standing, parse_branches, render_prompt, select_tier, tier
+from selection_tiers import Candidate, is_claimed, is_standing, parse_branches, render_prompt, select_tier, tier
 
 WORKFLOW = Path(__file__).parents[1] / ".github/workflows/hourly-issue.yml"
 
@@ -51,6 +51,47 @@ def test_durable_attempt_label_counts_as_history_without_branch():
     assert "attempts for 42: 1" in result.stderr
     assert "Candidate tiers: 0=0 1=0 2=1 3=0" in result.stderr
     assert "[attempts: 1] [tier: 2]" in result.stdout
+
+
+def test_bare_and_run_scoped_claims_are_excluded_independently():
+    import json
+
+    with TemporaryDirectory() as directory:
+        candidates = Path(directory) / "candidates.json"
+        branches = Path(directory) / "branches.txt"
+        tail = Path(directory) / "tail.txt"
+        candidates.write_text(
+            json.dumps(
+                [
+                    {"number": 1, "labels": [{"name": "agent-running"}]},
+                    {"number": 2, "labels": [{"name": "agent-running:123"}]},
+                    {"number": 3, "labels": []},
+                ]
+            )
+        )
+        branches.write_text("")
+        tail.write_text("Choose\n")
+        result = run(
+            [
+                "python3",
+                "scripts/selection_tiers.py",
+                "--candidates",
+                str(candidates),
+                "--branches",
+                str(branches),
+                "--tail-file",
+                str(tail),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    assert is_claimed(["agent-running"])
+    assert is_claimed(["agent-running:123"])
+    assert not is_claimed(["agent-attempted"])
+    assert "3: " in result.stdout
+    assert "1: " not in result.stdout
+    assert "2: " not in result.stdout
 
 
 def test_tiers_cover_feedback_history_and_finished_work():
@@ -129,3 +170,13 @@ def test_workflow_uses_latest_commit_and_created_at_when_pr_has_no_commits():
     assert '([.[][] | .commit.committer.date] | max) // $fallback' in content
     assert 'pr_last_commit_at:(' in content
     assert 'map(select(test("^[0-9]")))|max // null' in content
+
+
+def test_workflow_claims_are_run_scoped_and_terminal_cleanup_is_conservative():
+    content = WORKFLOW.read_text()
+    assert 'claim_label="agent-running:${GITHUB_RUN_ID}"' in content
+    assert 'run_status" == completed' in content
+    assert '[[ "$run_status" == completed ]] || continue' in content
+    assert 'if: always()' in content
+    assert 'issues?state=all&labels=${claim_label}' in content
+    assert '--remove-label "$claim_label"' in content

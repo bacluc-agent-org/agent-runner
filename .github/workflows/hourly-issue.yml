@@ -29,10 +29,6 @@ permissions:
 
 jobs:
   select:
-    # ponytail: the release step does not run if the job is killed at timeout-minutes, so the
-    # claim leaks and the issue stays out of selection until a human unlabels it. Upgrade path:
-    # timeout-based claims — encode the run id in the claim (agent-running:<run_id>) and treat a
-    # claim whose run is no longer in-progress as expired at selection time.
     runs-on: blacksmith-2vcpu-ubuntu-2404-arm
     timeout-minutes: 120
     outputs:
@@ -97,6 +93,23 @@ jobs:
             --color 1D76DB --description 'Already attempted by the hourly issue runner' --force; then
             printf '::warning::could not ensure the agent-attempted label exists; attempt history may not apply\n'
           fi
+          claim_label="agent-running:${GITHUB_RUN_ID}"
+          if ! gh label create "$claim_label" -R "$ISSUE_REPOSITORY" \
+            --color 0E8A16 --description "Selected by hourly issue run ${GITHUB_RUN_ID}" --force; then
+            printf '::warning::could not ensure the run-scoped claim label exists\n'
+          fi
+
+          gh api --paginate "repos/${ISSUE_REPOSITORY}/issues?state=open&per_page=100" \
+            --jq '.[] | [.number, (.labels[]?.name // "")] | @tsv' > "$RUNNER_TEMP/open-claims.tsv"
+          while IFS=$'\t' read -r number label; do
+            [[ "$label" == agent-running:* ]] || continue
+            claim_run_id="${label#agent-running:}"
+            [[ "$claim_run_id" =~ ^[0-9]+$ ]] || continue
+            run_status="$(gh run view "$claim_run_id" --json status --jq '.status' 2>/dev/null || true)"
+            [[ "$run_status" == completed ]] || continue
+            gh issue edit "$number" -R "$ISSUE_REPOSITORY" --remove-label "$label" || \
+              printf '::warning::could not remove stale claim %s from #%s\n' "$label" "$number"
+          done < "$RUNNER_TEMP/open-claims.tsv"
 
           printf '\n\n\n\n\n\n'
           printf 'Fetching github issues...\n'
@@ -292,7 +305,7 @@ jobs:
             exit 1
           fi
           printf 'issue_number=%s\n' "$issue_number" >> "$GITHUB_OUTPUT"
-          if ! gh issue edit "$issue_number" -R "$ISSUE_REPOSITORY" --add-label agent-running,agent-attempted; then
+          if ! gh issue edit "$issue_number" -R "$ISSUE_REPOSITORY" --add-label "$claim_label,agent-attempted"; then
             printf '::warning::could not claim issue %s; dispatching unclaimed\n' "$issue_number"
           fi
           {
@@ -361,7 +374,7 @@ jobs:
 
   release:
     needs: [select, run]
-    if: always() && needs.select.outputs.issue_number != ''
+    if: always()
     permissions:
       issues: write
     runs-on: blacksmith-2vcpu-ubuntu-2404
@@ -371,11 +384,12 @@ jobs:
     steps:
       - name: Release the issue claim
         shell: bash
-        env:
-          ISSUE_NUMBER: ${{ needs.select.outputs.issue_number }}
         run: |
           set -Eeuo pipefail
           printf '::add-mask::%s\n' "$GITHUB_TOKEN"
-          if ! gh issue edit "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --remove-label agent-running; then
-            printf '::warning::could not remove agent-running from #%s; it stays claimed until unlabelled by hand\n' "$ISSUE_NUMBER"
-          fi
+          claim_label="agent-running:${GITHUB_RUN_ID}"
+          gh api --paginate "repos/${ISSUE_REPOSITORY}/issues?state=all&labels=${claim_label}&per_page=100" \
+            --jq '.[].number' | while IFS= read -r issue_number; do
+              gh issue edit "$issue_number" -R "$ISSUE_REPOSITORY" --remove-label "$claim_label" || \
+                printf '::warning::could not remove %s from #%s\n' "$claim_label" "$issue_number"
+            done

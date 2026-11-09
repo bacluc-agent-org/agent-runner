@@ -44,6 +44,14 @@ def is_standing(title: str, labels: list[str] | None = None) -> bool:
     )
 
 
+def is_claimed(labels: list[str]) -> bool:
+    return any(
+        label.casefold() == "agent-running"
+        or label.casefold().startswith("agent-running:")
+        for label in labels
+    )
+
+
 def _newer(left: str | None, right: str | None) -> bool:
     if not left or not right:
         return False
@@ -106,8 +114,10 @@ def main() -> None:
     candidates = []
     for issue in issues:
         number = int(issue["number"])
-        issue_runs = [run for candidate, run in runs if candidate == number]
         labels = [label["name"] for label in issue.get("labels", [])]
+        if is_claimed(labels):
+            continue
+        issue_runs = [run for candidate, run in runs if candidate == number]
         attempts = max(len(issue_runs), int(any(label.casefold() == "agent-attempted" for label in labels)))
         candidate = Candidate(
             number=number,

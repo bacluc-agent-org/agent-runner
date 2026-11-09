@@ -396,16 +396,21 @@ def merge_results(cache: dict, results: dict[str, bool], checked: str) -> dict:
 
 
 def available_models(
-    cache: dict, whitelisted_models: list[str], provider_models: dict[str, list[str]]
+    cache: dict,
+    whitelisted_models: list[str],
+    provider_models: dict[str, list[str]],
+    now: datetime,
 ) -> list[str]:
     available = []
     for model in whitelisted_models:
-        if cache.get(model, {}).get("ok"):
+        entry = cache.get(model)
+        if is_cache_fresh(entry, now) and entry["ok"]:
             available.append(model)
     for provider, _ in PROVIDERS:
         for model in provider_models.get(provider, []):
             candidate = f"{provider}/{model}"
-            if cache.get(candidate, {}).get("ok"):
+            entry = cache.get(candidate)
+            if is_cache_fresh(entry, now) and entry["ok"]:
                 available.append(candidate)
     return list(dict.fromkeys(available))
 
@@ -459,7 +464,7 @@ def main() -> int:
     cache = merge_results(cache, results, checked)
     if cache_issue is not None:
         write_cache(cache_issue, cache)
-    available = available_models(cache, whitelisted_models, provider_models)
+    available = available_models(cache, whitelisted_models, provider_models, now)
     write_outputs(cache_issue, cache, available)
     print("Available models:")
     print("\n".join(available) if available else "(none)")

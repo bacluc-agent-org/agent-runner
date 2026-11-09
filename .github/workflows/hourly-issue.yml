@@ -38,7 +38,7 @@ jobs:
     outputs:
       prompt: ${{ steps.pick.outputs.prompt }}
       issue_number: ${{ steps.pick.outputs.issue_number }}
-      skip_model_availability: ${{ true }}
+      skip_model_availability: ${{ steps.model-availability.outputs.available-models != '' && steps.model-availability.outputs.cache-issue != '' }}
       available_models: ${{ steps.model-availability.outputs.available-models }}
       cache_issue: ${{ steps.model-availability.outputs.cache-issue }}
     env:

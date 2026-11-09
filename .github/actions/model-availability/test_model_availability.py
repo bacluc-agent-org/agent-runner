@@ -781,21 +781,32 @@ class TestMergeResults:
 
 class TestAvailableModels:
     def test_free_first_then_paid(self):
+        now = datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc)
         cache = {
-            "opencode-go-openai/glm-5.2": {"ok": True, "checked": "x"},
-            "opencode/a-free": {"ok": True, "checked": "x"},
-            "opencode/b-free": {"ok": False, "checked": "x"},
-            "opencode-go-openai-2/glm-5.2": {"ok": True, "checked": "x"},
+            "opencode-go-openai/glm-5.2": {"ok": True, "checked": "2026-09-06T10:00:00Z"},
+            "opencode/a-free": {"ok": True, "checked": "2026-09-06T10:00:00Z"},
+            "opencode/b-free": {"ok": False, "checked": "2026-09-06T11:30:00Z"},
+            "opencode-go-openai-2/glm-5.2": {"ok": True, "checked": "2026-09-06T10:00:00Z"},
         }
         assert model_availability.available_models(
             cache,
             ["opencode/a-free", "opencode/b-free"],
             {"opencode-go-openai": ["glm-5.2"], "opencode-go-openai-2": ["glm-5.2"]},
+            now,
         ) == [
             "opencode/a-free",
             "opencode-go-openai/glm-5.2",
             "opencode-go-openai-2/glm-5.2",
         ]
+
+    def test_excludes_stale_positive_entries(self):
+        now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)
+        assert model_availability.available_models(
+            {"opencode/a-free": {"ok": True, "checked": "2026-09-06T10:00:00Z"}},
+            ["opencode/a-free"],
+            {},
+            now,
+        ) == []
 
 
 class TestResolveCacheIssue:
@@ -1528,7 +1539,10 @@ class TestWorkflowModelAvailabilityHandoff:
 
     def test_hourly_workflow_passes_probe_outputs_to_reusable_workflow(self):
         content = self.HOURLY_WORKFLOW.read_text()
-        assert "skip_model_availability: ${{ true }}" in content
+        assert (
+            "skip_model_availability: ${{ steps.model-availability.outputs.available-models != '' && steps.model-availability.outputs.cache-issue != '' }}"
+            in content
+        )
         assert "available_models: ${{ steps.model-availability.outputs.available-models }}" in content
         assert "cache_issue: ${{ steps.model-availability.outputs.cache-issue }}" in content
         assert (
@@ -1538,6 +1552,13 @@ class TestWorkflowModelAvailabilityHandoff:
         assert "available_models: ${{ needs.select.outputs.available_models }}" in content
         assert "cache_issue: ${{ needs.select.outputs.cache_issue }}" in content
         assert "if: always() && needs.select.outputs.issue_number != ''" in content
+
+    @pytest.mark.parametrize(
+        ("available_models", "cache_issue", "expected_skip"),
+        [("model", "491", True), ("", "491", False), ("model", "", False), ("", "", False)],
+    )
+    def test_hourly_handoff_requires_both_outputs(self, available_models, cache_issue, expected_skip):
+        assert bool(available_models and cache_issue) is expected_skip
 
     def test_direct_and_review_dispatch_keep_probe_default(self):
         opencode = self.OPENCODE_WORKFLOW.read_text()

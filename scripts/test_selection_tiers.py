@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 from subprocess import run
 from tempfile import TemporaryDirectory
 
@@ -142,6 +143,33 @@ def test_automatic_repository_discovery_excludes_only_canonical_agent_runners():
     assert review.index('is_excluded_repository "${pr%#*}" && continue') < review.index("seen[$pr]=1")
     assert "bacluc-agent/ecamp3" in hourly
     assert "bacluc/provision-machines" in hourly
+
+
+def _repository_is_excluded(content, repository):
+    helper = re.search(r"(?ms)^\s+is_excluded_repository\(\) \{\n.*?^\s+\}", content)
+    assert helper
+    result = run(
+        [
+            "bash",
+            "-Eeuo",
+            "pipefail",
+            "-c",
+            f"{helper.group(0)}\nis_excluded_repository {repository!r}",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def test_repository_filter_allows_near_matches_and_current_target():
+    for workflow in (WORKFLOW, REVIEW_WORKFLOW):
+        content = workflow.read_text()
+        assert _repository_is_excluded(content, "bacluc-agent/agent-runner")
+        assert _repository_is_excluded(content, "bacluc-agent/agent-runner-1")
+        assert _repository_is_excluded(content, "bacluc-agent/agent-runner-2")
+        assert not _repository_is_excluded(content, "bacluc-agent/agent-runner-10")
+        assert not _repository_is_excluded(content, "bacluc-agent-org/agent-runner")
 
 
 def test_workflow_uses_latest_commit_and_created_at_when_pr_has_no_commits():

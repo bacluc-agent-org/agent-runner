@@ -684,6 +684,7 @@ case "${3:-}" in
     ;;
   stop)
     touch "$RUNNER_TEMP/stopped"
+    rm -f "$RUNNER_TEMP/release-start"
     ;;
 esac
 """,

@@ -616,7 +616,7 @@ jobs:
 
             git checkout -B "$BRANCH_NAME" 2>/dev/null || git checkout "$BRANCH_NAME"
             git add -A
-            git commit -m "agent-run: automated commit for issue #${ISSUE_NUMBER} (run ${GITHUB_RUN_ID})" || true
+            git -c user.name=github-actions[bot] -c user.email=41898282+github-actions[bot]@users.noreply.github.com commit -m "agent-run: automated commit for issue #${ISSUE_NUMBER} (run ${GITHUB_RUN_ID})"
             remote_url=$(git remote get-url origin 2>/dev/null || true)
             git push -u origin "$BRANCH_NAME" 2>/dev/null || {
               # If origin push fails, try with token

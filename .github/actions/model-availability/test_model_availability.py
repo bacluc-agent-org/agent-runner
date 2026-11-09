@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import textwrap
 import types
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1479,6 +1480,28 @@ class TestWorkflowModelAvailabilityHandoff:
     HOURLY_WORKFLOW = Path(__file__).parents[3] / ".github/workflows/hourly-issue.yml"
     REVIEW_WORKFLOW = Path(__file__).parents[3] / ".github/workflows/review-fixes.yml"
 
+    @staticmethod
+    def _run_shell(script, env):
+        return subprocess.run(
+            ["bash", "-Eeuo", "pipefail", "-c", textwrap.dedent(script)],
+            env={**os.environ, **env},
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+    def _availability_selection_block(self):
+        content = self.OPENCODE_WORKFLOW.read_text()
+        start = content.index('if [[ "$SKIP_MODEL_AVAILABILITY" == true ]]; then')
+        end = content.index("available_models_file=", start)
+        return content[start:end]
+
+    def _cache_selection_block(self):
+        content = self.OPENCODE_WORKFLOW.read_text()
+        start = content.rindex('if [[ "$SKIP_MODEL_AVAILABILITY" == true ]]; then')
+        end = content.index("cache_json=", start)
+        return content[start:end]
+
     def test_reusable_workflow_accepts_passed_availability(self):
         content = self.OPENCODE_WORKFLOW.read_text()
         for input_name in ("skip_model_availability", "available_models", "cache_issue"):
@@ -1527,3 +1550,56 @@ class TestWorkflowModelAvailabilityHandoff:
             caller = Path(path).read_text()
             assert "uses: ./.github/workflows/opencode.yml" in caller
             assert "skip_model_availability:" not in caller
+
+    @pytest.mark.parametrize(
+        ("skip", "passed", "probed", "expected_models", "passed_cache", "probed_cache", "expected_cache"),
+        [
+            (
+                "true",
+                "opencode/first\nopencode/second",
+                "probe/ignored",
+                "opencode/first\nopencode/second",
+                "491",
+                "492",
+                "491",
+            ),
+            (
+                "false",
+                "passed/ignored",
+                "probe/first\nprobe/second",
+                "probe/first\nprobe/second",
+                "491",
+                "492",
+                "492",
+            ),
+            ("true", "", "probe/ignored", "", "", "492", ""),
+        ],
+    )
+    def test_handoff_branches_preserve_models_and_cache_issue(
+        self,
+        skip,
+        passed,
+        probed,
+        expected_models,
+        passed_cache,
+        probed_cache,
+        expected_cache,
+    ):
+        selection = self._run_shell(
+            self._availability_selection_block() + 'printf "models=%s\\n" "$AVAILABLE_MODELS"',
+            {
+                "SKIP_MODEL_AVAILABILITY": skip,
+                "PASSED_AVAILABLE_MODELS": passed,
+                "PROBED_AVAILABLE_MODELS": probed,
+            },
+        )
+        cache = self._run_shell(
+            self._cache_selection_block() + 'printf "cache=%s\\n" "$CACHE_ISSUE"',
+            {
+                "SKIP_MODEL_AVAILABILITY": skip,
+                "PASSED_CACHE_ISSUE": passed_cache,
+                "PROBED_CACHE_ISSUE": probed_cache,
+            },
+        )
+        assert selection.stdout == f"models={expected_models}\n"
+        assert cache.stdout == f"cache={expected_cache}\n"

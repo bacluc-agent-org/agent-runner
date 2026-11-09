@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import textwrap
 import types
 from datetime import datetime, timezone
 from pathlib import Path
@@ -780,21 +781,51 @@ class TestMergeResults:
 
 class TestAvailableModels:
     def test_free_first_then_paid(self):
+        now = datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc)
         cache = {
-            "opencode-go-openai/glm-5.2": {"ok": True, "checked": "x"},
-            "opencode/a-free": {"ok": True, "checked": "x"},
-            "opencode/b-free": {"ok": False, "checked": "x"},
-            "opencode-go-openai-2/glm-5.2": {"ok": True, "checked": "x"},
+            "opencode-go-openai/glm-5.2": {"ok": True, "checked": "2026-09-06T10:00:00Z"},
+            "opencode/a-free": {"ok": True, "checked": "2026-09-06T10:00:00Z"},
+            "opencode/b-free": {"ok": False, "checked": "2026-09-06T11:30:00Z"},
+            "opencode-go-openai-2/glm-5.2": {"ok": True, "checked": "2026-09-06T10:00:00Z"},
         }
         assert model_availability.available_models(
             cache,
             ["opencode/a-free", "opencode/b-free"],
             {"opencode-go-openai": ["glm-5.2"], "opencode-go-openai-2": ["glm-5.2"]},
+            now,
         ) == [
             "opencode/a-free",
             "opencode-go-openai/glm-5.2",
             "opencode-go-openai-2/glm-5.2",
         ]
+
+    def test_excludes_stale_positive_entries(self):
+        now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)
+        assert model_availability.available_models(
+            {"opencode/a-free": {"ok": True, "checked": "2026-09-06T10:00:00Z"}},
+            ["opencode/a-free"],
+            {},
+            now,
+        ) == []
+
+    def test_excludes_stale_provider_discovered_positive_entries(self):
+        now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)
+        cache = {
+            "opencode-go-openai/stale-model": {
+                "ok": True,
+                "checked": "2026-09-06T10:00:00Z",
+            },
+            "opencode-go-openai/fresh-model": {
+                "ok": True,
+                "checked": "2026-09-07T10:00:00Z",
+            },
+        }
+        assert model_availability.available_models(
+            cache,
+            [],
+            {"opencode-go-openai": ["stale-model", "fresh-model"]},
+            now,
+        ) == ["opencode-go-openai/fresh-model"]
 
 
 class TestResolveCacheIssue:
@@ -1472,3 +1503,143 @@ class TestWorkflowOpenRouterSelection:
             text=True,
         )
         assert kept.returncode == 0, "opencode/big-pickle must be kept"
+
+
+class TestWorkflowModelAvailabilityHandoff:
+    OPENCODE_WORKFLOW = Path(__file__).parents[3] / ".github/workflows/opencode.yml"
+    HOURLY_WORKFLOW = Path(__file__).parents[3] / ".github/workflows/hourly-issue.yml"
+    REVIEW_WORKFLOW = Path(__file__).parents[3] / ".github/workflows/review-fixes.yml"
+
+    @staticmethod
+    def _run_shell(script, env):
+        return subprocess.run(
+            ["bash", "-Eeuo", "pipefail", "-c", textwrap.dedent(script)],
+            env={**os.environ, **env},
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+    def _availability_selection_block(self):
+        content = self.OPENCODE_WORKFLOW.read_text()
+        start = content.index('if [[ "$SKIP_MODEL_AVAILABILITY" == true ]]; then')
+        end = content.index("available_models_file=", start)
+        return content[start:end]
+
+    def _cache_selection_block(self):
+        content = self.OPENCODE_WORKFLOW.read_text()
+        start = content.rindex('if [[ "$SKIP_MODEL_AVAILABILITY" == true ]]; then')
+        end = content.index("cache_json=", start)
+        return content[start:end]
+
+    def test_reusable_workflow_accepts_passed_availability(self):
+        content = self.OPENCODE_WORKFLOW.read_text()
+        for input_name in ("skip_model_availability", "available_models", "cache_issue"):
+            assert f"      {input_name}:" in content
+        assert "if: inputs.skip_model_availability != true" in content
+        assert (
+            'SKIP_MODEL_AVAILABILITY: ${{ inputs.skip_model_availability }}'
+        ) in content
+        assert 'PASSED_AVAILABLE_MODELS: ${{ inputs.available_models }}' in content
+        assert 'PROBED_AVAILABLE_MODELS: ${{ steps.model-availability.outputs.available-models }}' in content
+        assert (
+            'AVAILABLE_MODELS="$PASSED_AVAILABLE_MODELS"' in content
+            and 'AVAILABLE_MODELS="$PROBED_AVAILABLE_MODELS"' in content
+        )
+        assert (
+            'SKIP_MODEL_AVAILABILITY: ${{ inputs.skip_model_availability }}'
+        ) in content
+        assert 'PASSED_CACHE_ISSUE: ${{ inputs.cache_issue }}' in content
+        assert 'PROBED_CACHE_ISSUE: ${{ steps.model-availability.outputs.cache-issue }}' in content
+        assert (
+            'CACHE_ISSUE="$PASSED_CACHE_ISSUE"' in content
+            and 'CACHE_ISSUE="$PROBED_CACHE_ISSUE"' in content
+        )
+
+    def test_hourly_workflow_passes_probe_outputs_to_reusable_workflow(self):
+        content = self.HOURLY_WORKFLOW.read_text()
+        assert (
+            "skip_model_availability: ${{ steps.model-availability.outputs.available-models != '' && steps.model-availability.outputs.cache-issue != '' }}"
+            in content
+        )
+        assert "available_models: ${{ steps.model-availability.outputs.available-models }}" in content
+        assert "cache_issue: ${{ steps.model-availability.outputs.cache-issue }}" in content
+        assert (
+            "skip_model_availability: ${{ fromJSON(needs.select.outputs.skip_model_availability) }}"
+            in content
+        )
+        assert "available_models: ${{ needs.select.outputs.available_models }}" in content
+        assert "cache_issue: ${{ needs.select.outputs.cache_issue }}" in content
+        assert "if: always() && needs.select.outputs.issue_number != ''" in content
+
+    @pytest.mark.parametrize(
+        ("available_models", "cache_issue", "expected_skip"),
+        [("model", "491", True), ("", "491", False), ("model", "", False), ("", "", False)],
+    )
+    def test_hourly_handoff_requires_both_outputs(self, available_models, cache_issue, expected_skip):
+        assert bool(available_models and cache_issue) is expected_skip
+
+    def test_direct_and_review_dispatch_keep_probe_default(self):
+        opencode = self.OPENCODE_WORKFLOW.read_text()
+        review = self.REVIEW_WORKFLOW.read_text()
+        assert 'default: false' in opencode[opencode.index("skip_model_availability:") :]
+        assert "skip_model_availability:" not in review
+        assert "model: ${{ inputs.model }}" in review
+
+        for path in (".github/workflows/kanban-manager.yml", ".github/workflows/standing-issue-manager.yml"):
+            caller = Path(path).read_text()
+            assert "uses: ./.github/workflows/opencode.yml" in caller
+            assert "skip_model_availability:" not in caller
+
+    @pytest.mark.parametrize(
+        ("skip", "passed", "probed", "expected_models", "passed_cache", "probed_cache", "expected_cache"),
+        [
+            (
+                "true",
+                "opencode/first\nopencode/second",
+                "probe/ignored",
+                "opencode/first\nopencode/second",
+                "491",
+                "492",
+                "491",
+            ),
+            (
+                "false",
+                "passed/ignored",
+                "probe/first\nprobe/second",
+                "probe/first\nprobe/second",
+                "491",
+                "492",
+                "492",
+            ),
+            ("true", "", "probe/ignored", "", "", "492", ""),
+        ],
+    )
+    def test_handoff_branches_preserve_models_and_cache_issue(
+        self,
+        skip,
+        passed,
+        probed,
+        expected_models,
+        passed_cache,
+        probed_cache,
+        expected_cache,
+    ):
+        selection = self._run_shell(
+            self._availability_selection_block() + 'printf "models=%s\\n" "$AVAILABLE_MODELS"',
+            {
+                "SKIP_MODEL_AVAILABILITY": skip,
+                "PASSED_AVAILABLE_MODELS": passed,
+                "PROBED_AVAILABLE_MODELS": probed,
+            },
+        )
+        cache = self._run_shell(
+            self._cache_selection_block() + 'printf "cache=%s\\n" "$CACHE_ISSUE"',
+            {
+                "SKIP_MODEL_AVAILABILITY": skip,
+                "PASSED_CACHE_ISSUE": passed_cache,
+                "PROBED_CACHE_ISSUE": probed_cache,
+            },
+        )
+        assert selection.stdout == f"models={expected_models}\n"
+        assert cache.stdout == f"cache={expected_cache}\n"

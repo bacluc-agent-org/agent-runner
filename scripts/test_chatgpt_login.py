@@ -789,8 +789,7 @@ fi
         "CHATGPT_HEADLESS": "true",
         "CHATGPT_TOTP_KEY": "test-totp-key",
         "OPENCODE_GO_API_KEY": "test-api-key",
-        "BACLUC_AGENT_GITHUB_TOKEN": "test-token",
-        "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "1",
+        "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "5",
     }
 
     success = subprocess.run(
@@ -880,7 +879,7 @@ exec /bin/mv "$@"
     (tmp_path / "gh-call").unlink()
     (tmp_path / "playwright-cli-calls").unlink()
     blocked = subprocess.run(
-        ["bash", str(helper)], env={**env, "FAKE_MODE": "blocked"}, capture_output=True, text=True, timeout=10
+        ["bash", str(helper)], env={**env, "FAKE_MODE": "blocked", "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "1"}, capture_output=True, text=True, timeout=10
     )
     assert blocked.returncode != 0
     assert (tmp_path / "stopped").exists()

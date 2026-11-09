@@ -38,9 +38,21 @@ recover_blocking_login() {
     return 1
   fi
 
+  local deadline=$((SECONDS + handoff_timeout))
+
+  run_with_deadline() {
+    local max_timeout="$1"
+    shift
+    local remaining=$((deadline - SECONDS))
+    ((remaining > 0)) || return 1
+    local operation_timeout="$max_timeout"
+    ((operation_timeout > remaining)) && operation_timeout=$remaining
+    timeout "$operation_timeout" "$@"
+  }
+
   cleanup_recovery() {
     if [[ "$attached" == true ]]; then
-      playwright-cli "-s=$session" detach > /dev/null 2>&1 || true
+      run_with_deadline "$handoff_timeout" playwright-cli "-s=$session" detach > /dev/null 2>&1 || true
       attached=false
     fi
     rm -f -- "$snapshot_tmp" "$handoff_tmp" "$command_tmp" "$snapshot_file" "$handoff_file" "$command_file"
@@ -54,7 +66,7 @@ recover_blocking_login() {
   mv -f -- "$command_tmp" "$command_file"
   command_tmp=''
 
-  if ! playwright-cli "-s=$session" attach "--cdp=http://127.0.0.1:$cdp_port" > /dev/null 2>&1; then
+  if ! run_with_deadline "$handoff_timeout" playwright-cli "-s=$session" attach "--cdp=http://127.0.0.1:$cdp_port" > /dev/null 2>&1; then
     printf 'Playwright CLI could not attach to the login browser\n' >&2
     return 1
   fi
@@ -82,18 +94,8 @@ Allowed commands are exactly: snapshot, click eN, fill_secret eN email|password,
 Use symbolic secret commands for credentials and otp for TOTP; never read, print, or write credential values. Use only refs from the snapshot and safe auth URLs without query strings or fragments. Keep the batch at most 32 commands. Do not call playwright-cli directly, modify any other file, or report secrets.
 EOF
   )
-  local deadline=$((SECONDS + handoff_timeout))
   local handoff_ready=false
   while ((SECONDS < deadline)); do
-    run_with_deadline() {
-      local max_timeout="$1"
-      shift
-      local remaining=$((deadline - SECONDS))
-      ((remaining > 0)) || return 1
-      local operation_timeout="$max_timeout"
-      ((operation_timeout > remaining)) && operation_timeout=$remaining
-      timeout "$operation_timeout" "$@"
-    }
     run_agent_with_deadline() {
       local max_timeout="$1"
       shift
@@ -198,7 +200,7 @@ EOF
     printf 'Playwright handoff timed out\n' >&2
     return 1
   fi
-  if ! playwright-cli "-s=$session" detach > /dev/null 2>&1; then
+  if ! run_with_deadline "$handoff_timeout" playwright-cli "-s=$session" detach > /dev/null 2>&1; then
     printf 'Playwright CLI could not detach from the login browser\n' >&2
     return 1
   fi

@@ -3,6 +3,7 @@ import inspect
 import json
 import os
 import subprocess
+import time
 import types
 from pathlib import Path
 
@@ -737,6 +738,9 @@ call="${call//test@example.invalid/[redacted]}"
 call="${call//test-password/[redacted]}"
 call="${call//123456/[redacted]}"
 printf '%s\\n' "$call" >> "$RUNNER_TEMP/playwright-cli-calls"
+if [[ "$FAKE_MODE" == attach-hang && "${2:-}" == attach ]]; then
+  sleep 5
+fi
 if [[ "$FAKE_MODE" == cli-failure ]]; then
   printf '%s\\n' 'secret-password cli failure' >&2
   exit 1
@@ -753,7 +757,7 @@ if [[ "$FAKE_MODE" == snapshot-failure && "${2:-}" == snapshot ]]; then
   printf '%s\\n' 'secret-password snapshot failure' >&2
   exit 1
 fi
-if [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == handoff-write-failure || "$FAKE_MODE" == agent-timeout-retry ]] && [[ "${2:-}" == snapshot ]]; then
+if [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == detach-hang || "$FAKE_MODE" == handoff-write-failure || "$FAKE_MODE" == agent-timeout-retry ]] && [[ "${2:-}" == snapshot ]]; then
   touch "$RUNNER_TEMP/recovered"
   printf '%s\\n' 'inspectable snapshot'
 fi
@@ -770,6 +774,9 @@ if [[ "$FAKE_MODE" == agent-timeout-retry && "${2:-}" != snapshot ]]; then
 fi
 if [[ "$FAKE_MODE" == changing-snapshot && "${2:-}" != snapshot ]]; then
   touch "$RUNNER_TEMP/recovered"
+fi
+if [[ "$FAKE_MODE" == detach-hang && "${2:-}" == detach ]]; then
+  sleep 5
 fi
 if [[ "$FAKE_MODE" == detach-failure && "${2:-}" == detach ]]; then
   exit 1
@@ -825,6 +832,31 @@ fi
     assert "Playwright handoff retained" not in recovered.stderr
     handoff = tmp_path / "chatgpt-login-recovery.handoff"
     assert not handoff.exists()
+
+    started = time.monotonic()
+    attach_hang = subprocess.run(
+        ["bash", str(helper)],
+        env={**env, "FAKE_MODE": "attach-hang", "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "1"},
+        capture_output=True,
+        text=True,
+        timeout=4,
+    )
+    assert attach_hang.returncode != 0
+    assert time.monotonic() - started < 2
+    assert (tmp_path / "stopped").exists()
+
+    (tmp_path / "stopped").unlink()
+    started = time.monotonic()
+    detach_hang = subprocess.run(
+        ["bash", str(helper)],
+        env={**env, "FAKE_MODE": "detach-hang", "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "1"},
+        capture_output=True,
+        text=True,
+        timeout=4,
+    )
+    assert detach_hang.returncode != 0
+    assert time.monotonic() - started < 2
+    assert (tmp_path / "stopped").exists()
     assert not (tmp_path / "chatgpt-login-recovery.commands").exists()
     assert "reload" not in recovered.stderr.lower()
 
@@ -888,7 +920,6 @@ exec /bin/mv "$@"
     assert (tmp_path / "playwright-cli-calls").read_text().splitlines() == [
         "-s=chatgpt-auth-recovery attach --cdp=http://127.0.0.1:9222",
         "-s=chatgpt-auth-recovery snapshot",
-        "-s=chatgpt-auth-recovery detach",
     ]
 
     (tmp_path / "stopped").unlink()

@@ -1,4 +1,8 @@
+import os
 from pathlib import Path
+from subprocess import run
+from tempfile import TemporaryDirectory
+from textwrap import dedent
 
 import pytest
 
@@ -106,12 +110,58 @@ def test_clean_coordinator_branch_preserves_repository_slug_for_validation():
     assert "echo \"pushed_slugs<<EOF\"" in body[no_changes_output:]
 
 
-def test_clean_coordinator_branch_produces_a_valid_delivery_object():
+def test_clean_coordinator_branch_output_is_consumed_by_delivery_validation():
     body = Path(".github/workflows/opencode.yml").read_text(encoding="utf-8")
-    branch_detection = body.index('if [[ -z "$WORK_BRANCH"')
-    no_changes_output = body.index("else\n            printf 'No changes to push.")
-    clean_branch = body[branch_detection : body.index("printf 'No changes in", branch_detection)]
-    assert "PUSHED_REPOS=" in clean_branch
+    step = body[body.index("      - name: Ensure work is pushed") : body.index("      - name: Validate delivery")]
+    script = dedent(step[step.index("        run: |\n") + len("        run: |\n") :])
 
-    pushed_repos = "/workspace/repo (feature-branch)\n"
-    assert validate_delivery(delivery(pushed=bool(pushed_repos), pushed_slugs=[REPO])) == "code"
+    with TemporaryDirectory() as directory:
+        workspace = Path(directory) / "repo"
+        workspace.mkdir()
+        run(["git", "init", "-q", "-b", "feature-branch", str(workspace)], check=True)
+        (workspace / "tracked.txt").write_text("clean\n", encoding="utf-8")
+        run(["git", "-C", str(workspace), "add", "tracked.txt"], check=True)
+        run(
+            ["git", "-C", str(workspace), "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qm", "fixture"],
+            check=True,
+        )
+        run(["git", "-C", str(workspace), "remote", "add", "origin", f"https://github.com/{REPO}.git"], check=True)
+        output = Path(directory) / "github-output"
+        result = run(
+            ["bash", "-Eeuo", "pipefail", "-c", script],
+            check=True,
+            capture_output=True,
+            text=True,
+            env={
+                **os.environ,
+                "GITHUB_OUTPUT": str(output),
+                "GITHUB_WORKSPACE": str(workspace),
+                "GITHUB_TOKEN": "test-token",
+                "ISSUE_NUMBER": "433",
+            },
+        )
+        assert "No changes in" in result.stdout
+
+        values = {}
+        multiline = None
+        for line in output.read_text(encoding="utf-8").splitlines():
+            if line.endswith("<<EOF"):
+                multiline = line[:-5]
+                values[multiline] = []
+            elif line == "EOF":
+                multiline = None
+            elif multiline is not None:
+                values[multiline].append(line)
+            else:
+                key, value = line.split("=", 1)
+                values[key] = value
+
+    pushed_repos = "\n".join(values["pushed_repos"])
+    pushed_slugs = values["pushed_slugs"]
+    branch = values["branch_name"]
+    assert pushed_repos.endswith("/repo (feature-branch)")
+    assert pushed_slugs == [REPO]
+    assert branch == "feature-branch"
+    assert validate_delivery(
+        delivery(pushed=bool(pushed_repos), branch=branch, pushed_slugs=pushed_slugs)
+    ) == "code"

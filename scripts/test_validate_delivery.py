@@ -81,7 +81,12 @@ def test_rejects_invalid_missing_or_stale_delivery(changes):
 
 
 def test_accepts_valid_no_code_report():
-    assert validate_delivery(delivery(changed=False, pushed=False, branch="", prs=[])) == "report"
+    assert validate_delivery(delivery(changed=False, pushed=False, pushed_slugs=[], branch="", prs=[])) == "report"
+
+
+def test_rejects_no_code_delivery_that_claims_a_push():
+    with pytest.raises(DeliveryError):
+        validate_delivery(delivery(changed=False, pushed=True, pushed_slugs=[REPO], branch="", prs=[]))
 
 
 def test_workflow_orders_validation_after_push_and_before_completion_status():

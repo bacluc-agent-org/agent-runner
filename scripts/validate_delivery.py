@@ -84,11 +84,23 @@ def validate_delivery(delivery: dict[str, Any]) -> str:
 
     prs = delivery.get("prs")
     if delivery.get("changed") is not True:
-        if delivery.get("changed") is not False or prs or delivery.get("branch"):
+        if (
+            delivery.get("changed") is not False
+            or prs
+            or delivery.get("pushed")
+            or delivery.get("branch")
+            or delivery.get("pushed_slugs")
+        ):
             raise DeliveryError("no-code delivery is incomplete")
         return "report"
     slugs = delivery.get("pushed_slugs")
-    if not delivery.get("pushed") or not delivery.get("branch") or not isinstance(slugs, list) or not slugs:
+    if (
+        not delivery.get("pushed")
+        or not delivery.get("branch")
+        or not isinstance(slugs, list)
+        or not slugs
+        or len(slugs) != len(set(slugs))
+    ):
         raise DeliveryError("code delivery lacks a pushed branch")
     if not isinstance(prs, list) or len(prs) != len(set(slugs)):
         raise DeliveryError("code delivery must have one pull request per repository")

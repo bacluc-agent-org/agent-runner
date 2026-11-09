@@ -45,7 +45,7 @@ def test_comment_lines_contain_no_pipe():
             assert "|" not in line
 
 
-def test_denies_every_gpt_6_luna_variant():
+def test_keeps_every_gpt_6_luna_variant():
     for model in [
         "openai/gpt-6-luna",
         "openai/gpt-6-luna-fast",
@@ -53,7 +53,7 @@ def test_denies_every_gpt_6_luna_variant():
         "opencode-go-openai/gpt-6-luna",
         "opencode-go-openai-2/gpt-6-luna",
     ]:
-        assert is_denied(model), f"{model} must be deny-listed"
+        assert not is_denied(model), f"{model} must be kept"
 
 
 def test_keeps_gpt_5_6_luna():

@@ -71,19 +71,14 @@ def set_open_pr(lines: list[str], pr_urls: list[str]) -> None:
     lines[start + 1 : end] = ["", *pr_urls, ""]
 
 
-def authenticated_login() -> str:
-    return run_gh("api", "user", "--jq", ".login").strip()
-
-
 def find_comment(issue: str, repo: str) -> dict | None:
-    """The newest marker comment of the authenticated user, or None.
+    """Return the newest issue comment containing the canonical marker, or None.
 
     gh merges the paginated pages into one array; older versions print one array per
-    page, so flatten that shape too. A foreign marker comment is never ours to edit.
+    page, so flatten that shape too.
     """
-    login = authenticated_login()
     comments = json.loads(
-        run_gh("api", "--paginate", f"repos/{repo}/issues/{issue}/comments?per_page=100")
+        run_gh("api", "--paginate", f"repos/{repo}/issues/{issue}/comments")
     )
     if comments and isinstance(comments[0], list):
         comments = [comment for page in comments for comment in page]
@@ -91,8 +86,7 @@ def find_comment(issue: str, repo: str) -> dict | None:
         (
             comment
             for comment in comments
-            if (comment.get("user") or {}).get("login") == login
-            and MARKER in (comment.get("body") or "")
+            if MARKER in (comment.get("body") or "")
         ),
         key=lambda comment: comment["created_at"],
         default=None,
@@ -171,9 +165,6 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         comment = find_comment(args.issue, args.repo)
-        if args.mode == "ensure" and comment is not None:
-            write_outputs(args.github_output, comment)
-            return 0
         if comment is None:
             lines = template
             if args.mode == "finish":

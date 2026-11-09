@@ -503,23 +503,52 @@ jobs:
           printf '::stop-commands::%s\n' "$stop_token"
           printf 'Final OpenCode command: opencode run --agent %q --model %q --title %q\n' "$AGENT" "$MODEL" "$coordinator_session_title"
           printf 'Coordinator prompt:\n%s\n' "$PROMPT"
-          set +e
-          timeout "${COORDINATOR_TIMEOUT}m" opencode run --agent "$AGENT" --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
-          coordinator_statuses=("${PIPESTATUS[@]}")
-          printf '::%s::\n' "$stop_token"
-          coordinator_status=${coordinator_statuses[0]}
-          coordinator_tee_status=${coordinator_statuses[1]}
-          set -e
+          base_prompt="$PROMPT"
+          coordinator_status=1
+          coordinator_tee_status=1
+          coordinator_delivery_valid=false
+          coordinator_feedback=''
+          for attempt in 1 2; do
+            if ((attempt > 1)); then
+              PROMPT=$(printf '%s\n\nDelivery validation feedback from the previous attempt: the coordinator did not produce a valid completed delivery. Review the previous output below, correct the underlying problem, and complete the task without claiming success until the delivery is real.\n<previous-output>\n%s\n</previous-output>' "$base_prompt" "$coordinator_feedback")
+              printf 'Retrying coordinator (attempt %s/2) with validation feedback.\n' "$attempt"
+            fi
+            set +e
+            timeout "${COORDINATOR_TIMEOUT}m" opencode run --agent "$AGENT" --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator-$attempt.out"
+            coordinator_statuses=("${PIPESTATUS[@]}")
+            printf '::%s::\n' "$stop_token"
+            coordinator_status=${coordinator_statuses[0]}
+            coordinator_tee_status=${coordinator_statuses[1]}
+            set -e
+            cp "$RUNNER_TEMP/coordinator-$attempt.out" "$RUNNER_TEMP/coordinator.out"
+            if ((coordinator_status == 0 && coordinator_tee_status == 0)); then
+              coordinator_delivery_valid=true
+              for heading in '### Management summary' '### Design decisions' '### Open PR' '### Verification evidence' '### Action runs'; do
+                if ! grep -Fq -- "$heading" "$RUNNER_TEMP/coordinator-$attempt.out"; then
+                  coordinator_delivery_valid=false
+                  break
+                fi
+              done
+              if [[ "$coordinator_delivery_valid" == true ]] && grep -Fq -- '<!-- agent-progress -->' "$RUNNER_TEMP/coordinator-$attempt.out"; then
+                break
+              fi
+              coordinator_delivery_valid=false
+            fi
+            coordinator_feedback="$(tail -n 80 "$RUNNER_TEMP/coordinator-$attempt.out")"
+          done
           printf 'Coordinator statuses: opencode=%s tee=%s\n' "$coordinator_status" "$coordinator_tee_status"
           echo "coordinator_status=${coordinator_status}" >> "$GITHUB_OUTPUT"
           echo "coordinator_tee_status=${coordinator_tee_status}" >> "$GITHUB_OUTPUT"
           if ((coordinator_status == 124)); then
             echo "failure_mode=timeout" >> "$GITHUB_OUTPUT"
           fi
-          if ((coordinator_status != 0)); then
+          if [[ "$coordinator_delivery_valid" != true ]] || ((coordinator_status != 0 || coordinator_tee_status != 0)); then
+            if ((coordinator_status == 0)); then
+              coordinator_status=1
+            fi
             exit "$coordinator_status"
           fi
-          exit "$coordinator_tee_status"
+          exit 0
 
       - name: Fatal guard
         id: fatal-guard
@@ -650,6 +679,48 @@ jobs:
           fi
           printf '::%s::\n' "$stop_token"
 
+      - name: Validate delivery
+        if: always() && steps.select-model.outcome == 'success' && steps.target-issue.outputs.issue_number != ''
+        id: delivery-validation
+        shell: bash
+        env:
+          ISSUE_NUMBER: ${{ steps.target-issue.outputs.issue_number }}
+          COORDINATOR_OUTCOME: ${{ steps.coordinator.outcome }}
+          FATAL_REASON: ${{ steps.fatal-guard.outputs.fatal-reason }}
+          BRANCH: ${{ steps.push-work.outputs.branch_name }}
+          PUSHED: ${{ steps.push-work.outputs.pushed_repos }}
+          PUSHED_SLUGS: ${{ steps.push-work.outputs.pushed_slugs }}
+          PUSH_OUTCOME: ${{ steps.push-work.outcome }}
+          GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          target_run="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          target_issue="$GITHUB_SERVER_URL/$ISSUE_REPOSITORY/issues/$ISSUE_NUMBER"
+          progress_body=$(gh api --paginate "repos/$ISSUE_REPOSITORY/issues/$ISSUE_NUMBER/comments" | jq -s -r 'add | map(select(.body | contains("<!-- agent-progress -->"))) | max_by(.created_at) | .body // ""')
+          prs='[]'
+          while IFS= read -r repo; do
+            [[ -n "$repo" ]] || continue
+            result=$(gh pr list -R "$repo" --head "$BRANCH" --state open --json url,state,body)
+            prs=$(jq -c -s 'add' <(printf '%s\n' "$prs") <(printf '%s\n' "$result"))
+          done < <(printf '%s\n' "$PUSHED_SLUGS")
+          changed=false
+          [[ -n "${BRANCH:-}" ]] && changed=true
+          jq -n \
+            --arg outcome "${COORDINATOR_OUTCOME:-}" \
+            --arg fatal "${FATAL_REASON:-}" \
+            --arg summary "$progress_body $target_issue $target_run" \
+            --arg progress "$progress_body" \
+            --arg target_issue "$target_issue" \
+            --arg target_run "$target_run" \
+            --arg branch "${BRANCH:-}" \
+            --arg push_outcome "${PUSH_OUTCOME:-}" \
+            --arg pushed "${PUSHED:-}" \
+            --argjson changed "$changed" \
+            --argjson prs "$prs" \
+            --argjson pushed_slugs "$(printf '%s\n' "$PUSHED_SLUGS" | jq -Rsc 'split("\n") | map(select(length > 0))')" \
+            '{coordinator: {outcome: $outcome, fatal: $fatal}, summary: $summary, target_issue: $target_issue, target_run: $target_run, push_outcome: $push_outcome, changed: $changed, pushed: ($pushed != ""), branch: $branch, pushed_slugs: $pushed_slugs, prs: $prs, progress: {body: $progress}}' > "$RUNNER_TEMP/delivery.json"
+          python3 "$RUNNER_TEMP/agent-runner/scripts/validate_delivery.py" "$RUNNER_TEMP/delivery.json"
+
       - name: Emit loop-termination metrics
         if: always()
         id: loop-metrics
@@ -677,6 +748,7 @@ jobs:
           COMMENT_ID: ${{ steps.run-start-comment.outputs.comment_id }}
           MODEL: ${{ steps.select-model.outputs.model }}
           COORDINATOR_OUTCOME: ${{ steps.coordinator.outcome }}
+          DELIVERY_OUTCOME: ${{ steps.delivery-validation.outcome }}
           FATAL_REASON: ${{ steps.fatal-guard.outputs.fatal-reason }}
           BRANCH: ${{ steps.push-work.outputs.branch_name }}
           PUSHED_REPOS: ${{ steps.push-work.outputs.pushed_repos }}
@@ -688,12 +760,12 @@ jobs:
           RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
           # Determine status
-          if [[ "${COORDINATOR_OUTCOME:-}" == "success" ]]; then
+          if [[ "${COORDINATOR_OUTCOME:-}" == "success" && "${DELIVERY_OUTCOME:-}" == "success" ]]; then
             STATUS="✅ completed"
           elif [[ -n "${FATAL_REASON:-}" ]]; then
             STATUS="❌ fatal error: $FATAL_REASON"
           else
-            STATUS="⚠️ failed (coordinator exit ${COORDINATOR_OUTCOME:-})"
+            STATUS="⚠️ failed delivery (coordinator ${COORDINATOR_OUTCOME:-}; validation ${DELIVERY_OUTCOME:-})"
           fi
 
           # Check for existing PRs in every repo this run pushed to, not just this one.

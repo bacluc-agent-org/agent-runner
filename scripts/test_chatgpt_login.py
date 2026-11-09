@@ -703,9 +703,10 @@ printf '%s\\n' "$*" > "$RUNNER_TEMP/gh-call"
     (fake_bin / "opencode").write_text(
         """#!/usr/bin/env bash
 set -Eeuo pipefail
-for name in BACLUC_AGENT_GITHUB_TOKEN BRAVE_API_KEY CHATGPT_EMAIL CHATGPT_PASSWORD CHATGPT_TOTP_KEY CHATGPT_2FA_KEY GH_TOKEN GITHUB_TOKEN OPENAI_2FA_KEY OPENAI_PASSWORD OPENAI_USERNAME OPENCODE_AUTH_CONTENT OPENCODE_GO_API_KEY OPENCODE_GO_2_API_KEY OPENROUTER_API_KEY; do
+for name in BACLUC_AGENT_GITHUB_TOKEN BRAVE_API_KEY CHATGPT_EMAIL CHATGPT_PASSWORD CHATGPT_TOTP_KEY CHATGPT_2FA_KEY GH_TOKEN GITHUB_TOKEN OPENAI_2FA_KEY OPENAI_PASSWORD OPENAI_USERNAME OPENCODE_AUTH_CONTENT OPENROUTER_API_KEY; do
   [[ -z "${!name:-}" ]] || { touch "$RUNNER_TEMP/agent-secret-env"; exit 1; }
 done
+[[ -n "${OPENCODE_GO_API_KEY:-}${OPENCODE_GO_2_API_KEY:-}" ]] || { touch "$RUNNER_TEMP/missing-provider-env"; exit 1; }
 if [[ "$FAKE_MODE" == agent-timeout-retry && ! -e "$RUNNER_TEMP/agent-retried" ]]; then
   touch "$RUNNER_TEMP/agent-retried"
   sleep 2
@@ -792,11 +793,21 @@ fi
         "RUNNER_TEMP": str(tmp_path),
         "GITHUB_REPOSITORY": "example/repository",
         "BACLUC_AGENT_GITHUB_TOKEN": "test-token",
+        "BRAVE_API_KEY": "test-brave-key",
         "CHATGPT_EMAIL": "test@example.invalid",
         "CHATGPT_PASSWORD": "test-password",
         "CHATGPT_HEADLESS": "true",
         "CHATGPT_TOTP_KEY": "test-totp-key",
+        "CHATGPT_2FA_KEY": "test-chatgpt-2fa-key",
+        "GH_TOKEN": "test-gh-token",
+        "GITHUB_TOKEN": "test-github-token",
+        "OPENAI_2FA_KEY": "test-openai-2fa-key",
+        "OPENAI_PASSWORD": "test-openai-password",
+        "OPENAI_USERNAME": "openai@example.invalid",
+        "OPENCODE_AUTH_CONTENT": "test-auth-content",
         "OPENCODE_GO_API_KEY": "test-api-key",
+        "OPENCODE_GO_2_API_KEY": "test-api-key-2",
+        "OPENROUTER_API_KEY": "test-openrouter-key",
         "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "5",
     }
 
@@ -937,6 +948,8 @@ exec /bin/mv "$@"
     missing_credentials = dict(env)
     missing_credentials.pop("CHATGPT_EMAIL")
     missing_credentials.pop("CHATGPT_PASSWORD")
+    missing_credentials.pop("OPENAI_USERNAME")
+    missing_credentials.pop("OPENAI_PASSWORD")
     missing = subprocess.run(
         ["bash", str(helper)], env={**missing_credentials, "FAKE_MODE": "success"}, capture_output=True, text=True, timeout=10
     )

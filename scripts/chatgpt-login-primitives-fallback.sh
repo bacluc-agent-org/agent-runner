@@ -103,7 +103,7 @@ EOF
       ((remaining > 0)) || return 1
       local operation_timeout="$max_timeout"
       ((operation_timeout > remaining)) && operation_timeout=$remaining
-      env -u BACLUC_AGENT_GITHUB_TOKEN -u BRAVE_API_KEY -u CHATGPT_EMAIL -u CHATGPT_PASSWORD -u CHATGPT_TOTP_KEY -u CHATGPT_2FA_KEY -u GH_TOKEN -u GITHUB_TOKEN -u OPENAI_2FA_KEY -u OPENAI_PASSWORD -u OPENAI_USERNAME -u OPENCODE_AUTH_CONTENT -u OPENCODE_GO_API_KEY -u OPENCODE_GO_2_API_KEY -u OPENROUTER_API_KEY timeout "$operation_timeout" "$@"
+      env -u BACLUC_AGENT_GITHUB_TOKEN -u BRAVE_API_KEY -u CHATGPT_EMAIL -u CHATGPT_PASSWORD -u CHATGPT_TOTP_KEY -u CHATGPT_2FA_KEY -u GH_TOKEN -u GITHUB_TOKEN -u OPENAI_2FA_KEY -u OPENAI_PASSWORD -u OPENAI_USERNAME -u OPENCODE_AUTH_CONTENT -u OPENROUTER_API_KEY timeout "$operation_timeout" "$@"
     }
     if ! run_with_deadline "$command_timeout" playwright-cli "-s=$session" snapshot > "$snapshot_tmp" 2> /dev/null; then
       printf 'Playwright CLI could not capture the login page\n' >&2

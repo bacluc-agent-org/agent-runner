@@ -124,8 +124,54 @@ def test_workflow_uses_latest_commit_and_created_at_when_pr_has_no_commits():
     content = WORKFLOW.read_text()
     assert "--json number,createdAt,updatedAt,headRefName,state,title" in content
     assert "sort -t'|' -k4 -r" in content
-    assert 'gh api --paginate --slurp "repos/$pr_repo/pulls/$pr_number/commits" | jq -er --arg fallback "$pr_created"' in content
-    assert '''pr_last_commit="$(gh api --paginate --slurp "repos/$pr_repo/pulls/$pr_number/commits" | jq -er --arg fallback "$pr_created" '([.[][] | .commit.committer.date] | max) // $fallback')" || pr_last_commit="$pr_created"''' in content
+    assert 'bounded_enrichment_call "commit lookup for candidate #$num" gh api --paginate --slurp "repos/$pr_repo/pulls/$pr_number/commits"' in content
+    assert '''pr_last_commit="$(jq -er --arg fallback "$pr_created" '([.[][] | .commit.committer.date] | max) // $fallback' "$commits_json")"''' in content
     assert '([.[][] | .commit.committer.date] | max) // $fallback' in content
     assert 'pr_last_commit_at:(' in content
     assert 'map(select(test("^[0-9]")))|max // null' in content
+
+
+def test_workflow_bounds_and_reports_enrichment_without_changing_candidate_join():
+    content = WORKFLOW.read_text()
+    assert 'enrichment_budget="${ENRICHMENT_BUDGET_SECONDS:-1200}"' in content
+    assert "enrichment_deadline=$((enrichment_started + enrichment_budget))" in content
+    assert "timeout --signal=TERM \"${remaining}s\" \"$@\"" in content
+    assert "Enrichment %s started" in content
+    assert "Enrichment %s completed" in content
+    assert "::warning::enrichment timeout during %s" in content
+    assert "::warning::enrichment lookup failed during %s" in content
+    assert "processed=%s skipped=%s" in content
+    assert "enrichment finished in degraded status" in content
+    assert content.index("enrichment_started=") < content.index("branch lookup")
+    assert content.index("bounded_enrichment_call 'branch lookup'") < content.index("repository validation")
+    assert content.index("PR listing") < content.index("Enriching candidate #%s started")
+
+
+def test_partial_enrichment_join_preserves_unenriched_candidates():
+    import json
+
+    join_line = next(
+        line.strip()
+        for line in WORKFLOW.read_text().splitlines()
+        if line.strip().startswith("jq -n --slurpfile issues")
+    )
+    with TemporaryDirectory() as directory:
+        directory = Path(directory)
+        (directory / "candidates.json").write_text(json.dumps([{"number": 1}, {"number": 2}]))
+        (directory / "enrichment.jsonl").write_text('{"number":1,"pr_info":"none","last_human_comment_at":null}\n')
+        result = run(
+            [
+                "bash",
+                "-Eeuo",
+                "pipefail",
+                "-c",
+                f'RUNNER_TEMP={str(directory)!r}; enriched="$RUNNER_TEMP/candidates.json"; {join_line}',
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert json.loads((directory / "candidates.final.json").read_text()) == [
+            {"number": 1, "last_human_comment_at": None, "pr_state": "none", "pr_number": None, "pr_last_commit_at": None},
+            {"number": 2},
+        ]

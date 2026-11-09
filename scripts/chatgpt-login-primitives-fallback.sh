@@ -59,15 +59,6 @@ recover_blocking_login() {
     return 1
   fi
   attached=true
-  if ! playwright-cli "-s=$session" snapshot > "$snapshot_tmp" 2> /dev/null; then
-    printf 'Playwright CLI could not capture the login page\n' >&2
-    return 1
-  fi
-  if ! mv -f -- "$snapshot_tmp" "$snapshot_file"; then
-    return 1
-  fi
-  snapshot_tmp=$(mktemp "$snapshot_file.XXXXXX")
-  chmod 600 "$snapshot_tmp"
   cat > "$handoff_tmp" << EOF
 session=$session
 cdp=http://127.0.0.1:$cdp_port
@@ -82,7 +73,6 @@ operations=snapshot|click|fill_secret|type_secret|otp|goto|press|check|uncheck|h
 timeout_seconds=$handoff_timeout
 command_timeout_seconds=$command_timeout
 EOF
-  printf 'Playwright handoff is live at %s; write bounded commands to %s\n' "$handoff_tmp" "$command_file" >&2
   local recovery_prompt
   recovery_prompt=$(
     cat << EOF
@@ -92,13 +82,27 @@ Allowed commands are exactly: snapshot, click eN, fill_secret eN email|password,
 Use symbolic secret commands for credentials and otp for TOTP; never read, print, or write credential values. Use only refs from the snapshot and safe auth URLs without query strings or fragments. Keep the batch at most 32 commands. Do not call playwright-cli directly, modify any other file, or report secrets.
 EOF
   )
-  if ! timeout "$agent_timeout" opencode run --auto --model "$agent_model" --title chatgpt-auth-recovery "$recovery_prompt" > /dev/null 2>&1; then
-    printf 'Playwright recovery agent failed or timed out\n' >&2
-    return 1
-  fi
   local deadline=$((SECONDS + handoff_timeout))
   local handoff_ready=false
   while ((SECONDS < deadline)); do
+    if ! timeout "$command_timeout" playwright-cli "-s=$session" snapshot > "$snapshot_tmp" 2> /dev/null; then
+      printf 'Playwright CLI could not capture the login page\n' >&2
+      return 1
+    fi
+    if ! mv -f -- "$snapshot_tmp" "$snapshot_file"; then
+      return 1
+    fi
+    snapshot_tmp=$(mktemp "$snapshot_file.XXXXXX")
+    chmod 600 "$snapshot_tmp"
+    : > "$command_file"
+    local remaining=$((deadline - SECONDS))
+    ((remaining > 0)) || break
+    local run_timeout="$agent_timeout"
+    ((run_timeout > remaining)) && run_timeout=$remaining
+    if ! timeout "$run_timeout" opencode run --auto --model "$agent_model" --title chatgpt-auth-recovery "$recovery_prompt" > /dev/null 2>&1; then
+      ((SECONDS < deadline)) && sleep 1
+      continue
+    fi
     if [[ -s "$command_file" ]]; then
       local batch_file
       batch_file=$(mktemp "$command_file.batch.XXXXXX")
@@ -113,6 +117,9 @@ EOF
         case "$command" in
           snapshot)
             timeout "$command_timeout" playwright-cli "-s=$session" snapshot > "$snapshot_tmp" 2> /dev/null || return 1
+            mv -f -- "$snapshot_tmp" "$snapshot_file" || return 1
+            snapshot_tmp=$(mktemp "$snapshot_file.XXXXXX")
+            chmod 600 "$snapshot_tmp"
             ;;
           click\ e[0-9]*)
             timeout "$command_timeout" playwright-cli "-s=$session" click "${command#click }" > /dev/null 2>&1 || return 1
@@ -157,11 +164,12 @@ EOF
         esac
       done < "$batch_file"
       rm -f -- "$batch_file"
-      status_json=$(uv run scripts/chatgpt-login.py status) || return 1
-      if [[ "$(jq -r '.code_ready // false' <<< "$status_json")" == true ]]; then
-        handoff_ready=true
-        break
-      fi
+    fi
+    status_json=$(uv run scripts/chatgpt-login.py status) || return 1
+    printf '%s\n' "$status_json" | jq -e 'type == "object" and (.error == null) and (.step | type == "string")' > /dev/null || return 1
+    if [[ "$(jq -r '.code_ready // false' <<< "$status_json")" == true ]]; then
+      handoff_ready=true
+      break
     fi
     sleep 1
   done
@@ -175,10 +183,6 @@ EOF
     return 1
   fi
   attached=false
-  if ! mv -f -- "$snapshot_tmp" "$snapshot_file"; then
-    return 1
-  fi
-  snapshot_tmp=''
   if ! mv -f -- "$handoff_tmp" "$handoff_file"; then
     return 1
   fi

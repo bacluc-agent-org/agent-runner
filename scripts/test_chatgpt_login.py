@@ -656,9 +656,21 @@ case "${3:-}" in
     if [[ "$FAKE_MODE" == success || "$FAKE_MODE" == invalid-output ]]; then
       touch "$RUNNER_TEMP/release-start"
       printf '%s\\n' '{"step":"done","blocking":null,"code_ready":true}'
-    elif [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == handoff-write-failure ]] && [[ -e "$RUNNER_TEMP/recovered" ]]; then
+    elif [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == handoff-write-failure || "$FAKE_MODE" == agent-timeout-retry ]] && [[ -e "$RUNNER_TEMP/recovered" ]]; then
       touch "$RUNNER_TEMP/release-start"
       printf '%s\\n' '{"step":"done","blocking":null,"code_ready":true}'
+    elif [[ "$FAKE_MODE" == changing-snapshot ]]; then
+      touch "$RUNNER_TEMP/release-start"
+      count_file="$RUNNER_TEMP/status-count"
+      count=0
+      [[ -f "$count_file" ]] && count=$(<"$count_file")
+      count=$((count + 1))
+      printf '%s' "$count" > "$count_file"
+      if (( count >= 3 )); then
+        printf '%s\\n' '{"step":"done","blocking":null,"code_ready":true}'
+      else
+        printf '%s\\n' '{"step":"email","blocking":"challenge","code_ready":false}'
+      fi
     elif [[ "$FAKE_MODE" == invalid-status ]]; then
       touch "$RUNNER_TEMP/release-start"
       printf '%s\\n' 'not-json'
@@ -689,11 +701,23 @@ printf '%s\\n' "$*" > "$RUNNER_TEMP/gh-call"
     (fake_bin / "opencode").write_text(
         """#!/usr/bin/env bash
 set -Eeuo pipefail
+if [[ "$FAKE_MODE" == agent-timeout-retry && ! -e "$RUNNER_TEMP/agent-retried" ]]; then
+  touch "$RUNNER_TEMP/agent-retried"
+  sleep 2
+fi
+if [[ "$FAKE_MODE" == deadline ]]; then
+  sleep 2
+fi
 if [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == handoff-write-failure ]]; then
   snapshot=$(<"$RUNNER_TEMP/chatgpt-login-recovery.snapshot")
   [[ "$snapshot" == 'inspectable snapshot' ]] || exit 1
   touch "$RUNNER_TEMP/agent-read-snapshot"
   printf '%s\\n' 'snapshot' 'fill_secret e1 email' 'type_secret e2 password' 'otp e3' 'goto https://auth.openai.com/log-in' 'press Enter' 'click e4' > "$RUNNER_TEMP/chatgpt-login-recovery.commands"
+elif [[ "$FAKE_MODE" == changing-snapshot ]]; then
+  cat "$RUNNER_TEMP/chatgpt-login-recovery.snapshot" >> "$RUNNER_TEMP/agent-snapshots"
+  printf '%s\\n' 'snapshot' 'fill_secret e1 email' > "$RUNNER_TEMP/chatgpt-login-recovery.commands"
+elif [[ "$FAKE_MODE" == agent-timeout-retry && -e "$RUNNER_TEMP/agent-retried" ]]; then
+  printf '%s\\n' 'fill_secret e1 email' > "$RUNNER_TEMP/chatgpt-login-recovery.commands"
 fi
 """,
         encoding="utf-8",
@@ -719,9 +743,23 @@ if [[ "$FAKE_MODE" == snapshot-failure && "${2:-}" == snapshot ]]; then
   printf '%s\\n' 'secret-password snapshot failure' >&2
   exit 1
 fi
-if [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == handoff-write-failure ]] && [[ "${2:-}" == snapshot ]]; then
+if [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == handoff-write-failure || "$FAKE_MODE" == agent-timeout-retry ]] && [[ "${2:-}" == snapshot ]]; then
   touch "$RUNNER_TEMP/recovered"
   printf '%s\\n' 'inspectable snapshot'
+fi
+if [[ "$FAKE_MODE" == changing-snapshot && "${2:-}" == snapshot ]]; then
+  snapshot_count=0
+  [[ -f "$RUNNER_TEMP/snapshot-count" ]] && snapshot_count=$(<"$RUNNER_TEMP/snapshot-count")
+  snapshot_count=$((snapshot_count + 1))
+  printf '%s' "$snapshot_count" > "$RUNNER_TEMP/snapshot-count"
+  printf '%s\\n' "snapshot-$snapshot_count"
+  (( snapshot_count > 1 )) && touch "$RUNNER_TEMP/recovered"
+fi
+if [[ "$FAKE_MODE" == agent-timeout-retry && "${2:-}" != snapshot ]]; then
+  touch "$RUNNER_TEMP/recovered"
+fi
+if [[ "$FAKE_MODE" == changing-snapshot && "${2:-}" != snapshot ]]; then
+  touch "$RUNNER_TEMP/recovered"
 fi
 if [[ "$FAKE_MODE" == detach-failure && "${2:-}" == detach ]]; then
   exit 1
@@ -880,3 +918,64 @@ exec /bin/mv "$@"
         )
         assert invalid.returncode != 0
         assert not (tmp_path / "gh-call").exists()
+
+    for path in tmp_path.iterdir():
+        if path.is_file():
+            path.unlink()
+    changing = subprocess.run(
+        ["bash", str(helper)],
+        env={
+            **env,
+            "FAKE_MODE": "changing-snapshot",
+            "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "3",
+            "PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS": "1",
+            "PLAYWRIGHT_AGENT_TIMEOUT_SECONDS": "1",
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert changing.returncode == 0
+    assert (tmp_path / "agent-snapshots").read_text().splitlines() == ["snapshot-1", "snapshot-3"]
+    assert int((tmp_path / "status-count").read_text()) >= 3
+
+    for path in tmp_path.iterdir():
+        if path.is_file():
+            path.unlink()
+    retry = subprocess.run(
+        ["bash", str(helper)],
+        env={
+            **env,
+            "FAKE_MODE": "agent-timeout-retry",
+            "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "3",
+            "PLAYWRIGHT_AGENT_TIMEOUT_SECONDS": "1",
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert retry.returncode == 0
+    assert (tmp_path / "agent-retried").exists()
+
+    for path in tmp_path.iterdir():
+        if path.is_file():
+            path.unlink()
+    deadline = subprocess.run(
+        ["bash", str(helper)],
+        env={
+            **env,
+            "FAKE_MODE": "deadline",
+            "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "1",
+            "PLAYWRIGHT_AGENT_TIMEOUT_SECONDS": "1",
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert deadline.returncode != 0
+    assert not (tmp_path / "gh-call").exists()
+    assert all(
+        "test-password" not in path.read_text(errors="replace")
+        for path in tmp_path.rglob("*")
+        if path.is_file() and fake_bin not in path.parents
+    )

@@ -96,3 +96,11 @@ def test_workflow_orders_validation_after_push_and_before_completion_status():
     assert "Delivery validation feedback from the previous attempt" in body
     assert body.index("id: push-work") < body.index("id: delivery-validation") < body.index("name: Post run-result comment")
     assert 'DELIVERY_OUTCOME:-}" == "success"' in body
+
+
+def test_clean_coordinator_branch_preserves_repository_slug_for_validation():
+    body = Path(".github/workflows/opencode.yml").read_text(encoding="utf-8")
+    branch_detection = body.index('if [[ -z "$WORK_BRANCH"')
+    no_changes_output = body.index("else\n            printf 'No changes to push.")
+    assert body.index("PUSHED_SLUGS=", branch_detection, no_changes_output) < no_changes_output
+    assert "echo \"pushed_slugs<<EOF\"" in body[no_changes_output:]

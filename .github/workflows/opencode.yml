@@ -639,6 +639,10 @@ jobs:
 
             # Check if there are any changes to commit
             if git diff --quiet HEAD 2>/dev/null && git diff --cached --quiet 2>/dev/null && [[ -z "$(git ls-files --others --exclude-standard)" ]]; then
+              if [[ -n "$WORK_BRANCH" && "$current_branch" == "$WORK_BRANCH" ]]; then
+                remote_url=$(git remote get-url origin 2>/dev/null || true)
+                PUSHED_SLUGS="${PUSHED_SLUGS}$(printf '%s' "$remote_url" | sed -E 's#^.*github\.com[:/]+##; s#\.git$##')\n"
+              fi
               printf 'No changes in %s\n' "$repo_dir"
               cd - >/dev/null
               continue
@@ -677,6 +681,11 @@ jobs:
             if [[ -n "$WORK_BRANCH" ]]; then
               echo "branch_name=${WORK_BRANCH}" >> "$GITHUB_OUTPUT"
             fi
+            {
+              echo "pushed_slugs<<EOF"
+              printf '%b' "$PUSHED_SLUGS"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
           fi
           printf '::%s::\n' "$stop_token"
 

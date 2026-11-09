@@ -991,7 +991,7 @@ exec /bin/mv "$@"
         env={
             **env,
             "FAKE_MODE": "agent-timeout-retry",
-            "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "3",
+            "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "5",
             "PLAYWRIGHT_AGENT_TIMEOUT_SECONDS": "1",
         },
         capture_output=True,

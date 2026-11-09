@@ -1,6 +1,8 @@
+import json
 from pathlib import Path
 from subprocess import run
 from tempfile import TemporaryDirectory
+import time
 
 from selection_tiers import Candidate, is_standing, parse_branches, render_prompt, select_tier, tier
 
@@ -135,10 +137,10 @@ def test_workflow_bounds_and_reports_enrichment_without_changing_candidate_join(
     content = WORKFLOW.read_text()
     assert 'enrichment_budget="${ENRICHMENT_BUDGET_SECONDS:-1200}"' in content
     assert "enrichment_deadline=$((enrichment_started + enrichment_budget))" in content
-    assert "timeout --signal=TERM \"${remaining}s\" \"$@\"" in content
+    assert "timeout --signal=TERM --kill-after=2s \"${remaining}s\" \"$@\"" in content
     assert "Enrichment %s started" in content
     assert "Enrichment %s completed" in content
-    assert "::warning::enrichment timeout during %s" in content
+    assert "::warning::enrichment timeout during %s (forced termination after grace period)" in content
     assert "::warning::enrichment lookup failed during %s" in content
     assert "processed=%s skipped=%s" in content
     assert "enrichment finished in degraded status" in content
@@ -175,3 +177,65 @@ def test_partial_enrichment_join_preserves_unenriched_candidates():
             {"number": 1, "last_human_comment_at": None, "pr_state": "none", "pr_number": None, "pr_last_commit_at": None},
             {"number": 2},
         ]
+
+
+def test_ignored_term_enrichment_is_force_killed_and_keeps_valid_partial_json():
+    with TemporaryDirectory() as directory:
+        directory = Path(directory)
+        sleeper = directory / "ignore-term-and-sleep"
+        sleeper.write_text("#!/usr/bin/env python3\nimport signal\nimport time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\ntime.sleep(30)\n")
+        sleeper.chmod(sleeper.stat().st_mode | 0o111)
+        script = r'''
+set -Eeuo pipefail
+budget=1
+started=$SECONDS
+deadline=$((started + budget))
+degraded=0
+remaining() {
+  local value=$((deadline - SECONDS))
+  (( value > 0 )) && printf '%s\n' "$value" || return 1
+}
+bounded() {
+  local remaining_seconds status
+  if ! remaining_seconds=$(remaining); then
+    printf '::warning::enrichment budget exhausted before candidate\n' >&2
+    degraded=1
+    return 125
+  fi
+  set +e
+  timeout --signal=TERM --kill-after=2s "${remaining_seconds}s" "$@"
+  status=$?
+  set -e
+  if (( status == 124 || status == 137 )); then
+    printf '::warning::enrichment timeout during candidate (forced termination after grace period)\n' >&2
+    degraded=1
+  elif (( status != 0 )); then
+    degraded=1
+  fi
+  return "$status"
+}
+issues='[{"number":1},{"number":2}]'
+enrichment="$RUNNER_TEMP/enrichment.jsonl"
+: > "$enrichment"
+for number in 1 2; do
+  if bounded "$1" "$number"; then
+    printf '{"number":%s,"pr_info":"enriched"}\n' "$number" >> "$enrichment"
+  fi
+done
+jq -n --argjson issues "$issues" --slurpfile enrichment "$enrichment" \
+  '$issues | map(. as $issue | ($enrichment | map(select(.number == $issue.number)) | .[0]) as $entry | if $entry then . + $entry else . end)'
+printf 'degraded=%s\n' "$degraded" >&2
+'''
+        started = time.monotonic()
+        result = run(
+            ["bash", "-Eeuo", "pipefail", "-c", script, "test", str(sleeper)],
+            env={"RUNNER_TEMP": str(directory)},
+            capture_output=True,
+            text=True,
+        )
+        assert time.monotonic() - started < 6
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout) == [{"number": 1}, {"number": 2}]
+        assert "forced termination after grace period" in result.stderr
+        assert "budget exhausted before candidate" in result.stderr
+        assert "degraded=1" in result.stderr

@@ -126,6 +126,33 @@ def test_nested_repository_artifacts_and_pointer_changes_are_ignored(tmp_path):
     assert "incomplete" in result.stdout
 
 
+def test_tracked_gitlink_pointer_change_is_ignored(tmp_path):
+    workspace = make_repo(tmp_path)
+    nested = workspace / "nested"
+    nested.mkdir()
+    git("init", cwd=nested)
+    git("config", "user.email", "test@example.com", cwd=nested)
+    git("config", "user.name", "Test", cwd=nested)
+    (nested / "nested.txt").write_text("before\n")
+    git("add", ".", cwd=nested)
+    git("commit", "-m", "nested initial", cwd=nested)
+    git("add", "nested", cwd=workspace)
+    git("commit", "-m", "track nested repository", cwd=workspace)
+    baseline = tmp_path / "baseline.json"
+    output = tmp_path / "coordinator.out"
+    snapshot(workspace, baseline)
+
+    (nested / "nested.txt").write_text("after\n")
+    git("add", ".", cwd=nested)
+    git("commit", "-m", "nested update", cwd=nested)
+    output.write_text("completed\n")
+
+    result = run_check(workspace, output, baseline)
+
+    assert result.returncode == 1
+    assert "incomplete" in result.stdout
+
+
 def test_new_root_commit_is_observable_delivery(tmp_path):
     workspace = make_repo(tmp_path)
     baseline = tmp_path / "baseline.json"

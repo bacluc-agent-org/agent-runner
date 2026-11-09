@@ -58,7 +58,10 @@ def relevant_status(root):
         if " -> " in path:
             path = path.split(" -> ", 1)[1]
         absolute_path = Path(root, path).resolve()
-        if any(absolute_path == nested or nested in absolute_path.parents for nested in nested_paths):
+        if any(
+            absolute_path == Path(nested) or Path(nested) in absolute_path.parents
+            for nested in nested_paths
+        ):
             continue
         status.append(line)
     return "\n".join(status)

@@ -483,12 +483,22 @@ jobs:
             --mode ensure \
             --github-output "$GITHUB_OUTPUT"
 
+      - name: Capture coordinator baseline
+        if: steps.select-model.outcome == 'success'
+        shell: bash
+        run: |
+          python3 "$RUNNER_TEMP/agent-runner/scripts/check_coordinator_progress.py" \
+            --snapshot \
+            --workspace "$GITHUB_WORKSPACE" \
+            --baseline "$RUNNER_TEMP/coordinator-baseline.json"
+
       - name: Run coordinator
         id: coordinator
         shell: bash
         env:
           MODEL: ${{ steps.select-model.outputs.model }}
           COORDINATOR_TIMEOUT: ${{ inputs.timeout_minutes || 120 }}
+          COORDINATOR_RESUME_TIMEOUT: 10
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
           BACLUC_AGENT_GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
           OPENCODE_FATAL_STAGE: coordinator
@@ -505,14 +515,23 @@ jobs:
           printf '::stop-commands::%s\n' "$stop_token"
           printf 'Final OpenCode command: opencode run --agent %q --model %q --title %q\n' "$AGENT" "$MODEL" "$coordinator_session_title"
           printf 'Coordinator prompt:\n%s\n' "$PROMPT"
-          set +e
-          timeout "${COORDINATOR_TIMEOUT}m" opencode run --agent "$AGENT" --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
-          coordinator_statuses=("${PIPESTATUS[@]}")
-          printf '::%s::\n' "$stop_token"
-          coordinator_status=${coordinator_statuses[0]}
-          coordinator_tee_status=${coordinator_statuses[1]}
-          set -e
-          printf 'Coordinator statuses: opencode=%s tee=%s\n' "$coordinator_status" "$coordinator_tee_status"
+          run_coordinator() {
+            local timeout_minutes="$1"
+            local tee_mode="$2"
+            set +e
+            if [[ "$tee_mode" == "-a" ]]; then
+              timeout "${timeout_minutes}m" opencode run --agent "$AGENT" --model "$MODEL" --title "$coordinator_session_title" "$3" 2>&1 | tee -a "$RUNNER_TEMP/coordinator.out"
+            else
+              timeout "${timeout_minutes}m" opencode run --agent "$AGENT" --model "$MODEL" --title "$coordinator_session_title" "$3" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
+            fi
+            coordinator_statuses=("${PIPESTATUS[@]}")
+            set -e
+            coordinator_status=${coordinator_statuses[0]}
+            coordinator_tee_status=${coordinator_statuses[1]}
+            printf 'Coordinator statuses: opencode=%s tee=%s\n' "$coordinator_status" "$coordinator_tee_status"
+          }
+
+          run_coordinator "$COORDINATOR_TIMEOUT" "" "$PROMPT"
           echo "coordinator_status=${coordinator_status}" >> "$GITHUB_OUTPUT"
           echo "coordinator_tee_status=${coordinator_tee_status}" >> "$GITHUB_OUTPUT"
           if ((coordinator_status == 124)); then
@@ -521,7 +540,50 @@ jobs:
           if ((coordinator_status != 0)); then
             exit "$coordinator_status"
           fi
-          exit "$coordinator_tee_status"
+          if ((coordinator_tee_status != 0)); then
+            exit "$coordinator_tee_status"
+          fi
+
+          set +e
+          python3 "$RUNNER_TEMP/agent-runner/scripts/check_coordinator_progress.py" \
+            --check \
+            --workspace "$GITHUB_WORKSPACE" \
+            --output "$RUNNER_TEMP/coordinator.out" \
+            --baseline "$RUNNER_TEMP/coordinator-baseline.json"
+          gate_status=$?
+          set -e
+          if ((gate_status == 0 || gate_status == 2)); then
+            exit 0
+          fi
+          if ((gate_status != 1)); then
+            echo "failure_mode=completion-gate-error" >> "$GITHUB_OUTPUT"
+            exit "$gate_status"
+          fi
+
+          printf '\nBounded continuation: the successful coordinator run produced no observable delivery.\n' | tee -a "$RUNNER_TEMP/coordinator.out"
+          resume_prompt="${PROMPT}"$'\n\n'"The previous coordinator attempt exited successfully without observable delivery. Continue the requested task now. Make the requested changes and verify them, or output exactly AGENT_RESULT: NO_CODE_CHANGE only when the task legitimately requires no code change. Do not claim completion without delivery or that exact result."
+          run_coordinator "$COORDINATOR_RESUME_TIMEOUT" "-a" "$resume_prompt"
+          echo "resume_coordinator_status=${coordinator_status}" >> "$GITHUB_OUTPUT"
+          echo "resume_coordinator_tee_status=${coordinator_tee_status}" >> "$GITHUB_OUTPUT"
+          if ((coordinator_status != 0)); then
+            exit "$coordinator_status"
+          fi
+          if ((coordinator_tee_status != 0)); then
+            exit "$coordinator_tee_status"
+          fi
+          set +e
+          python3 "$RUNNER_TEMP/agent-runner/scripts/check_coordinator_progress.py" \
+            --check \
+            --workspace "$GITHUB_WORKSPACE" \
+            --output "$RUNNER_TEMP/coordinator.out" \
+            --baseline "$RUNNER_TEMP/coordinator-baseline.json"
+          gate_status=$?
+          set -e
+          if ((gate_status == 0 || gate_status == 2)); then
+            exit 0
+          fi
+          echo "failure_mode=incomplete" >> "$GITHUB_OUTPUT"
+          exit 1
 
       - name: Fatal guard
         id: fatal-guard

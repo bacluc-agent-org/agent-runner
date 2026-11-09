@@ -253,7 +253,7 @@ class TestFinish:
 
 
 class TestEnsure:
-    def test_never_duplicates_an_existing_marker_comment(self, fake_gh, tmp_path):
+    def test_updates_the_newest_marker_comment_with_a_pending_run(self, fake_gh, tmp_path):
         mine = _comment(333, upc.TEMPLATE.read_text(encoding="utf-8"))
         foreign = _comment(
             111,
@@ -269,8 +269,11 @@ class TestEnsure:
 
         assert upc.main(_argv("--mode", "ensure", "--github-output", str(output))) == 0
 
-        assert gh.written == []
+        assert len(gh.written) == 1
         assert len(gh.list_calls) == 1
+        assert [_cells(row) for row in _rows(gh.written[0])] == [
+            [RUN_URL, "opencode/big-pickle", "run started", "pending", ""]
+        ]
         assert output.read_text() == f"comment_id=111\ncomment_url={foreign['html_url']}\n"
 
     def test_creates_from_template_when_no_marker_comment(self, fake_gh, tmp_path):

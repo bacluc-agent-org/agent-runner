@@ -165,9 +165,6 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         comment = find_comment(args.issue, args.repo)
-        if args.mode == "ensure" and comment is not None:
-            write_outputs(args.github_output, comment)
-            return 0
         if comment is None:
             lines = template
             if args.mode == "finish":

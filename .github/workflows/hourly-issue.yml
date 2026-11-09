@@ -105,8 +105,11 @@ jobs:
             [[ "$label" == agent-running:* ]] || continue
             claim_run_id="${label#agent-running:}"
             [[ "$claim_run_id" =~ ^[0-9]+$ ]] || continue
-            run_status="$(gh run view "$claim_run_id" --json status --jq '.status' 2>/dev/null || true)"
-            [[ "$run_status" == completed ]] || continue
+            run_status="$(gh run view "$claim_run_id" -R bacluc-agent-org/agent-runner --json status --jq '.status' 2>/dev/null || true)"
+            run_status="${run_status:-unknown}"
+            case "$run_status" in
+              queued|in_progress|unknown) continue ;;
+            esac
             gh issue edit "$number" -R "$ISSUE_REPOSITORY" --remove-label "$label" || \
               printf '::warning::could not remove stale claim %s from #%s\n' "$label" "$number"
           done < "$RUNNER_TEMP/open-claims.tsv"
@@ -118,8 +121,8 @@ jobs:
           # Oldest-first: the 50-item page keeps the OLDEST 50 unclaimed issues instead of the
           # newest 50, so backlog items beyond the cap are the newest, not the oldest.
           search_json="$RUNNER_TEMP/candidates.json"
-          gh api "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:ready-for-implementation+-label:agent-running+sort:created-asc&per_page=50" \
-            --jq '.items' > "$search_json"
+          gh api "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:ready-for-implementation+sort:created-asc&per_page=50" \
+            --jq '[.items[] | select(all(.labels[]?.name // ""; ((ascii_downcase != "agent-running") and (startswith("agent-running:") | not))))]' > "$search_json"
 
           candidates="$RUNNER_TEMP/candidate-numbers.txt"
           jq -r '.[].number | tostring' "$search_json" > "$candidates"
@@ -303,6 +306,31 @@ jobs:
           if [[ -z "$issue_number" ]] || ! grep -qxF "$issue_number" "$candidates"; then
             printf '::error::missing or invalid SELECTED_ISSUE; not dispatching\n'
             exit 1
+          fi
+
+          if [[ "$issue_number" == 206 && "$ISSUE_REPOSITORY" == bacluc-agent/agent-todo ]]; then
+            standing_evidence="$(python3 scripts/standing_pass.py --collect)"
+            if (( $(jq '.runs | length' <<<"$standing_evidence") < 2 )); then
+              printf '%s\n' 'Standing pass has fewer than two qualifying recent failures; no follow-up issue will be created.'
+              exit 0
+            fi
+            standing_prompt="$RUNNER_TEMP/standing-pass-prompt.txt"
+            cat > "$standing_prompt" <<EOF
+          Perform exactly one pass for bacluc-agent/agent-todo#206.
+
+          Use the issue's exact ## Goal and ## How to implement schema. Read the newest comments on https://github.com/bacluc-agent/agent-todo/issues/16 and https://github.com/bacluc-agent/agent-todo/issues/206, review the qualifying run evidence below, and inspect the failed runs. Keep only a failure pattern present in at least two distinct runs. File no issue yourself. Return exactly one title and one body using these markers:
+          FOLLOW_UP_TITLE: <title>
+          FOLLOW_UP_BODY_BEGIN
+          <body beginning with ## Goal and then ## How to implement; include absolute action-run evidence URLs>
+          FOLLOW_UP_BODY_END
+
+          Evidence collected by the workflow:
+          $standing_evidence
+          EOF
+            standing_report="$RUNNER_TEMP/standing-pass-report.txt"
+            timeout "${SELECTION_TIMEOUT_MINUTES}m" opencode run --agent coordinator --model "$selection_model" --title "standing-issue-206" "$(< "$standing_prompt")" | tee "$standing_report"
+            python3 scripts/standing_pass.py --create --pass-id "$GITHUB_RUN_ID" --report "$standing_report"
+            exit 0
           fi
           printf 'issue_number=%s\n' "$issue_number" >> "$GITHUB_OUTPUT"
           if ! gh issue edit "$issue_number" -R "$ISSUE_REPOSITORY" --add-label "$claim_label,agent-attempted"; then

@@ -175,8 +175,66 @@ def test_workflow_uses_latest_commit_and_created_at_when_pr_has_no_commits():
 def test_workflow_claims_are_run_scoped_and_terminal_cleanup_is_conservative():
     content = WORKFLOW.read_text()
     assert 'claim_label="agent-running:${GITHUB_RUN_ID}"' in content
-    assert 'run_status" == completed' in content
-    assert '[[ "$run_status" == completed ]] || continue' in content
+    assert 'gh run view "$claim_run_id" -R bacluc-agent-org/agent-runner' in content
+    assert 'queued|in_progress|unknown) continue' in content
+    assert 'gh run view "$claim_run_id" --json status' not in content
     assert 'if: always()' in content
     assert 'issues?state=all&labels=${claim_label}' in content
     assert '--remove-label "$claim_label"' in content
+
+
+def test_candidate_query_excludes_bare_and_prefixed_claims_without_label_search_filters():
+    content = WORKFLOW.read_text()
+    query = 'search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:ready-for-implementation+sort:created-asc&per_page=50'
+    assert query in content
+    assert '-label:agent-running' not in content
+    assert 'ascii_downcase != "agent-running"' in content
+    assert 'startswith("agent-running:") | not' in content
+
+
+def test_standing_pass_validates_repeated_evidence_and_is_idempotent():
+    from standing_pass import RUN_URL, create_follow_up
+    import standing_pass
+
+    report = """FOLLOW_UP_TITLE: Fix repeated selector failure\nFOLLOW_UP_BODY_BEGIN\n## Goal\nFix the repeated selector failure.\n\n## How to implement\n1. Update the selector.\n\nEvidence: https://github.com/bacluc-agent-org/agent-runner/actions/runs/10 and https://github.com/bacluc-agent-org/agent-runner/actions/runs/11\nFOLLOW_UP_BODY_END\n"""
+    calls = []
+
+    def fake_gh(*args):
+        calls.append(args)
+        if args[0] == "api":
+            return "<!-- standing-pass:42 -->"
+        return "created"
+
+    original = standing_pass.run_gh
+    standing_pass.run_gh = fake_gh
+    try:
+        assert create_follow_up(report, "bacluc-agent/agent-todo", "42") == "already-created"
+    finally:
+        standing_pass.run_gh = original
+    assert any(args[0] == "api" for args in calls)
+    assert RUN_URL in report
+
+
+def test_claim_cleanup_preserves_only_nonterminal_statuses():
+    for status in ("queued", "in_progress", "unknown"):
+        result = run(
+            [
+                "bash",
+                "-c",
+                'case "$1" in queued|in_progress|unknown) exit 0;; *) exit 1;; esac',
+                "claim-status",
+                status,
+            ]
+        )
+        assert result.returncode == 0
+    for status in ("completed", "failure", "cancelled", "timed_out", "action_required"):
+        result = run(
+            [
+                "bash",
+                "-c",
+                'case "$1" in queued|in_progress|unknown) exit 0;; *) exit 1;; esac',
+                "claim-status",
+                status,
+            ]
+        )
+        assert result.returncode != 0

@@ -157,6 +157,7 @@ jobs:
         with:
           repository: bacluc-agent-org/agent-runner
           path: ${{ env.DIAGNOSTICS_CHECKOUT }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
           token: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}

@@ -32,6 +32,11 @@ PROVIDERS = (
 MAX_CONCURRENT = 5
 PROBE_TIMEOUT_SECONDS = 30
 PROBE_BUDGET = 30
+CONFIG_TIMEOUT_SECONDS = 60  # per attempt; two attempts max
+FETCH_TIMEOUT_SECONDS = 10
+# Worst case ~520s: 2x60s config reads + 120s discovery + 10x10s model fetches +
+# ceil(30/5)=6 probe waves x 30s; stays below the 10-minute timeout of the
+# Refine issues model-availability step.
 PROBE_PROMPT = "Respond with exactly OK."
 CACHE_ISSUE_TITLE = "model-discovery cache"
 DISCOVERY_TIMEOUT_SECONDS = 120
@@ -69,15 +74,18 @@ def resolve_cache_issue() -> str | None:
         return None
 
 
-def read_cache(cache_issue: str) -> dict:
+def read_cache(cache_issue: str) -> dict | None:
+    """None means the cache is unreadable; {} means an empty cache body."""
     try:
         body = run_gh(
             "issue", "view", str(cache_issue), *repo_flag(), "--json", "body", "--jq", ".body"
         )
+        if not body.strip():
+            return {}
         cache = json.loads(body)
-        return cache if isinstance(cache, dict) else {}
+        return cache if isinstance(cache, dict) else None
     except Exception:
-        return {}
+        return None
 
 
 def write_cache(cache_issue: str, cache: dict) -> None:
@@ -137,7 +145,8 @@ def opencode_config_sources() -> list[str] | dict | None:
             with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as tmp:
                 tmp_path = tmp.name
                 subprocess.run(
-                    ["opencode", "debug", "config"], check=True, stdout=tmp, text=True, timeout=120
+                    ["opencode", "debug", "config"], check=True, stdout=tmp, text=True,
+                    timeout=CONFIG_TIMEOUT_SECONDS,
                 )
             with open(tmp_path, encoding="utf-8") as fh:
                 config = json.load(fh)
@@ -153,7 +162,21 @@ def opencode_config_sources() -> list[str] | dict | None:
                 except OSError:
                     pass
     if isinstance(config, list):
-        return [item["path"] for item in config if isinstance(item, dict) and isinstance(item.get("path"), str)]
+        paths = []
+        for item in config:
+            if not isinstance(item, dict):
+                continue
+            path = item.get("path")
+            if not isinstance(path, str) or item.get("type") == "directory":
+                continue
+            if not os.path.isfile(path):
+                print(f"warning: opencode config source does not exist: {path}", file=sys.stderr)
+                continue
+            paths.append(path)
+        if not paths:
+            print("warning: opencode debug config reported no readable config files", file=sys.stderr)
+            return None
+        return paths
     if isinstance(config, dict):
         return config if isinstance(config.get("provider"), dict) else None
     print("warning: unexpected opencode config document format", file=sys.stderr)
@@ -196,8 +219,17 @@ def strip_jsonc_comments(text: str) -> str:
             i = end + 2
         elif char == ",":
             end = i + 1
-            while end < len(text) and text[end].isspace():
-                end += 1
+            while end < len(text):
+                if text[end].isspace():
+                    end += 1
+                elif text[end:end + 2] == "//":
+                    newline = text.find("\n", end)
+                    end = len(text) if newline < 0 else newline
+                elif text[end:end + 2] == "/*":
+                    close = text.find("*/", end + 2)
+                    end = len(text) if close < 0 else close + 2
+                else:
+                    break
             if end < len(text) and text[end] in "}]":
                 i += 1
             else:
@@ -215,6 +247,8 @@ def load_provider_options() -> dict[str, dict] | None:
         return None
     if isinstance(sources, dict):
         sources = [sources]
+    if not sources:
+        return None
     providers = {}
     try:
         for source in sources:
@@ -266,11 +300,7 @@ def provider_has_credentials(model_id: str, provider_options: dict, env: dict, a
     if not provider:
         return True
     if provider not in provider_options:
-        return (
-            provider in PROVIDER_WHITELISTS
-            or provider in dict(PROVIDERS)
-            or auth_has_provider(provider, auth_path)
-        )
+        return True
     if auth_has_provider(provider, auth_path):
         return True
     options = provider_options[provider]
@@ -302,7 +332,7 @@ def fetch_model_ids(endpoint: str, api_key: str | None = None) -> list[str]:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         request = urllib.request.Request(endpoint, headers=headers)
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=FETCH_TIMEOUT_SECONDS) as response:
             return parse_go_model_ids(response.read().decode())
     except Exception as e:
         print(f"warning: failed to discover models from {endpoint}: {e}", file=sys.stderr)
@@ -530,8 +560,12 @@ def write_outputs(cache_issue: str | None, cache: dict, available: list[str]) ->
 def main() -> int:
     cache_issue = resolve_cache_issue()
     cache = {}
+    cache_readable = True
     if cache_issue is not None:
         cache = read_cache(cache_issue)
+        if cache is None:
+            cache = {}
+            cache_readable = False
     provider_options = load_provider_options()
     try:
         whitelisted_models, provider_models = discover_models(provider_options)
@@ -557,11 +591,17 @@ def main() -> int:
         fresh = len(candidates) - skipped
         print(f"probe results: 0 checked, 0 ok, 0 failed ({fresh} candidates fresh)")
     checked = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    # Re-read the cache right before updating to avoid clobbering concurrent runs' updates
+    # Re-read the cache right before updating to avoid clobbering concurrent runs' updates;
+    # a failed re-read keeps the earlier snapshot and blocks rewriting the shared cache
     if cache_issue is not None:
-        cache = read_cache(cache_issue) or cache
+        latest = read_cache(cache_issue)
+        if latest is None:
+            cache_readable = False
+        else:
+            cache = latest
+            cache_readable = True
     cache = merge_results(cache, results, checked)
-    if cache_issue is not None and candidates:
+    if cache_issue is not None and candidates and cache_readable:
         write_cache(cache_issue, cache)
     available = available_models(cache, whitelisted_models, provider_models, provider_options, os.environ)
     write_outputs(cache_issue, cache, available)

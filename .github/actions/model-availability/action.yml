@@ -1,15 +1,14 @@
 name: Check model availability
 description: >-
-  Probes whitelisted models (free models plus glm, gpt-5.6-luna, qwen, kimi,
-  big-pickle) of the OpenCode Go providers and OpenRouter for availability
-  and merges the results into the model-availability cache issue in the issue
-  repository. The cache issue number is taken from the
-  MODEL_AVAILABILITY_CACHE_ISSUE env var, or auto-detected by searching for
-  an issue titled "model-discovery cache" in the repository set via
-  ISSUE_REPOSITORY. Available models cache for 24 hours, failed models
-  for 1 hour. Probes at most 30 stale candidates per run, highest
-  priority first. Provider credentials are read from raw OpenCode config and
-  resolved against the job environment, including the supported API-key env vars.
+  Probes whitelisted models for availability and merges the results into the
+  model-availability cache issue in the issue repository. The cache issue
+  number is taken from the MODEL_AVAILABILITY_CACHE_ISSUE env var, or
+  auto-detected by searching for an issue titled "model-discovery cache" in
+  the repository set via ISSUE_REPOSITORY. Available models cache for 24
+  hours, failed models for 1 hour. Probes at most 30 stale candidates per
+  run, highest priority first. Provider credentials are resolved from raw
+  OpenCode config files plus the job environment; configured providers whose
+  {env:...} refs do not resolve are skipped.
 outputs:
   cache-issue:
     description: Resolved model-availability cache issue number (empty when none)
@@ -19,8 +18,10 @@ outputs:
     value: ${{ steps.check.outputs.cache-json }}
   available-models:
     description: >-
-      Newline-separated credential-eligible model IDs with ok=true in the merged cache, free
-      models first, then paid models
+      Newline-separated model IDs with ok=true in the merged cache that are
+      credential-eligible: credentials are resolved from raw OpenCode config
+      files plus the job environment, and configured providers whose {env:...}
+      refs do not resolve are skipped. Listed in discovery order.
     value: ${{ steps.check.outputs.available-models }}
 runs:
   using: composite

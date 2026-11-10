@@ -44,3 +44,5 @@
 /poolside/laguna-s-2\.1
 # gpt-6-luna: abandons tasks; coordinator in runs 42360505733, 42364721366, 42365777506; bacluc-agent/agent-todo#433.
 /gpt-6-luna
+# recursive/flint-v1.0:free: rate limit exceeded in runs 42705855400 and 42699870656.
+/recursive/flint-v1\.0

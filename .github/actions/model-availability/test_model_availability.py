@@ -1282,9 +1282,12 @@ class TestRefineIssuesExitCode:
         result = self._run(self._completion_tail(), 0, 3)
         assert result.returncode == 1
         assert "0 refined, 3 failed" in result.stdout
+        assert "::error::no issue was refined (3 failed)" in result.stdout
 
     def test_partial_success_still_succeeds(self):
-        assert self._run(self._completion_tail(), 1, 2).returncode == 0
+        result = self._run(self._completion_tail(), 1, 2)
+        assert result.returncode == 0
+        assert "::error::" not in result.stdout
 
 
 class TestRefineIssuesNoCandidates:

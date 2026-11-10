@@ -773,8 +773,15 @@ class TestMergeResults:
         cache = {"opencode/a-free": {"ok": True, "checked": "old"}}
         results = {"opencode/a-free": False, "opencode-go-openai/glm-5.2": True}
         assert model_availability.merge_results(cache, results, "2026-09-06T12:00:00Z") == {
-            "opencode/a-free": {"ok": False, "checked": "2026-09-06T12:00:00Z"},
+            "opencode/a-free": {"ok": False, "checked": "2026-09-06T12:00:00Z", "reason": "probe"},
             "opencode-go-openai/glm-5.2": {"ok": True, "checked": "2026-09-06T12:00:00Z"},
+        }
+
+    def test_success_clears_previous_reason(self):
+        cache = {"opencode/a-free": {"ok": False, "checked": "old", "reason": "balance"}}
+        results = {"opencode/a-free": True}
+        assert model_availability.merge_results(cache, results, "2026-09-06T12:00:00Z") == {
+            "opencode/a-free": {"ok": True, "checked": "2026-09-06T12:00:00Z"},
         }
 
 

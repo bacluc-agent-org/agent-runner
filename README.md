@@ -84,7 +84,10 @@ idea (issue in agent-todo)
   the latest release tag). The AI configuration lives there, not here.
 - `model-availability` — probes which AI models currently work and stores the
   result in a cache issue in the todo repository. Probing every model on
-  every run would be slow and expensive; the cache makes it cheap.
+  every run would be slow and expensive; the cache makes it cheap. Cache
+  entries are `{"ok": bool, "checked": ISO-8601, "reason": ...}`; `reason`
+  is present only for failures and is one of `balance`, `auth`,
+  `model_unavailable`, `retry_limit`, or `probe`.
 
 Selectors apply the shared `scripts/model-deny-list.txt` and stop instead of
 dispatching when no allowed model is available.

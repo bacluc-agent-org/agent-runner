@@ -317,8 +317,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
         run: |
           set -Eeuo pipefail
-          cache_json=$(gh issue view "$CACHE_ISSUE" -R "$ISSUE_REPOSITORY" --json body --jq '.body' 2>/dev/null || echo '{}')
-          checked="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           fatal_model=""
           fatal_reason=""
           if [[ -f "$RUNNER_TEMP/opencode-fatal.json" ]]; then
@@ -327,16 +325,8 @@ jobs:
             fatal_message=$(jq -r '(.message // empty) | tostring | gsub("%"; "%25") | gsub("[\r\n]+"; " ")' "$RUNNER_TEMP/opencode-fatal.json")
             printf '::error::fatal provider error (%s) from model %s: %s\n' "$fatal_reason" "$fatal_model" "${fatal_message:-unknown}"
           fi
-          fatal_provider="${fatal_model%/*}"
           MODEL="${fatal_model:-$MODEL}"
-          if [[ "$fatal_reason" == balance || "$fatal_reason" == auth ]]; then
-            new_cache=$(echo "$cache_json" | jq --arg provider "$fatal_provider" --arg checked "$checked" \
-              'with_entries(if (.key | split("/")[0]) == $provider then .value = {"ok": false, "checked": $checked} else . end)')
-          else
-            new_cache=$(echo "$cache_json" | jq --arg model "$MODEL" --arg checked "$checked" \
-              '. + {($model): {"ok": false, "checked": $checked}}')
-          fi
-          gh issue edit "$CACHE_ISSUE" -R "$ISSUE_REPOSITORY" --body "$new_cache" || true
+          python3 scripts/record_model_failure.py --repo "$ISSUE_REPOSITORY" --cache-issue "$CACHE_ISSUE" --model "${fatal_model:-$MODEL}" --reason "$fatal_reason" || true
 
       - name: Dump debug output
         if: always()

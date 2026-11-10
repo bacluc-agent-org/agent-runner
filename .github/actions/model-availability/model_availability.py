@@ -389,9 +389,12 @@ def probe_candidates(candidates: list[str], work_dir: str) -> dict[str, bool]:
 
 
 def merge_results(cache: dict, results: dict[str, bool], checked: str) -> dict:
-    merged = dict(cache)
+    merged = dict(cache) if isinstance(cache, dict) else {}
     for candidate, ok in results.items():
-        merged[candidate] = {"ok": ok, "checked": checked}
+        if ok:
+            merged[candidate] = {"ok": True, "checked": checked}
+        else:
+            merged[candidate] = {"ok": False, "checked": checked, "reason": "probe"}
     return merged
 
 

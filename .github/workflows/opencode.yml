@@ -550,16 +550,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
         run: |
           set -Eeuo pipefail
-          cache_json=$(gh issue view "$CACHE_ISSUE" -R "$ISSUE_REPOSITORY" --json body --jq '.body' 2>/dev/null || echo '{}')
-          checked="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          if [[ "$FATAL_REASON" == balance || "$FATAL_REASON" == auth ]]; then
-            new_cache=$(echo "$cache_json" | jq --arg provider "$FATAL_PROVIDER" --arg checked "$checked" \
-              'with_entries(if (.key | split("/")[0]) == $provider then .value = {"ok": false, "checked": $checked} else . end)')
-          else
-            new_cache=$(echo "$cache_json" | jq --arg model "$MODEL" --arg checked "$checked" \
-              '. + {($model): {"ok": false, "checked": $checked}}')
-          fi
-          gh issue edit "$CACHE_ISSUE" -R "$ISSUE_REPOSITORY" --body "$new_cache" || true
+          python3 "$RUNNER_TEMP/agent-runner/scripts/record_model_failure.py" --repo "$ISSUE_REPOSITORY" --cache-issue "$CACHE_ISSUE" --model "$MODEL" --reason "$FATAL_REASON" || true
 
       - name: Dump debug output
         if: always()

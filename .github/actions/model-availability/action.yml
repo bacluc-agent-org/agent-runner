@@ -15,7 +15,11 @@ outputs:
     description: Resolved model-availability cache issue number (empty when none)
     value: ${{ steps.check.outputs.cache-issue }}
   cache-json:
-    description: Merged cache JSON (current cache plus fresh probe results)
+    description: >-
+      Merged cache JSON (current cache plus fresh probe results). Each entry
+      is {"ok": bool, "checked": ISO-8601, "reason": ...}; "reason" is
+      present only for failures and is one of balance, auth,
+      model_unavailable, retry_limit, or probe.
     value: ${{ steps.check.outputs.cache-json }}
   available-models:
     description: >-

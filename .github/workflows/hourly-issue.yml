@@ -105,7 +105,7 @@ jobs:
           # Oldest-first: the 50-item page keeps the OLDEST 50 unclaimed issues instead of the
           # newest 50, so backlog items beyond the cap are the newest, not the oldest.
           search_json="$RUNNER_TEMP/candidates.json"
-          gh api "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:ready-for-implementation+-label:agent-running+sort:created-asc&per_page=50" \
+          gh api "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:ready-for-implementation+-label:agent-running&sort=created&order=asc&per_page=50" \
             --jq '.items' > "$search_json"
 
           candidates="$RUNNER_TEMP/candidate-numbers.txt"

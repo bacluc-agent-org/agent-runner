@@ -40,6 +40,10 @@ export function messageOf(error: unknown): string {
 const plugin: Plugin = {
   id: "fatal-error-guard",
   setup(context) {
+    // shortcut: guard is a no-op on opencode CLI <2.x where context.event is absent; fatal-error detection unavailable until a runtime exposing events is used
+    if (typeof context?.event?.subscribe !== "function") {
+      return () => {};
+    }
     const controller = new AbortController();
     void (async () => {
       for await (const event of context.event.subscribe({

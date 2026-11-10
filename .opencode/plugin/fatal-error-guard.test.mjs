@@ -367,6 +367,35 @@ test("plugin setup v2: subscribe captures options.signal, exits on fatal", async
   assert.equal(marker.sessionID, "s1");
 });
 
+test("plugin setup: context without event returns no-op cleanup", () => {
+  const tmp = (process.env.RUNNER_TEMP = "/tmp/fatal-guard-test-noop");
+  const markerPath = `${tmp}/opencode-fatal.json`;
+  const origExit = process.exit;
+  let exitCode = null;
+  process.exit = function (code) {
+    exitCode = code;
+    throw new Error("exit");
+  };
+  const cleanup = () => {
+    process.exit = origExit;
+  };
+  try {
+    mkdirSync(tmp, { recursive: true });
+    const unsub = plugin.setup({});
+    assert.equal(typeof unsub, "function");
+    unsub();
+    assert.equal(exitCode, null);
+    try {
+      readFileSync(markerPath, "utf8");
+      assert.fail("marker should not exist");
+    } catch (e) {
+      assert.ok(true);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
 test("plugin setup v2: benign event does not exit", async () => {
   const tmp = (process.env.RUNNER_TEMP = "/tmp/fatal-guard-test-2");
   const markerPath = `${tmp}/opencode-fatal.json`;

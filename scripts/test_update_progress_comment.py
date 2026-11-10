@@ -253,6 +253,24 @@ class TestFinish:
 
 
 class TestEnsure:
+    def test_ensure_and_finish_reuse_owned_marker_despite_newer_foreign_comments(self, fake_gh):
+        mine = _comment(333, upc.TEMPLATE.read_text(encoding="utf-8"))
+        gh = fake_gh([mine])
+
+        assert upc.main(_argv("--mode", "ensure")) == 0
+        gh.comments.extend(
+            [
+                _comment(444, upc.MARKER, login="someone-else", created_at="2026-09-27T00:00:00Z"),
+                _comment(555, "status without marker", created_at="2026-09-28T00:00:00Z"),
+            ]
+        )
+        assert upc.main(_argv("--mode", "finish", "--result", "completed")) == 0
+
+        assert [call[:4] for call in gh.mutating_calls] == [
+            ("api", "-X", "PATCH", f"repos/{REPO}/issues/comments/333")
+        ]
+        assert len(_rows(mine["body"])) == 1
+
     def test_never_duplicates_an_existing_marker_comment(self, fake_gh, tmp_path):
         mine = _comment(333, upc.TEMPLATE.read_text(encoding="utf-8"))
         foreign = _comment(
@@ -301,3 +319,34 @@ class TestErrors:
         monkeypatch.setattr(upc, "run_gh", boom)
 
         assert upc.main(_argv("--mode", "ensure")) == 1
+
+
+def test_coordinator_and_subagents_receive_canonical_progress_policy():
+    root = upc.TEMPLATE.parent.parent
+    workflow = (root / '.github/workflows/opencode.yml').read_text(encoding='utf-8')
+    policy = (root / 'scripts/progress-reporting.txt').read_text(encoding='utf-8')
+    assert '$(cat "$RUNNER_TEMP/agent-runner/scripts/progress-reporting.txt")' in workflow
+    assert "ref: ${{ github.repository == 'bacluc-agent-org/agent-runner' && github.sha || '' }}" in workflow
+    assert 'newest issue comment authored by the authenticated user' in policy
+    assert 'Never create another marked or unmarked progress or status comment' in policy
+    assert 'including per run, per step, per milestone, or by a subagent' in policy
+    assert 'Post a separate comment ONLY as a short reply to a human comment' in policy
+    assert 'Pass these rules verbatim into every subagent prompt' in policy
+
+
+def test_human_feedback_is_checked_before_finishing_progress():
+    workflow = (upc.TEMPLATE.parent.parent / '.github/workflows/opencode.yml').read_text(encoding='utf-8')
+    result = workflow.split('- name: Post run-result comment', 1)[1]
+    assert result.index('last_human_comment=$(gh issue view') < result.index('--mode finish')
+    assert result.index('--mode finish') < result.index('gh issue comment "$ISSUE_NUMBER"')
+    assert 'actor=$(gh api user --jq .login)' in result
+    assert result.count('.author.login != \\\"$actor\\\"') == 3
+
+
+def test_human_feedback_is_requeried_against_pre_update_baseline():
+    workflow = (upc.TEMPLATE.parent.parent / '.github/workflows/opencode.yml').read_text(encoding='utf-8')
+    result = workflow.split('- name: Post run-result comment', 1)[1]
+    assert 'progress_baseline=' in result
+    assert result.index('progress_baseline=') < result.index('--mode finish')
+    assert result.index('--mode finish') < result.rindex('last_human_comment=$(gh issue view')
+    assert '[[ "$last_human_comment" > "$progress_baseline" ]]' in result

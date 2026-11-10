@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """On-disk Voyager-style skill library storing indexed markdown snippets.
 
 Stdlib only. Persists skills (name, description, keywords, content) to a
@@ -21,7 +22,7 @@ def _sanitize_filename(name: str) -> str:
 
 
 def _resolve_dir(cli_dir, default=None):
-    if cli_dir:
+    if cli_dir is not None:
         return Path(cli_dir)
     env = os.environ.get("SKILL_LIBRARY_DIR")
     if env:
@@ -32,7 +33,7 @@ def _resolve_dir(cli_dir, default=None):
 
 
 class SkillLibrary:
-    def __init__(self, library_dir):
+    def __init__(self, library_dir: "Path | str"):
         self.library_dir = Path(library_dir)
 
     def _index_path(self):
@@ -68,7 +69,7 @@ class SkillLibrary:
                 pass
             raise
 
-    def add_skill(self, name, description, content, keywords):
+    def add_skill(self, name: str, description: str, content: str, keywords: list[str]) -> None:
         self.library_dir.mkdir(parents=True, exist_ok=True)
         new_file = _sanitize_filename(name)
         (self.library_dir / new_file).write_text(content, encoding="utf-8")
@@ -94,7 +95,7 @@ class SkillLibrary:
         records.append(record)
         self._write_index(records)
 
-    def retrieve(self, query, top_k=5):
+    def retrieve(self, query: str, top_k: int = 5) -> list[tuple[str, str, int]]:
         if not top_k or top_k <= 0:
             return []
         tokens = [t for t in re.split(r"[^0-9a-zA-Z]+", query.lower()) if t]
@@ -112,9 +113,12 @@ class SkillLibrary:
             file_name = r.get("file", "")
             content = ""
             if file_name:
+                candidate = (self.library_dir / file_name).resolve()
+                lib_resolved = self.library_dir.resolve()
                 try:
-                    content = (self.library_dir / file_name).read_text(encoding="utf-8")
-                except (OSError, FileNotFoundError):
+                    candidate.relative_to(lib_resolved)
+                    content = candidate.read_text(encoding="utf-8")
+                except (ValueError, OSError, FileNotFoundError, UnicodeDecodeError):
                     content = ""
             content_lower = content.lower()
             score = 0
@@ -132,7 +136,7 @@ class SkillLibrary:
         results.sort(key=lambda x: x[2], reverse=True)
         return results[:top_k]
 
-    def list_skills(self):
+    def list_skills(self) -> list[dict]:
         records = self._read_index()
         return [{"name": r.get("name"), "description": r.get("description")} for r in records]
 

@@ -127,26 +127,31 @@ def parse_go_model_ids(models_json: str) -> list[str]:
 
 def opencode_config_sources() -> list[str] | dict | None:
     """Read source file paths reported by OpenCode; None means the command failed."""
-    tmp_path = None
-    try:
-        # `opencode debug config` truncates stdout at 65536 bytes when stdout is a
-        # pipe (opencode bug); redirect to a file so the full config is captured.
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as tmp:
-            tmp_path = tmp.name
-            subprocess.run(
-                ["opencode", "debug", "config"], check=True, stdout=tmp, text=True, timeout=60
-            )
-        with open(tmp_path, encoding="utf-8") as fh:
-            config = json.load(fh)
-    except Exception as e:
-        print(f"warning: failed to read opencode config: {e}", file=sys.stderr)
-        return None
-    finally:
-        if tmp_path is not None:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+    # `opencode debug config` is flaky under load; retry once so one slow or
+    # hung invocation does not zero out available models.
+    for attempt in range(2):
+        tmp_path = None
+        try:
+            # `opencode debug config` truncates stdout at 65536 bytes when stdout is a
+            # pipe (opencode bug); redirect to a file so the full config is captured.
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as tmp:
+                tmp_path = tmp.name
+                subprocess.run(
+                    ["opencode", "debug", "config"], check=True, stdout=tmp, text=True, timeout=120
+                )
+            with open(tmp_path, encoding="utf-8") as fh:
+                config = json.load(fh)
+            break
+        except Exception as e:
+            if attempt:
+                print(f"warning: failed to read opencode config: {e}", file=sys.stderr)
+                return None
+        finally:
+            if tmp_path is not None:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
     if isinstance(config, list):
         return [item["path"] for item in config if isinstance(item, dict) and isinstance(item.get("path"), str)]
     if isinstance(config, dict):
@@ -304,8 +309,12 @@ def fetch_model_ids(endpoint: str, api_key: str | None = None) -> list[str]:
         return []
 
 
-def discover_models() -> tuple[list[str], dict[str, list[str]]]:
-    """whitelisted_models from `opencode models`; provider_models: {provider: model_ids} per provider."""
+def discover_models(provider_options: dict[str, dict] | None) -> tuple[list[str], dict[str, list[str]]]:
+    """whitelisted_models from `opencode models`; provider_models: {provider: model_ids} per provider.
+
+    provider_options comes from load_provider_options(); None fails closed."""
+    if provider_options is None:
+        raise RuntimeError("cannot determine provider eligibility because OpenCode config could not be read")
     result = subprocess.run(
         ["opencode", "models"], check=True, capture_output=True, text=True, timeout=DISCOVERY_TIMEOUT_SECONDS
     )
@@ -320,9 +329,7 @@ def discover_models() -> tuple[list[str], dict[str, list[str]]]:
     except OSError:
         pass
     whitelisted_models = parse_whitelisted_models(result.stdout)
-    provider_config = load_provider_options()
-    if provider_config is None:
-        raise RuntimeError("cannot determine provider eligibility because OpenCode config could not be read")
+    provider_config = provider_options
     base_urls = {
         name: url
         for name, info in provider_config.items()
@@ -527,7 +534,7 @@ def main() -> int:
         cache = read_cache(cache_issue)
     provider_options = load_provider_options()
     try:
-        whitelisted_models, provider_models = discover_models()
+        whitelisted_models, provider_models = discover_models(provider_options)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, RuntimeError, OSError) as e:
         print(f"warning: model discovery failed; using eligible cached results only: {e}", file=sys.stderr)
         whitelisted_models, provider_models = list(cache), {}

@@ -376,13 +376,49 @@ class TestDiscoverModels:
             def __exit__(self, *args):
                 return False
             def read(self):
-                return b'{"data": []}'
+                return b'{"data": [{"id": "subscription.glm-5.2"}]}'
         monkeypatch.setattr(model_availability.urllib.request, "urlopen", lambda *a, **kw: FakeResponse())
         monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
-        models, _ = model_availability.discover_models(
+        models, provider_models = model_availability.discover_models(
             {name: provider["options"] for name, provider in config["provider"].items()}
         )
         assert models == ["vshn-us-ai/subscription.glm-5.2"]
+        assert provider_models["vshn-us-ai"] == ["subscription.glm-5.2"]
+
+    @pytest.mark.parametrize(
+        "present_env",
+        [
+            {"VSHN_US_AI_API_KEY": "configured-key"},
+            {"VSHN_US_BASE_URL": "https://vshn.example/v1"},
+        ],
+    )
+    def test_arbitrary_configured_provider_is_dropped_without_all_credentials(self, monkeypatch, present_env):
+        monkeypatch.delenv("VSHN_US_AI_API_KEY", raising=False)
+        monkeypatch.delenv("VSHN_US_BASE_URL", raising=False)
+        for name, value in present_env.items():
+            monkeypatch.setenv(name, value)
+        config = {"provider": {"vshn-us-ai": {"options": {
+            "baseURL": "{env:VSHN_US_BASE_URL}", "apiKey": "{env:VSHN_US_AI_API_KEY}"
+        }}}}
+        def fake_run(args, *a, **kw):
+            if args == ["opencode", "models"]:
+                return types.SimpleNamespace(stdout="vshn-us-ai/subscription.glm-5.2\n")
+            kw["stdout"].write(json.dumps(config))
+            return types.SimpleNamespace(stdout="")
+        class FakeResponse:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def read(self):
+                return b'{"data": []}'
+        monkeypatch.setattr(model_availability.urllib.request, "urlopen", lambda *a, **kw: FakeResponse())
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+        models, provider_models = model_availability.discover_models(
+            {name: provider["options"] for name, provider in config["provider"].items()}
+        )
+        assert models == []
+        assert "vshn-us-ai" not in provider_models
 
 
 EXAMPLE_OPENCODE_WHITELIST = [r"(?:-|:)free$", r"big-pickle", r"glm", r"gpt-5\.6-luna", r"qwen", r"kimi"]
@@ -457,6 +493,12 @@ class TestProviderCredentials:
         assert model_availability.load_provider_options() == {
             "vshn-us-ai": {"baseURL": "https://host/api//v1", "apiKey": "{env:VSHN_KEY}"}
         }
+
+    def test_debug_config_dict_without_provider_key_stays_probeable(self, monkeypatch):
+        monkeypatch.setattr(model_availability.subprocess, "run", lambda *a, **kw: (
+            kw["stdout"].write(json.dumps({"model": "opencode/big-pickle"}))
+        ))
+        assert model_availability.load_provider_options() == {}
 
     def test_config_read_failure_is_not_empty_success(self, monkeypatch):
         monkeypatch.setattr(model_availability.subprocess, "run", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("failed")))
@@ -700,6 +742,9 @@ class TestParseJsonc:
     def test_url_slashes_survive_line_comment_and_trailing_comma(self):
         text = '{"baseURL":"https://host/api//v1", // c\n}'
         assert model_availability.parse_jsonc(text) == {"baseURL": "https://host/api//v1"}
+
+    def test_invalid_json_returns_none(self):
+        assert model_availability.parse_jsonc("{not valid json") is None
 
 
 class TestBuildCandidates:
@@ -1630,7 +1675,7 @@ class TestWorstCaseBudget:
             + 10 * model_availability.FETCH_TIMEOUT_SECONDS
             + waves * model_availability.PROBE_TIMEOUT_SECONDS
         )
-        assert worst <= 540
+        assert worst <= 600
 
 
 class TestRefineIssuesExitCode:

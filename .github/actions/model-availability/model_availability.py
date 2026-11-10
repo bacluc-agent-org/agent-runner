@@ -32,9 +32,9 @@ PROVIDERS = (
 MAX_CONCURRENT = 5
 PROBE_TIMEOUT_SECONDS = 30
 PROBE_BUDGET = 30
-CONFIG_TIMEOUT_SECONDS = 60  # per attempt; two attempts max
-FETCH_TIMEOUT_SECONDS = 10
-# Worst case ~520s: 2x60s config reads + 120s discovery + 10x10s model fetches +
+CONFIG_TIMEOUT_SECONDS = 120  # per attempt; two attempts max
+FETCH_TIMEOUT_SECONDS = 5
+# Worst case ~590s: 2x120s config reads + 120s discovery + 10x5s model fetches +
 # ceil(30/5)=6 probe waves x 30s; stays below the 10-minute timeout of the
 # Refine issues model-availability step.
 PROBE_PROMPT = "Respond with exactly OK."
@@ -178,7 +178,7 @@ def opencode_config_sources() -> list[str] | dict | None:
             return None
         return paths
     if isinstance(config, dict):
-        return config if isinstance(config.get("provider"), dict) else None
+        return config
     print("warning: unexpected opencode config document format", file=sys.stderr)
     return None
 
@@ -295,7 +295,7 @@ def auth_has_provider(provider: str, auth_path: str | None = None) -> bool:
 
 
 def provider_has_credentials(model_id: str, provider_options: dict, env: dict, auth_path: str | None = None) -> bool:
-    """Configured providers require a resolved key; absent built-ins remain probeable."""
+    """Configured providers require a resolved key; absent providers remain probeable."""
     provider = model_id.split("/", 1)[0] if "/" in model_id else ""
     if not provider:
         return True

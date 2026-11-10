@@ -72,6 +72,8 @@ def test_denies_recursive_flint_v1_0_and_keeps_neighboring_models():
         assert is_denied(model), f"{model} must be deny-listed"
 
     for model in [
+        "openrouter/recursive/flint-v1.01:free",
+        "openrouter/recursive/flint-v1.0-preview:free",
         "openrouter/recursive/flint-v1.1:free",
         "openrouter/other/flint-v1.0:free",
     ]:

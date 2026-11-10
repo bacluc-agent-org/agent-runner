@@ -17,8 +17,8 @@ import tempfile
 from pathlib import Path
 
 
-def _sanitize_filename(name: str) -> str:
-    return re.sub(r"[^0-9A-Za-z]", "_", name) + ".md"
+def _sanitize_filename(name) -> str:
+    return re.sub(r"[^0-9A-Za-z]", "_", str(name)) + ".md"
 
 
 def _resolve_dir(cli_dir, default=None):
@@ -80,10 +80,16 @@ class SkillLibrary:
                 old_file = r.get("file")
                 break
         records = [r for r in records if r.get("name") != name]
-        if old_file and old_file != new_file:
+        if isinstance(old_file, str) and old_file and old_file != new_file:
+            candidate = (self.library_dir / old_file).resolve()
+            lib_resolved = self.library_dir.resolve()
             try:
-                (self.library_dir / old_file).unlink()
-            except FileNotFoundError:
+                candidate.relative_to(lib_resolved)
+                try:
+                    candidate.unlink()
+                except FileNotFoundError:
+                    pass
+            except ValueError:
                 pass
         record = {
             "name": name,
@@ -111,6 +117,8 @@ class SkillLibrary:
             desc_lower = str(description).lower()
             name_lower = str(name).lower()
             file_name = r.get("file", "")
+            if not isinstance(file_name, str):
+                file_name = ""
             content = ""
             if file_name:
                 candidate = (self.library_dir / file_name).resolve()

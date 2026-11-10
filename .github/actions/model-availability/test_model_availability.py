@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import subprocess
 import types
@@ -17,6 +18,7 @@ CONFIG = {
         "openrouter": {"options": {"baseURL": "https://openrouter.ai/api/v1"}},
     }
 }
+OPTIONS = {name: info["options"] for name, info in CONFIG["provider"].items()}
 
 
 @pytest.fixture(autouse=True)
@@ -52,7 +54,7 @@ class TestDiscoverModels:
         monkeypatch.setattr(model_availability.urllib.request, "urlopen", unexpected_oauth_request)
         monkeypatch.setattr(model_availability.subprocess, "run", fake_run_with_openai)
 
-        models, _ = model_availability.discover_models()
+        models, _ = model_availability.discover_models(OPTIONS)
 
         assert models == ["openai/gpt-5.6-luna"]
 
@@ -76,7 +78,7 @@ class TestDiscoverModels:
 
         monkeypatch.setattr(model_availability.urllib.request, "urlopen", fake_urlopen)
         monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
-        free_models, provider_models = model_availability.discover_models()
+        free_models, provider_models = model_availability.discover_models(OPTIONS)
         assert free_models == ["opencode/a-free"]
         assert provider_models == {
             "opencode-go-openai": ["glm-5.2"],
@@ -94,7 +96,7 @@ class TestDiscoverModels:
 
         monkeypatch.setattr(model_availability.urllib.request, "urlopen", fail)
         monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
-        free_models, provider_models = model_availability.discover_models()
+        free_models, provider_models = model_availability.discover_models(OPTIONS)
         assert free_models == ["opencode/a-free"]
         assert provider_models == {
             "opencode-go-openai": [],
@@ -131,20 +133,15 @@ class TestDiscoverModels:
             model_availability.urllib.request, "urlopen", lambda *a, **kw: FakeResponse()
         )
         monkeypatch.setattr(model_availability.subprocess, "run", fake_run_missing)
-        free_models, provider_models = model_availability.discover_models()
+        free_models, provider_models = model_availability.discover_models(
+            {name: provider["options"] for name, provider in config["provider"].items()}
+        )
         assert free_models == ["opencode/a-free"]
         assert provider_models == {"opencode-go-openai": ["glm-5.2"]}
 
-    def test_config_read_failure(self, monkeypatch):
-        def fail_config(args, *a, **kw):
-            if args == ["opencode", "models"]:
-                return types.SimpleNamespace(stdout="opencode/a-free\n")
-            raise RuntimeError("opencode failed")
-
-        monkeypatch.setattr(model_availability.subprocess, "run", fail_config)
-        free_models, provider_models = model_availability.discover_models()
-        assert free_models == ["opencode/a-free"]
-        assert provider_models == {}
+    def test_config_read_failure_does_not_become_empty_success(self, monkeypatch):
+        with pytest.raises(RuntimeError, match="cannot determine provider eligibility"):
+            model_availability.discover_models(None)
 
     def test_filters_openrouter_models_by_whitelist(self, monkeypatch):
         captured = {}
@@ -167,7 +164,7 @@ class TestDiscoverModels:
 
         monkeypatch.setattr(model_availability.urllib.request, "urlopen", fake_urlopen)
         monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
-        free_models, provider_models = model_availability.discover_models()
+        free_models, provider_models = model_availability.discover_models(OPTIONS)
         assert provider_models["openrouter"] == ["cohere/north-mini-code:free"]
         assert provider_models["opencode-go-openai"] == ["deepseek/deepseek-chat-v3.1"]
         assert ("openrouter", "OPENROUTER_API_KEY") in model_availability.PROVIDERS
@@ -188,7 +185,7 @@ class TestDiscoverModels:
             model_availability.urllib.request, "urlopen", lambda *a, **kw: FakeResponse()
         )
         monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
-        free_models, provider_models = model_availability.discover_models()
+        free_models, provider_models = model_availability.discover_models(OPTIONS)
         assert "openrouter" not in provider_models
         assert "opencode-go-openai" in provider_models
 
@@ -232,7 +229,9 @@ class TestDiscoverModels:
             model_availability.urllib.request, "urlopen", lambda *a, **kw: FakeResponse()
         )
         monkeypatch.setattr(model_availability.subprocess, "run", fake_run_invalid)
-        free_models, provider_models = model_availability.discover_models()
+        free_models, provider_models = model_availability.discover_models(
+            {name: provider["options"] for name, provider in config["provider"].items()}
+        )
         assert "openrouter" not in provider_models
         assert "opencode-go-openai" in provider_models
 
@@ -257,7 +256,9 @@ class TestDiscoverModels:
             raise AssertionError(f"unexpected args: {args}")
 
         monkeypatch.setattr(model_availability.subprocess, "run", fake_run_non_string)
-        free_models, provider_models = model_availability.discover_models()
+        free_models, provider_models = model_availability.discover_models(
+            {name: provider["options"] for name, provider in config["provider"].items()}
+        )
         assert free_models == ["opencode/a-free"]
         assert provider_models == {}
 
@@ -308,7 +309,9 @@ class TestDiscoverModels:
             model_availability.urllib.request, "urlopen", lambda *a, **kw: FakeResponse()
         )
         monkeypatch.setattr(model_availability.subprocess, "run", fake_run_filter)
-        free_models, provider_models = model_availability.discover_models()
+        free_models, provider_models = model_availability.discover_models(
+            {name: provider["options"] for name, provider in config["provider"].items()}
+        )
         assert "cortecs2/glm-5.1" not in free_models
         assert "vshn-us-ai/subscription.glm-5.2" not in free_models
         assert "opencode-go-openai/glm-5.2" in free_models
@@ -350,62 +353,243 @@ class TestDiscoverModels:
             model_availability.urllib.request, "urlopen", lambda *a, **kw: FakeResponse()
         )
         monkeypatch.setattr(model_availability.subprocess, "run", fake_run_resolved)
-        free_models, provider_models = model_availability.discover_models()
+        free_models, provider_models = model_availability.discover_models(
+            {name: provider["options"] for name, provider in config["provider"].items()}
+        )
         assert "opencode-go-openai/glm-5.2" in free_models
         assert "cortecs2/glm-5.1" not in free_models
+
+    def test_arbitrary_configured_provider_is_kept_when_credentials_resolve(self, monkeypatch):
+        monkeypatch.setenv("VSHN_US_AI_API_KEY", "configured-key")
+        monkeypatch.setenv("VSHN_US_BASE_URL", "https://vshn.example/v1")
+        config = {"provider": {"vshn-us-ai": {"options": {
+            "baseURL": "{env:VSHN_US_BASE_URL}", "apiKey": "{env:VSHN_US_AI_API_KEY}"
+        }}}}
+        def fake_run(args, *a, **kw):
+            if args == ["opencode", "models"]:
+                return types.SimpleNamespace(stdout="vshn-us-ai/subscription.glm-5.2\n")
+            kw["stdout"].write(json.dumps(config))
+            return types.SimpleNamespace(stdout="")
+        class FakeResponse:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def read(self):
+                return b'{"data": [{"id": "subscription.glm-5.2"}]}'
+        monkeypatch.setattr(model_availability.urllib.request, "urlopen", lambda *a, **kw: FakeResponse())
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+        models, provider_models = model_availability.discover_models(
+            {name: provider["options"] for name, provider in config["provider"].items()}
+        )
+        assert models == ["vshn-us-ai/subscription.glm-5.2"]
+        assert provider_models["vshn-us-ai"] == ["subscription.glm-5.2"]
+
+    @pytest.mark.parametrize(
+        "present_env",
+        [
+            {"VSHN_US_AI_API_KEY": "configured-key"},
+            {"VSHN_US_BASE_URL": "https://vshn.example/v1"},
+        ],
+    )
+    def test_arbitrary_configured_provider_is_dropped_without_all_credentials(self, monkeypatch, present_env):
+        monkeypatch.delenv("VSHN_US_AI_API_KEY", raising=False)
+        monkeypatch.delenv("VSHN_US_BASE_URL", raising=False)
+        for name, value in present_env.items():
+            monkeypatch.setenv(name, value)
+        config = {"provider": {"vshn-us-ai": {"options": {
+            "baseURL": "{env:VSHN_US_BASE_URL}", "apiKey": "{env:VSHN_US_AI_API_KEY}"
+        }}}}
+        def fake_run(args, *a, **kw):
+            if args == ["opencode", "models"]:
+                return types.SimpleNamespace(stdout="vshn-us-ai/subscription.glm-5.2\n")
+            kw["stdout"].write(json.dumps(config))
+            return types.SimpleNamespace(stdout="")
+        class FakeResponse:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def read(self):
+                return b'{"data": []}'
+        monkeypatch.setattr(model_availability.urllib.request, "urlopen", lambda *a, **kw: FakeResponse())
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+        models, provider_models = model_availability.discover_models(
+            {name: provider["options"] for name, provider in config["provider"].items()}
+        )
+        assert models == []
+        assert "vshn-us-ai" not in provider_models
 
 
 EXAMPLE_OPENCODE_WHITELIST = [r"(?:-|:)free$", r"big-pickle", r"glm", r"gpt-5\.6-luna", r"qwen", r"kimi"]
 
-class TestProviderProbeable:
-    @pytest.mark.parametrize("config", [{"openrouter": []}, {"openrouter": {"baseURL": []}}])
-    def test_malformed_provider_config_is_not_probeable(self, config):
-        assert not model_availability.provider_probeable("openrouter/foo:free", config, {})
+class TestProviderCredentials:
+    def test_absent_provider_is_probeable_without_allowlist(self, tmp_path):
+        auth_path = tmp_path / "auth.json"
+        auth_path.write_text("{}")
 
-    @pytest.mark.parametrize(
-        "provider_config",
-        [
-            {"provider": {"openrouter": []}},
-            {"provider": {"openrouter": {"options": []}}},
-        ],
-    )
-    def test_malformed_discovered_provider_config_is_ignored(self, monkeypatch, provider_config):
-        def fake_run(*args, **kwargs):
-            kwargs["stdout"].write(json.dumps(provider_config))
+        assert model_availability.provider_has_credentials(
+            "removed-provider/model", {}, {}, str(auth_path)
+        )
+        assert model_availability.provider_has_credentials(
+            "opencode/big-pickle", {}, {}, str(auth_path)
+        )
+
+    def test_configured_provider_requires_resolved_key_and_url(self, tmp_path):
+        config = {"custom": {"baseURL": "https://api.example/v1", "apiKey": "{env:A}{env:B}"}}
+        path = tmp_path / "auth.json"
+        path.write_text("{}")
+        assert not model_availability.provider_has_credentials("custom/model", config, {"A": "x"}, str(path))
+        assert model_availability.provider_has_credentials("custom/model", config, {"A": "x", "B": "y"}, str(path))
+        config["custom"]["baseURL"] = "{env:URL}"
+        assert not model_availability.provider_has_credentials("custom/model", config, {"A": "x", "B": "y"}, str(path))
+
+    def test_configured_provider_requires_each_declared_env_ref(self, tmp_path):
+        auth_path = tmp_path / "auth.json"
+        auth_path.write_text("{}")
+        options = {
+            "vshn-us-ai": {
+                "apiKey": "{env:VSHN_US_AI_API_KEY}",
+                "baseURL": "{env:VSHN_US_BASE_URL}",
+            }
+        }
+        assert model_availability.provider_has_credentials(
+            "vshn-us-ai/model",
+            options,
+            {"VSHN_US_AI_API_KEY": "key", "VSHN_US_BASE_URL": "https://vshn.example/v1"},
+            str(auth_path),
+        )
+        assert not model_availability.provider_has_credentials(
+            "vshn-us-ai/model", options, {"VSHN_US_AI_API_KEY": "key"}, str(auth_path)
+        )
+        assert not model_availability.provider_has_credentials(
+            "vshn-us-ai/model", options, {"VSHN_US_BASE_URL": "https://vshn.example/v1"}, str(auth_path)
+        )
+
+    def test_builtin_literal_key_auth_and_arbitrary_provider(self, tmp_path):
+        path = tmp_path / "auth.json"
+        path.write_text('{"oauth-provider":{"access":"token"}}')
+        assert model_availability.provider_has_credentials("opencode/big-pickle", {}, {}, str(path))
+        assert model_availability.provider_has_credentials(
+            "vshn-us-ai/model", {"vshn-us-ai": {"apiKey": "literal", "baseURL": "https://vshn.example"}}, {}, str(path)
+        )
+        assert model_availability.provider_has_credentials("oauth-provider/model", {"oauth-provider": {}}, {}, str(path))
+
+    def test_missing_and_empty_env_refs_are_rejected(self):
+        assert model_availability.resolve_env_refs("{env:A}{env:B}", {"A": "key", "B": ""}) is None
+        assert model_availability.resolve_env_refs("{env:A}", {"A": "key"}) == "key"
+
+    def test_source_document_paths_and_raw_jsonc(self, tmp_path, monkeypatch):
+        path = tmp_path / "config.jsonc"
+        path.write_text('{"provider":{"vshn-us-ai":{"options":{"baseURL":"https://host/api//v1",/* note */"apiKey":"{env:VSHN_KEY}",},},},}')
+        directory = tmp_path / "confdir"
+        directory.mkdir()
+        monkeypatch.setattr(model_availability.subprocess, "run", lambda *a, **kw: (
+            kw["stdout"].write(json.dumps([
+                {"type": "document", "path": str(path), "info": {"providers": {"vshn-us-ai": {"settings": {"apiKey": "***"}}}}},
+                {"type": "directory", "path": str(directory)},
+            ]))
+        ))
+        assert model_availability.load_provider_options() == {
+            "vshn-us-ai": {"baseURL": "https://host/api//v1", "apiKey": "{env:VSHN_KEY}"}
+        }
+
+    def test_debug_config_dict_without_provider_key_stays_probeable(self, monkeypatch):
+        monkeypatch.setattr(model_availability.subprocess, "run", lambda *a, **kw: (
+            kw["stdout"].write(json.dumps({"model": "opencode/big-pickle"}))
+        ))
+        assert model_availability.load_provider_options() == {}
+
+    def test_config_read_failure_is_not_empty_success(self, monkeypatch):
+        monkeypatch.setattr(model_availability.subprocess, "run", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("failed")))
+        assert model_availability.load_provider_options() is None
+
+    def test_debug_config_timeout_is_retried_once(self, monkeypatch, tmp_path):
+        config_path = tmp_path / "opencode.json"
+        config_path.write_text("{}")
+        calls = []
+
+        def flaky_run(args, *a, **kw):
+            calls.append(list(args))
+            if len(calls) == 1:
+                raise subprocess.TimeoutExpired(args, model_availability.CONFIG_TIMEOUT_SECONDS)
+            kw["stdout"].write(json.dumps([{"type": "document", "path": str(config_path)}]))
+            return types.SimpleNamespace(stdout="")
+
+        monkeypatch.setattr(model_availability.subprocess, "run", flaky_run)
+        assert model_availability.opencode_config_sources() == [str(config_path)]
+        assert len(calls) == 2
+
+    def test_opencode_config_sources_skips_directories_and_missing_files(self, tmp_path, monkeypatch):
+        valid = tmp_path / "config.jsonc"
+        valid.write_text('{"provider":{"vshn-us-ai":{"options":{"apiKey":"literal"}}}}')
+        directory = tmp_path / "confdir"
+        directory.mkdir()
+        missing = tmp_path / "missing.json"
+
+        def fake_run(args, *a, **kw):
+            kw["stdout"].write(json.dumps([
+                {"type": "document", "path": str(valid)},
+                {"type": "directory", "path": str(directory)},
+                {"type": "document", "path": str(missing)},
+            ]))
             return types.SimpleNamespace(stdout="")
 
         monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
-        assert model_availability.load_provider_config() == {}
-
-    def test_resolved_key(self):
-        config = {"openrouter": {"baseURL": "https://openrouter.ai/api/v1", "apiKey": "sk-or-xxx"}}
-        assert model_availability.provider_probeable("openrouter/foo:free", config, {})
-
-    def test_missing_key(self):
-        config = {"cortecs2": {"baseURL": "https://api.cortecs.ai/v1", "apiKey": None}}
-        assert not model_availability.provider_probeable("cortecs2/glm-5.1", config, {})
-
-    def test_env_template(self):
-        config = {
-            "openrouter": {
-                "baseURL": "https://openrouter.ai/api/v1",
-                "apiKey": "{env:OPENROUTER_API_KEY}",
-            }
+        assert model_availability.load_provider_options() == {
+            "vshn-us-ai": {"apiKey": "literal"}
         }
-        assert model_availability.provider_probeable(
-            "openrouter/foo:free", config, {"OPENROUTER_API_KEY": "k"}
+
+    def test_opencode_config_sources_fails_closed_without_readable_file(self, tmp_path, monkeypatch, capsys):
+        directory = tmp_path / "confdir"
+        directory.mkdir()
+        missing = tmp_path / "missing.json"
+
+        def fake_run(args, *a, **kw):
+            kw["stdout"].write(json.dumps([
+                {"type": "directory", "path": str(directory)},
+                {"type": "document", "path": str(missing)},
+            ]))
+            return types.SimpleNamespace(stdout="")
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+        assert model_availability.opencode_config_sources() is None
+        assert "no readable config files" in capsys.readouterr().err
+
+    def test_debug_config_fails_closed_after_second_failure(self, monkeypatch, capsys):
+        calls = []
+
+        def always_timeout(args, *a, **kw):
+            calls.append(list(args))
+            raise subprocess.TimeoutExpired(args, 120)
+
+        monkeypatch.setattr(model_availability.subprocess, "run", always_timeout)
+        assert model_availability.opencode_config_sources() is None
+        assert len(calls) == 2
+        assert "failed to read opencode config" in capsys.readouterr().err
+
+    def test_discover_models_uses_passed_options_without_rereading_config(self, monkeypatch):
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"data": []}'
+
+        def no_debug_config(args, *a, **kw):
+            if args == ["opencode", "debug", "config"]:
+                raise AssertionError("discover_models must use the passed provider_options")
+            return types.SimpleNamespace(stdout="opencode/a-free\n")
+
+        monkeypatch.setattr(model_availability.urllib.request, "urlopen", lambda *a, **kw: FakeResponse())
+        monkeypatch.setattr(model_availability.subprocess, "run", no_debug_config)
+        models, _ = model_availability.discover_models(
+            {"opencode-go-openai": {"baseURL": "https://opencode.ai/zen/go/v1", "apiKey": "key"}}
         )
-        assert not model_availability.provider_probeable("openrouter/foo:free", config, {})
-
-    def test_unknown_provider_passes(self):
-        assert model_availability.provider_probeable("opencode/a-free", {}, {})
-
-    def test_invalid_baseurl(self):
-        config = {"openrouter": {"baseURL": "/chat/completions", "apiKey": "sk-or-xxx"}}
-        assert not model_availability.provider_probeable("openrouter/foo:free", config, {})
-
-    def test_openai_passes_like_builtin_provider(self):
-        assert model_availability.provider_probeable("openai/gpt-5.6-luna", {}, {})
+        assert models == ["opencode/a-free"]
 
 class TestParseWhitelistedModels:
     def test_uses_exact_openai_patterns_without_changing_opencode_matching(self):
@@ -546,6 +730,21 @@ class TestParseGoModelIds:
 
     def test_invalid_json_returns_empty(self):
         assert model_availability.parse_go_model_ids("not json") == []
+
+
+class TestParseJsonc:
+    def test_line_comment_after_trailing_comma(self):
+        assert model_availability.parse_jsonc('{"a":1, // c\n}') == {"a": 1}
+
+    def test_block_comment_after_trailing_comma(self):
+        assert model_availability.parse_jsonc('{"a":1,/*c*/}') == {"a": 1}
+
+    def test_url_slashes_survive_line_comment_and_trailing_comma(self):
+        text = '{"baseURL":"https://host/api//v1", // c\n}'
+        assert model_availability.parse_jsonc(text) == {"baseURL": "https://host/api//v1"}
+
+    def test_invalid_json_returns_none(self):
+        assert model_availability.parse_jsonc("{not valid json") is None
 
 
 class TestBuildCandidates:
@@ -779,6 +978,47 @@ class TestMergeResults:
 
 
 class TestAvailableModels:
+    def test_available_models_applies_credential_gate_to_cached_entries(self, tmp_path, monkeypatch):
+        auth_path = tmp_path / ".local/share/opencode/auth.json"
+        auth_path.parent.mkdir(parents=True)
+        auth_path.write_text('{"oauth-provider":{"access":"token"}}')
+        monkeypatch.setenv("HOME", str(tmp_path))
+        cache = {
+            "absent-provider/model": {"ok": True, "checked": "fresh"},
+            "opencode/big-pickle": {"ok": True, "checked": "fresh"},
+            "oauth-provider/model": {"ok": True, "checked": "fresh"},
+            "configured-provider/model": {"ok": True, "checked": "fresh"},
+        }
+        options = {"configured-provider": {"apiKey": "{env:API_KEY}"}}
+
+        assert model_availability.available_models(
+            cache,
+            list(cache),
+            {},
+            options,
+            {},
+        ) == [
+            "absent-provider/model",
+            "opencode/big-pickle",
+            "oauth-provider/model",
+        ]
+        assert model_availability.available_models(
+            cache,
+            list(cache),
+            {},
+            options,
+            {"API_KEY": "configured-key"},
+        ) == [
+            "absent-provider/model",
+            "opencode/big-pickle",
+            "oauth-provider/model",
+            "configured-provider/model",
+        ]
+
+    def test_fails_closed_without_provider_options(self):
+        cache = {"opencode/a-free": {"ok": True, "checked": "fresh"}}
+        assert model_availability.available_models(cache, list(cache), {}, None, {}) == []
+
     def test_free_first_then_paid(self):
         cache = {
             "opencode-go-openai/glm-5.2": {"ok": True, "checked": "x"},
@@ -790,11 +1030,32 @@ class TestAvailableModels:
             cache,
             ["opencode/a-free", "opencode/b-free"],
             {"opencode-go-openai": ["glm-5.2"], "opencode-go-openai-2": ["glm-5.2"]},
+            {},
         ) == [
             "opencode/a-free",
             "opencode-go-openai/glm-5.2",
             "opencode-go-openai-2/glm-5.2",
         ]
+
+    def test_cached_custom_provider_requires_runtime_credentials_without_mutating_cache(self, tmp_path, monkeypatch):
+        provider = "vshn-us-ai"
+        candidate = f"{provider}/subscription.glm-5.2"
+        cache = {candidate: {"ok": True, "checked": "fresh"}}
+        options = {provider: {"apiKey": "{env:VSHN_KEY}", "baseURL": "{env:VSHN_URL}"}}
+        auth_home = tmp_path / "home"
+        auth_path = auth_home / ".local/share/opencode/auth.json"
+        auth_path.parent.mkdir(parents=True)
+        auth_path.write_text("{}")
+        monkeypatch.setenv("HOME", str(auth_home))
+
+        assert model_availability.available_models(
+            cache, [candidate], {}, options, {},
+        ) == []
+        assert model_availability.available_models(
+            cache, [candidate], {}, options,
+            {"VSHN_KEY": "secret", "VSHN_URL": "https://vshn.example/v1"},
+        ) == [candidate]
+        assert cache[candidate]["ok"] is True
 
 
 class TestResolveCacheIssue:
@@ -879,12 +1140,20 @@ class TestReadCache:
             "opencode/a-free": {"ok": True, "checked": "x"}
         }
 
-    def test_returns_empty_on_failure(self, monkeypatch):
+    def test_returns_none_on_failure(self, monkeypatch):
         def fail(*args):
             raise RuntimeError("gh failed")
 
         monkeypatch.setattr(model_availability, "run_gh", fail)
+        assert model_availability.read_cache("49") is None
+
+    def test_empty_body_returns_empty_dict(self, monkeypatch):
+        monkeypatch.setattr(model_availability, "run_gh", lambda *args: "   \n")
         assert model_availability.read_cache("49") == {}
+
+    def test_malformed_body_returns_none(self, monkeypatch):
+        monkeypatch.setattr(model_availability, "run_gh", lambda *args: "not json")
+        assert model_availability.read_cache("49") is None
 
 
 class TestWriteCache:
@@ -953,7 +1222,7 @@ class TestModelsEndpointFor:
         )
 
 
-class TestLoadProviderBaseUrls:
+class TestLoadProviderOptions:
     def test_returns_base_urls(self, monkeypatch):
         config = {
             "provider": {
@@ -967,9 +1236,10 @@ class TestLoadProviderBaseUrls:
             return types.SimpleNamespace(stdout="")
 
         monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
-        assert model_availability.load_provider_base_urls() == {
-            "opencode-go-openai": "https://opencode.ai/zen/go/v1",
-            "opencode-go-anthropic": "https://opencode.ai/zen/go/v1/messages",
+        assert model_availability.load_provider_options() == {
+            "opencode-go-openai": {"baseURL": "https://opencode.ai/zen/go/v1"},
+            "opencode-go-anthropic": {"baseURL": "https://opencode.ai/zen/go/v1/messages"},
+            "no-base-url": {},
         }
 
     def test_returns_empty_on_failure(self, monkeypatch):
@@ -977,7 +1247,7 @@ class TestLoadProviderBaseUrls:
             raise RuntimeError("opencode failed")
 
         monkeypatch.setattr(model_availability.subprocess, "run", fail)
-        assert model_availability.load_provider_base_urls() == {}
+        assert model_availability.load_provider_options() is None
 
 
 class TestProbeModelLogging:
@@ -1045,7 +1315,7 @@ class TestDiscoverModelsLogging:
             lambda *args, **kwargs: FakeResponse(),
         )
         monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
-        free_models, provider_models = model_availability.discover_models()
+        free_models, provider_models = model_availability.discover_models(OPTIONS)
         assert free_models == ["opencode/a-free", "opencode/big-pickle"]
         assert provider_models == {
             "opencode-go-openai": [],
@@ -1193,8 +1463,9 @@ class TestModelAvailabilityAction:
 class TestMainProbeSummary:
     def test_prints_fresh_cache_summary_without_probing(self, monkeypatch, capsys):
         monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: None)
+        monkeypatch.setattr(model_availability, "load_provider_options", lambda: OPTIONS)
         monkeypatch.setattr(
-            model_availability, "discover_models", lambda: (["opencode/a-free"], {})
+            model_availability, "discover_models", lambda *args: (["opencode/a-free"], {})
         )
         monkeypatch.setattr(
             model_availability, "build_candidates", lambda *args: ["opencode/a-free"]
@@ -1212,7 +1483,8 @@ class TestMainProbeSummary:
 
     def test_does_not_invoke_probe_for_empty_pending(self, monkeypatch):
         monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: None)
-        monkeypatch.setattr(model_availability, "discover_models", lambda: ([], {}))
+        monkeypatch.setattr(model_availability, "load_provider_options", lambda: OPTIONS)
+        monkeypatch.setattr(model_availability, "discover_models", lambda *args: ([], {}))
         monkeypatch.setattr(model_availability, "build_candidates", lambda *args: [])
         monkeypatch.setattr(model_availability, "select_pending", lambda *args: ([], 0))
         calls = []
@@ -1223,8 +1495,9 @@ class TestMainProbeSummary:
 
     def test_prints_checked_probe_summary(self, monkeypatch, capsys):
         monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: None)
+        monkeypatch.setattr(model_availability, "load_provider_options", lambda: OPTIONS)
         monkeypatch.setattr(
-            model_availability, "discover_models", lambda: (["opencode/a-free", "opencode/b-free"], {})
+            model_availability, "discover_models", lambda *args: (["opencode/a-free", "opencode/b-free"], {})
         )
         monkeypatch.setattr(
             model_availability, "build_candidates", lambda *args: ["opencode/a-free", "opencode/b-free"]
@@ -1243,10 +1516,166 @@ class TestMainProbeSummary:
         assert model_availability.main() == 0
         assert "probe results: 2 checked, 1 ok, 1 failed" in capsys.readouterr().out
 
+    def test_discovery_failure_uses_only_cached_credential_eligible_models(self, monkeypatch):
+        vshn_candidate = "vshn-us-ai/subscription.glm-5.2"
+        other_candidate = "other-runner/model"
+        cache = {
+            vshn_candidate: {"ok": True, "checked": "fresh"},
+            other_candidate: {"ok": True, "checked": "fresh"},
+        }
+        options = {
+            "vshn-us-ai": {"apiKey": "{env:VSHN_KEY}", "baseURL": "https://vshn.example/v1"},
+            "other-runner": {"apiKey": "{env:OTHER_KEY}"},
+        }
+        monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: "49")
+        monkeypatch.setattr(model_availability, "read_cache", lambda issue: dict(cache))
+        monkeypatch.setattr(model_availability, "load_provider_options", lambda: options)
+        monkeypatch.setattr(
+            model_availability, "discover_models",
+            lambda *args: (_ for _ in ()).throw(subprocess.CalledProcessError(1, "opencode models")),
+        )
+        monkeypatch.delenv("VSHN_KEY", raising=False)
+        monkeypatch.setenv("OTHER_KEY", "other-key")
+        captured = {}
+        monkeypatch.setattr(model_availability, "write_outputs", lambda issue, saved, models: captured.update(saved=saved, models=models))
+        monkeypatch.setattr(model_availability, "write_cache", lambda *args: pytest.fail("fallback must not rewrite shared cache"))
+        monkeypatch.setattr(model_availability, "probe_candidates", lambda *args: pytest.fail("fallback must not probe"))
+        assert model_availability.main() == 0
+        assert captured == {"saved": cache, "models": [other_candidate]}
+
+    def test_main_passes_loaded_provider_options_to_discovery(self, monkeypatch):
+        captured = {}
+
+        def fake_discover(provider_options):
+            captured["options"] = provider_options
+            return ["opencode/a-free"], {}
+
+        monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: None)
+        monkeypatch.setattr(model_availability, "load_provider_options", lambda: OPTIONS)
+        monkeypatch.setattr(model_availability, "discover_models", fake_discover)
+        monkeypatch.setattr(model_availability, "build_candidates", lambda *args: ["opencode/a-free"])
+        monkeypatch.setattr(model_availability, "select_pending", lambda *args: ([], 0))
+        monkeypatch.setattr(model_availability, "write_outputs", lambda *args: None)
+        assert model_availability.main() == 0
+        assert captured["options"] is OPTIONS
+
+    def test_main_passes_loaded_provider_options_to_available_models(self, monkeypatch):
+        captured = {}
+
+        def fake_available_models(cache, whitelisted_models, provider_models, provider_options, env):
+            captured["options"] = provider_options
+            return ["opencode/a-free"]
+
+        monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: None)
+        monkeypatch.setattr(model_availability, "load_provider_options", lambda: OPTIONS)
+        monkeypatch.setattr(model_availability, "discover_models", lambda *args: (["opencode/a-free"], {}))
+        monkeypatch.setattr(model_availability, "build_candidates", lambda *args: ["opencode/a-free"])
+        monkeypatch.setattr(model_availability, "select_pending", lambda *args: ([], 0))
+        monkeypatch.setattr(model_availability, "available_models", fake_available_models)
+        monkeypatch.setattr(model_availability, "write_outputs", lambda *args: None)
+        assert model_availability.main() == 0
+        assert captured["options"] is OPTIONS
+
+    def test_main_fails_closed_when_config_unreadable(self, monkeypatch):
+        cache = {"opencode/a-free": {"ok": True, "checked": "fresh"}}
+        captured = {}
+        monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: "49")
+        monkeypatch.setattr(model_availability, "read_cache", lambda issue: dict(cache))
+        monkeypatch.setattr(model_availability, "load_provider_options", lambda: None)
+        monkeypatch.setattr(
+            model_availability, "write_cache",
+            lambda *args: pytest.fail("must not rewrite the shared cache when the config is unreadable"),
+        )
+        monkeypatch.setattr(
+            model_availability, "probe_candidates",
+            lambda *args: pytest.fail("must not probe when the config is unreadable"),
+        )
+        monkeypatch.setattr(
+            model_availability, "write_outputs",
+            lambda issue, saved, models: captured.update(saved=saved, models=models),
+        )
+        assert model_availability.main() == 0
+        assert captured["models"] == []
+
+
+class TestMainCacheWriteSafety:
+    def test_skips_cache_write_when_reread_fails(self, monkeypatch):
+        cache = {"opencode/a-free": {"ok": True, "checked": "fresh"}}
+        reads = iter([dict(cache), None])
+        captured = {}
+
+        monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: "49")
+        monkeypatch.setattr(model_availability, "read_cache", lambda issue: next(reads))
+        monkeypatch.setattr(model_availability, "load_provider_options", lambda: OPTIONS)
+        monkeypatch.setattr(
+            model_availability, "discover_models", lambda *args: (["opencode/a-free"], {})
+        )
+        monkeypatch.setattr(
+            model_availability, "build_candidates", lambda *args: ["opencode/a-free"]
+        )
+        monkeypatch.setattr(
+            model_availability, "select_pending", lambda *args: (["opencode/a-free"], 0)
+        )
+        monkeypatch.setattr(
+            model_availability, "probe_candidates", lambda *args: {"opencode/a-free": True}
+        )
+        monkeypatch.setattr(
+            model_availability, "write_outputs",
+            lambda issue, saved, models: captured.update(saved=saved, models=models),
+        )
+        monkeypatch.setattr(
+            model_availability, "write_cache",
+            lambda *args: pytest.fail("must not rewrite the shared cache after a failed re-read"),
+        )
+        assert model_availability.main() == 0
+        assert captured["saved"]["opencode/a-free"]["ok"] is True
+        assert captured["models"] == ["opencode/a-free"]
+
+    def test_writes_cache_when_reread_recovers_after_initial_failure(self, monkeypatch):
+        cache = {"opencode/a-free": {"ok": True, "checked": "fresh"}}
+        reads = iter([None, dict(cache)])
+        writes = []
+
+        monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: "49")
+        monkeypatch.setattr(model_availability, "read_cache", lambda issue: next(reads))
+        monkeypatch.setattr(model_availability, "load_provider_options", lambda: OPTIONS)
+        monkeypatch.setattr(
+            model_availability, "discover_models", lambda *args: (["opencode/a-free"], {})
+        )
+        monkeypatch.setattr(
+            model_availability, "build_candidates", lambda *args: ["opencode/a-free"]
+        )
+        monkeypatch.setattr(
+            model_availability, "select_pending", lambda *args: (["opencode/a-free"], 0)
+        )
+        monkeypatch.setattr(
+            model_availability, "probe_candidates", lambda *args: {"opencode/a-free": True}
+        )
+        monkeypatch.setattr(model_availability, "write_outputs", lambda *args: None)
+        monkeypatch.setattr(
+            model_availability, "write_cache", lambda issue, saved: writes.append((issue, saved))
+        )
+        assert model_availability.main() == 0
+        assert len(writes) == 1
+        assert writes[0][0] == "49"
+        assert writes[0][1]["opencode/a-free"]["ok"] is True
+
 
 class TestDiscoveryTimeout:
     def test_discovery_timeout_is_bounded(self):
         assert model_availability.DISCOVERY_TIMEOUT_SECONDS <= 120
+
+
+class TestWorstCaseBudget:
+    def test_fits_the_ten_minute_refine_model_availability_step(self):
+        waves = math.ceil(model_availability.PROBE_BUDGET / model_availability.MAX_CONCURRENT)
+        worst = (
+            2 * model_availability.CONFIG_TIMEOUT_SECONDS
+            + model_availability.DISCOVERY_TIMEOUT_SECONDS
+            + 10 * model_availability.FETCH_TIMEOUT_SECONDS
+            + waves * model_availability.PROBE_TIMEOUT_SECONDS
+        )
+        assert worst <= 600
 
 
 class TestRefineIssuesExitCode:
@@ -1331,15 +1760,16 @@ class TestRefineIssuesNoCandidates:
 
 
 class TestWorkflowOpenRouterSelection:
+    ROOT = Path(__file__).parents[3]
     WORKFLOWS = [
-        ".github/workflows/opencode.yml",
-        ".github/workflows/hourly-issue.yml",
-        ".github/workflows/refine-issues.yml",
+        ROOT / ".github/workflows/opencode.yml",
+        ROOT / ".github/workflows/hourly-issue.yml",
+        ROOT / ".github/workflows/refine-issues.yml",
     ]
 
     def test_workflows_select_openrouter_and_exclude_weak_free_models(self):
         for path in self.WORKFLOWS:
-            content = Path(path).read_text()
+            content = path.read_text()
             assert "openrouter/*)" in content
             assert '[[ -n "$OPENROUTER_API_KEY" ]]' in content
             assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in content
@@ -1347,10 +1777,10 @@ class TestWorkflowOpenRouterSelection:
 
     def test_last_resort_is_deny_list_filtered_and_fails_closed(self):
         for path in self.WORKFLOWS:
-            content = Path(path).read_text()
+            content = path.read_text()
             mapfile = content.index("mapfile -t free_models")
             give_up = content.rindex("not dispatching.' >&2")
-            if path.endswith("opencode.yml"):
+            if path.name == "opencode.yml":
                 filtered = content.index('filtered_models="$(grep -Ev "$deny_re" "$available_models_file")"')
                 assert 'if ((grep_status > 1)); then' in content[filtered:give_up]
                 assert "exit 1" in content[filtered:give_up]

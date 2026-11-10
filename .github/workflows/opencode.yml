@@ -49,7 +49,6 @@ on:
           - opencode-go-openai/kimi-k3
           - opencode-go-openai/hy4-preview
           - opencode-go-openai/gpt-5.6-luna
-          - opencode-go-openai/gpt-6-luna
           - opencode-go-openai/minimax-m2.5
           - opencode-go-openai-2/qwen3.8-max
           - opencode-go-openai-2/qwen3.8-flash
@@ -57,10 +56,8 @@ on:
           - opencode-go-openai-2/kimi-k3
           - opencode-go-openai-2/hy4-preview
           - opencode-go-openai-2/gpt-5.6-luna
-          - opencode-go-openai-2/gpt-6-luna
           - opencode-go-openai-2/minimax-m2.5
           - openai/gpt-5.6-luna
-          - openai/gpt-6-luna
           - openai/gpt-4o-mini
       timeout_minutes:
         description: Job timeout in minutes
@@ -72,6 +69,11 @@ on:
         required: false
         type: number
         default: 5
+      agent:
+        description: OpenCode agent to run
+        required: false
+        type: string
+        default: coordinator
   workflow_call:
     inputs:
       prompt:
@@ -92,6 +94,11 @@ on:
         required: false
         type: number
         default: 120
+      agent:
+        description: OpenCode agent to run
+        required: false
+        type: string
+        default: coordinator
 
 permissions:
   contents: write
@@ -116,6 +123,7 @@ jobs:
       DIAGNOSTICS_CHECKOUT: .agent-runner-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
       SOURCE_BRANCH: ${{ inputs.source_branch || '' }}
       PROMPT: "${{ inputs.prompt || 'Push-triggered validation: review the changed files in this push and verify the workflows are correct and complete. Report the result; do not modify files, create issues, or open pull requests.' }}"
+      AGENT: ${{ inputs.agent || 'coordinator' }}
 
     steps:
       - name: Print inputs
@@ -129,12 +137,14 @@ jobs:
           printf "requested_model: %s\n" "$requested"
           printf "timeout_minutes: %s\n" "$TIMEOUT_MINUTES"
           printf 'discovery_timeout_minutes: %s\n' "$DISCOVERY_TIMEOUT_MINUTES"
+          printf 'agent: %s\n' "$AGENT"
           printf '::%s::\n' "$stop_token"
         env:
           MODEL_TEXT: ${{ inputs.model }}
           MODEL_CHOICE: ${{ inputs.model_choice }}
           TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
           DISCOVERY_TIMEOUT_MINUTES: ${{ inputs.discovery_timeout_minutes }}
+          AGENT: ${{ inputs.agent || 'coordinator' }}
 
       - name: Check out target repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -161,10 +171,6 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-
-      - name: Warm up OpenCode CLI
-        shell: bash
-        run: scripts/wait_for_opencode.sh
 
       - name: Check model availability
         id: model-availability
@@ -201,7 +207,11 @@ jobs:
           printf '::add-mask::%s\n' "$GITHUB_TOKEN"
           printf '::add-mask::%s\n' "$OPENCODE_GO_API_KEY"
           printf '::add-mask::%s\n' "$OPENCODE_GO_2_API_KEY"
-          printf '::add-mask::%s\n' "$OPENCODE_AUTH_CONTENT"
+          if [[ -n "$OPENCODE_AUTH_CONTENT" ]]; then
+            printf '::add-mask::%s\n' "$OPENCODE_AUTH_CONTENT"
+          else
+            printf 'OPENCODE_AUTH_CONTENT is empty'
+          fi
 
           available_models_file="$RUNNER_TEMP/available-models.txt"
           printf '%s\n' "$AVAILABLE_MODELS" > "$available_models_file"
@@ -218,10 +228,12 @@ jobs:
           [[ -n "$deny_re" ]] || deny_re='^$'
 
           mapfile -t free_models < <(grep -E '^(opencode|openrouter)/[^[:space:]]+(-free|:free)$' "$available_models_file" | grep -Ev "$deny_re" | awk '!seen[$0]++')
+          mapfile -t openai_models < <(grep -E '^openai/' "$available_models_file" | grep -Ev "$deny_re" | awk '!seen[$0]++')
           for candidate in \
             'opencode/big-pickle' \
             'opencode-go-openai/qwen3.8-flash' \
             'opencode-go-openai-2/qwen3.8-flash' \
+            "${openai_models[@]}" \
             "${free_models[@]}"; do
             case "$candidate" in
               opencode-go-openai/qwen3.8-flash)
@@ -236,6 +248,12 @@ jobs:
               opencode/*-free) ;;
               openrouter/*)
                 [[ -n "$OPENROUTER_API_KEY" ]] || continue
+                ;;
+              openai/*)
+                if [[ ! -s "$HOME/.local/share/opencode/auth.json" ]] \
+                  || ! jq -e '.openai.type == "oauth" and .openai.access != "" and .openai.refresh != ""' "$HOME/.local/share/opencode/auth.json" >/dev/null; then
+                  continue
+                fi
                 ;;
               *) continue ;;
             esac
@@ -355,6 +373,16 @@ jobs:
           PY
           }
 
+          if grep -Eq "$deny_re" <<<"$model"; then
+            if [[ -n "$fallback_model" ]]; then
+              printf 'Model availability: requested %q is deny-listed; falling back to %q\n' "$model" "$fallback_model"
+              model="$fallback_model"
+              model_source='fallback: deny-listed requested model'
+            else
+              printf 'Model availability: requested %q is deny-listed and no fallback is available; refusing to dispatch.\n' "$model" >&2
+              exit 1
+            fi
+          fi
           requested_model="$model"
           if [[ "$model" == openai/* && -f ~/.local/share/opencode/auth.json ]]; then
             printf 'Model availability: requested %q is openai/* and auth.json is present; skipping fallback\n' "$model"
@@ -377,7 +405,7 @@ jobs:
           if [[ "$resolution" == available ]]; then
             printf 'Model availability: requested %q is available; resolved model %q\n' "$requested_model" "$resolved"
             model="$resolved"
-            if grep -Eq "$deny_re" <<<"$resolved"; then
+            if [[ -z "$requested" ]] && grep -Eq "$deny_re" <<<"$resolved"; then
               if [[ -n "$fallback_model" ]]; then
                 printf 'Model availability: requested %q resolved to deny-listed model %q; falling back to %q\n' "$requested_model" "$model" "$fallback_model"
                 model="$fallback_model"
@@ -458,12 +486,12 @@ jobs:
         id: coordinator
         shell: bash
         env:
-          AVAILABLE_MODELS: ${{ steps.model-availability.outputs.available-models }}
           MODEL: ${{ steps.select-model.outputs.model }}
           COORDINATOR_TIMEOUT: ${{ inputs.timeout_minutes || 120 }}
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
           BACLUC_AGENT_GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
           OPENCODE_FATAL_STAGE: coordinator
+          AGENT: ${{ inputs.agent || 'coordinator' }}
         run: |
           set -Eeuo pipefail
           rm -f "$RUNNER_TEMP/opencode-fatal.json"
@@ -473,10 +501,10 @@ jobs:
           stop_token="$(openssl rand -hex 32)"
           : "${stop_token:?stop-commands fence token generation failed}"
           printf '::stop-commands::%s\n' "$stop_token"
-          printf 'Final coordinator command: opencode run --agent coordinator --model %q --title %q\n' "$MODEL" "$coordinator_session_title"
+          printf 'Final OpenCode command: opencode run --agent %q --model %q --title %q\n' "$AGENT" "$MODEL" "$coordinator_session_title"
           printf 'Coordinator prompt:\n%s\n' "$PROMPT"
           set +e
-          timeout "${COORDINATOR_TIMEOUT}m" opencode run --agent coordinator --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
+          timeout "${COORDINATOR_TIMEOUT}m" opencode run --agent "$AGENT" --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
           coordinator_statuses=("${PIPESTATUS[@]}")
           printf '::%s::\n' "$stop_token"
           coordinator_status=${coordinator_statuses[0]}

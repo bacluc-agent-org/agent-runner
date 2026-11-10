@@ -37,59 +37,24 @@ def fake_run(args, *a, **kw):
 
 
 class TestDiscoverModels:
-    def test_retries_transient_cli_initialization_failure(self, monkeypatch):
-        calls = 0
+    def test_discovers_openai_models_from_opencode_catalog_without_oauth_api(self, monkeypatch):
+        def fake_run_with_openai(args, *a, **kw):
+            if args == ["opencode", "models"]:
+                return types.SimpleNamespace(stdout="openai/gpt-5.6-luna\n")
+            if args == ["opencode", "debug", "config"]:
+                kw["stdout"].write(json.dumps(CONFIG))
+                return types.SimpleNamespace(stdout="")
+            raise AssertionError(f"unexpected args: {args}")
 
-        def fail_once(args, *a, **kw):
-            nonlocal calls
-            calls += 1
-            if calls == 1:
-                raise subprocess.CalledProcessError(
-                    1, args, stderr="ServiceUnavailableError: Location plugins did not finish activating"
-                )
-            return fake_run(args, *a, **kw)
+        def unexpected_oauth_request(*args, **kwargs):
+            raise AssertionError("OpenAI models must come from the OpenCode catalog")
 
-        monkeypatch.setattr(model_availability.subprocess, "run", fail_once)
-        monkeypatch.setattr(model_availability.time, "sleep", lambda _: None)
-        assert model_availability.discover_models()[0] == ["opencode/a-free"]
-        assert calls == 3
+        monkeypatch.setattr(model_availability.urllib.request, "urlopen", unexpected_oauth_request)
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run_with_openai)
 
-    def test_discovery_uses_plugin_safe_environment_and_keeps_nonzero_error(self, monkeypatch):
-        captured = {}
+        models, _ = model_availability.discover_models()
 
-        def fail(args, *a, **kw):
-            captured["args"] = args
-            captured["env"] = kw["env"]
-            raise subprocess.CalledProcessError(
-                17, args, output="", stderr="Location plugins did not finish activating"
-            )
-
-        monkeypatch.setattr(model_availability.subprocess, "run", fail)
-        with pytest.raises(subprocess.CalledProcessError) as error:
-            model_availability.discover_models()
-
-        assert error.value.returncode == 17
-        assert captured["args"] == ["opencode", "models"]
-        assert captured["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugin":[]}'
-
-    def test_debug_config_uses_plugin_safe_environment(self, monkeypatch):
-        captured = {}
-
-        def fake_config(args, *a, **kw):
-            captured["env"] = kw["env"]
-            kw["stdout"].write(json.dumps(CONFIG))
-            return types.SimpleNamespace(stdout="")
-
-        monkeypatch.setattr(model_availability.subprocess, "run", fake_config)
-        assert model_availability.load_provider_config() == {
-            "opencode-go-openai": {"baseURL": "https://opencode.ai/zen/go/v1", "apiKey": None},
-            "opencode-go-anthropic": {
-                "baseURL": "https://opencode.ai/zen/go/v1/messages",
-                "apiKey": None,
-            },
-            "openrouter": {"baseURL": "https://openrouter.ai/api/v1", "apiKey": None},
-        }
-        assert captured["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugin":[]}'
+        assert models == ["openai/gpt-5.6-luna"]
 
     def test_discovers_models_per_provider(self, monkeypatch):
         captured = {}
@@ -109,12 +74,8 @@ class TestDiscoverModels:
             captured["full_url"] = request.full_url
             return FakeResponse()
 
-        def fake_run_env_check(args, *a, **kw):
-            captured["env"] = kw["env"]
-            return fake_run(args, *a, **kw)
-
         monkeypatch.setattr(model_availability.urllib.request, "urlopen", fake_urlopen)
-        monkeypatch.setattr(model_availability.subprocess, "run", fake_run_env_check)
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
         free_models, provider_models = model_availability.discover_models()
         assert free_models == ["opencode/a-free"]
         assert provider_models == {
@@ -126,7 +87,6 @@ class TestDiscoverModels:
         assert not any("Python-urllib" in v for v in captured["headers"].values())
         assert any(k.lower() == "x-opencode-session" for k in captured["headers"])
         assert captured["full_url"].endswith("/models")
-        assert captured["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugin":[]}'
 
     def test_endpoint_failure_per_provider(self, monkeypatch):
         def fail(request, timeout=30):
@@ -1021,22 +981,6 @@ class TestLoadProviderBaseUrls:
 
 
 class TestProbeModelLogging:
-    def test_probe_uses_plugin_safe_environment(self, tmp_path, monkeypatch):
-        captured = {}
-
-        class FakeResult:
-            returncode = 0
-            stdout = "OK\n"
-            stderr = ""
-
-        def fake_run(*args, **kwargs):
-            captured["env"] = kwargs["env"]
-            return FakeResult()
-
-        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
-        assert model_availability.probe_model("opencode/a-free", str(tmp_path))
-        assert captured["env"]["OPENCODE_CONFIG_CONTENT"] == '{"plugin":[]}'
-
     def test_writes_probe_log_with_stdout_and_stderr(self, tmp_path, monkeypatch):
         class FakeResult:
             returncode = 0
@@ -1245,42 +1189,8 @@ class TestModelAvailabilityAction:
         assert "auth.json" not in action
         assert "python3" in action
 
-    def test_standalone_opencode_workflow_keeps_the_openai_catalog_available(self):
-        # The validate step talks to the openai (ChatGPT OAuth) provider, whose
-        # model catalog comes from opencode's default plugins. Disabling them
-        # there makes every probe fail with "Provider not found: openai".
-        workflow = (Path(__file__).parents[3] / ".github/workflows/refresh-chatgpt-auth.yml").read_text()
-        validation = workflow[
-            workflow.index("- name: Validate refreshed token with opencode") : workflow.index(
-                "- name: Set secret (refreshed token)"
-            )
-        ]
-        assert "OPENCODE_DISABLE_DEFAULT_PLUGINS" not in validation
-        assert "OPENCODE_CONFIG_CONTENT: '{\"plugin\":[]}'" in validation
 
-
-    def test_uses_fresh_cache_when_cli_discovery_is_unavailable(self, monkeypatch):
-        checked = datetime.now(timezone.utc).isoformat()
-        cache = {"opencode/a-free": {"ok": True, "checked": checked}}
-        monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: "49")
-        monkeypatch.setattr(model_availability, "read_cache", lambda _: cache)
-        monkeypatch.setattr(
-            model_availability,
-            "discover_models",
-            lambda: (_ for _ in ()).throw(
-                subprocess.CalledProcessError(
-                    1, ["opencode", "models"], stderr="Location plugins did not finish activating"
-                )
-            ),
-        )
-        monkeypatch.setattr(model_availability, "probe_candidates", lambda *args: pytest.fail())
-        monkeypatch.setattr(model_availability, "write_cache", lambda *args: None)
-        outputs = []
-        monkeypatch.setattr(model_availability, "write_outputs", lambda *args: outputs.append(args))
-
-        assert model_availability.main() == 0
-        assert outputs[0][2] == ["opencode/a-free"]
-
+class TestMainProbeSummary:
     def test_prints_fresh_cache_summary_without_probing(self, monkeypatch, capsys):
         monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: None)
         monkeypatch.setattr(
@@ -1341,6 +1251,14 @@ class TestDiscoveryTimeout:
 
 class TestRefineIssuesExitCode:
     WORKFLOW = Path(__file__).parents[3] / ".github/workflows/refine-issues.yml"
+
+    def test_openai_selection_uses_deny_filtered_models(self):
+        content = self.WORKFLOW.read_text()
+        assignment = "mapfile -t openai_models < <(grep -E '^openai/' \"$available_models_file\" | grep -Ev -f scripts/model-deny-list.txt"
+        assert assignment in content
+        loop_start = content.index("for candidate in \\")
+        loop_end = content.index("done", loop_start)
+        assert '"${openai_models[@]}"' in content[loop_start:loop_end]
 
     @classmethod
     def _completion_tail(cls):
@@ -1554,53 +1472,3 @@ class TestWorkflowOpenRouterSelection:
             text=True,
         )
         assert kept.returncode == 0, "opencode/big-pickle must be kept"
-
-    def test_opencode_loads_deny_list_for_all_selections(self):
-        """Verify opencode.yml loads the deny-list regardless of explicit request."""
-        content = Path(".github/workflows/opencode.yml").read_text()
-        # Deny-list should be loaded unconditionally (not inside 'if [[ -z "$requested" ]]')
-        deny_load = content.index('deny_file="$RUNNER_TEMP/agent-runner/scripts/model-deny-list.txt"')
-        requested_check = content.index('requested="${MODEL_TEXT:-}"')
-        # The deny-list load should come after requested is determined but not be gated by it
-        assert deny_load > requested_check
-        # Should not have the old gated pattern
-        assert 'if [[ -z "$requested" ]]; then' not in content[deny_load:deny_load+200]
-
-    def test_opencode_falls_back_for_deny_listed_explicit_request(self, tmp_path):
-        """Explicit request for a deny-listed model should fall back, not fail closed."""
-        deny_list = tmp_path / "deny-list.txt"
-        deny_list.write_text("bad-model\n")
-        available = tmp_path / "available-models.txt"
-        available.write_text("bad-model\ngood-model\n")
-        fallback = "good-model"
-        result = subprocess.run(
-            [
-                "bash",
-                "-Eeuo",
-                "pipefail",
-                "-c",
-                """
-                deny_re="$(awk '!/^[[:space:]]*(#|$)/' "$1" | paste -sd'|' -)"
-                [[ -n "$deny_re" ]] || deny_re='^$'
-                requested_model="bad-model"
-                resolved="bad-model"
-                if grep -Eq "$deny_re" <<<"$resolved"; then
-                  if [[ -n "$2" ]]; then
-                    printf 'fallback: %s\n' "$2"
-                    exit 0
-                  else
-                    printf 'no fallback\n' >&2
-                    exit 1
-                  fi
-                fi
-                printf 'no deny match\n'
-                """,
-                "bash",
-                str(deny_list),
-                fallback,
-            ],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0
-        assert "fallback: good-model" in result.stdout

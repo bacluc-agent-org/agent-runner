@@ -8,7 +8,6 @@ import re
 import subprocess
 import sys
 import tempfile
-import time
 import urllib.request
 from urllib.parse import urlsplit
 from datetime import datetime, timezone
@@ -41,13 +40,6 @@ GITHUB_ISSUE_BODY_LIMIT = 65536
 
 def run_gh(*args: str) -> str:
     return subprocess.run(["gh", *args], check=True, capture_output=True, text=True).stdout
-
-
-def opencode_env() -> dict[str, str]:
-    env = dict(os.environ)
-    env["OPENCODE_DISABLE_DEFAULT_PLUGINS"] = "true"
-    env["OPENCODE_CONFIG_CONTENT"] = '{"plugin":[]}'
-    return env
 
 
 def issue_repo() -> str:
@@ -142,12 +134,7 @@ def load_provider_config() -> dict[str, dict[str, str | None]]:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as tmp:
             tmp_path = tmp.name
             subprocess.run(
-                ["opencode", "debug", "config"],
-                check=True,
-                stdout=tmp,
-                text=True,
-                timeout=60,
-                env=opencode_env(),
+                ["opencode", "debug", "config"], check=True, stdout=tmp, text=True, timeout=60
             )
         with open(tmp_path, encoding="utf-8") as fh:
             config = json.load(fh)
@@ -235,22 +222,9 @@ def fetch_model_ids(endpoint: str, api_key: str | None = None) -> list[str]:
 
 def discover_models() -> tuple[list[str], dict[str, list[str]]]:
     """whitelisted_models from `opencode models`; provider_models: {provider: model_ids} per provider."""
-    for attempt in range(5):
-        try:
-            result = subprocess.run(
-                ["opencode", "models"],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=DISCOVERY_TIMEOUT_SECONDS,
-                env=opencode_env(),
-            )
-            break
-        except subprocess.CalledProcessError as e:
-            if "Location plugins did not finish activating" not in (e.stderr or "") or attempt == 4:
-                print(f"ERROR: {e}\n{e.stderr or ''}", file=sys.stderr)
-                raise
-            time.sleep(2**attempt)
+    result = subprocess.run(
+        ["opencode", "models"], check=True, capture_output=True, text=True, timeout=DISCOVERY_TIMEOUT_SECONDS
+    )
     log_dir = os.path.join(
         os.environ.get("RUNNER_TEMP") or tempfile.gettempdir(), "model-probes"
     )
@@ -373,21 +347,21 @@ def probe_model(
     probe_dir = os.path.join(work_dir, "probe-" + candidate.replace("/", "-"))
     os.makedirs(probe_dir, exist_ok=True)
     log_path = os.path.join(work_dir, "model-probes", "probe-" + candidate.replace("/", "-") + ".log")
-    # noinspection broad-exception
     try:
         result = subprocess.run(
             [
                 "opencode",
+                "--pure",
                 "run",
+                "--dir",
+                probe_dir,
                 "--model",
                 candidate,
                 PROBE_PROMPT,
             ],
-            cwd=probe_dir,
             capture_output=True,
             text=True,
             timeout=timeout,
-            env=opencode_env(),
         )
     except Exception as e:
         _write_probe_log(log_path, f"ERROR: {e}\n")
@@ -461,25 +435,9 @@ def main() -> int:
     cache = {}
     if cache_issue is not None:
         cache = read_cache(cache_issue)
-    now = datetime.now(timezone.utc)
-    try:
-        whitelisted_models, provider_models = discover_models()
-    except subprocess.CalledProcessError as e:
-        if "Location plugins did not finish activating" not in (e.stderr or "") or not cache:
-            raise
-        whitelisted_models = [
-            model
-            for model, entry in cache.items()
-            if isinstance(entry, dict) and entry.get("ok") is True and is_cache_fresh(entry, now)
-        ]
-        if not whitelisted_models:
-            raise
-        print(
-            f"warning: model discovery unavailable; reusing {len(whitelisted_models)} fresh cached models",
-            file=sys.stderr,
-        )
-        provider_models = {}
+    whitelisted_models, provider_models = discover_models()
     candidates = build_candidates(whitelisted_models, provider_models, os.environ)
+    now = datetime.now(timezone.utc)
     pending, skipped = select_pending(candidates, cache, now)
     if skipped:
         print(

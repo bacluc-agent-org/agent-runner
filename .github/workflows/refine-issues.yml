@@ -38,10 +38,6 @@ jobs:
       - name: Set up OpenCode
         uses: ./.github/actions/setup-opencode
 
-      - name: Warm up OpenCode CLI
-        shell: bash
-        run: scripts/wait_for_opencode.sh
-
       - name: Check model availability
         id: model-availability
         timeout-minutes: 10
@@ -101,10 +97,12 @@ jobs:
           # hourly-issue.yml and opencode.yml); they pass the trivial OK probe but
           # fail as coordinator/selector in 10+ runs (e.g. 34029380869, 34042660858).
           mapfile -t free_models < <(grep -E '^(opencode|openrouter)/[^[:space:]]+(-free|:free)$' "$available_models_file" | grep -Ev -f scripts/model-deny-list.txt | awk '!seen[$0]++')
+          mapfile -t openai_models < <(grep -E '^openai/' "$available_models_file" | grep -Ev -f scripts/model-deny-list.txt | awk '!seen[$0]++')
           for candidate in \
             'opencode-go-openai/qwen3.8-flash' \
             'opencode-go-openai-2/qwen3.8-flash' \
             'opencode/big-pickle' \
+            "${openai_models[@]}" \
             "${free_models[@]}"; do
             case "$candidate" in
               opencode-go-openai/qwen3.8-flash)

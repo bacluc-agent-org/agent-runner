@@ -2,7 +2,7 @@ name: Hourly issue runner
 
 on:
   schedule:
-    - cron: "37 */4 * * *"
+    - cron: "37 * * * *"
   workflow_dispatch:
     inputs:
       selection_prompt:
@@ -57,10 +57,6 @@ jobs:
 
       - name: Set up OpenCode
         uses: ./.github/actions/setup-opencode
-
-      - name: Warm up OpenCode CLI
-        shell: bash
-        run: scripts/wait_for_opencode.sh
 
       - name: Check model availability
         id: model-availability
@@ -213,8 +209,8 @@ jobs:
           mkdir -p "$pr_lookup_dir"
           for repo in "${repo_list[@]}"; do
             key="$(echo "$repo" | tr '/' '_')"
-            gh pr list -R "$repo" --state all --limit 200 --json number,createdAt,updatedAt,headRefName,state,title,body \
-              --jq '.[] | "\(.headRefName)|#\(.number)|\(.createdAt)|\(.updatedAt)|\(.state)|\(.title)|\(.body // "" | gsub("[\r\n|]"; " "))"' 2>/dev/null \
+            gh pr list -R "$repo" --state all --limit 200 --json number,createdAt,updatedAt,headRefName,state,title \
+              --jq '.[] | "\(.headRefName)|#\(.number)|\(.createdAt)|\(.updatedAt)|\(.state)|\(.title)"' 2>/dev/null \
               | sort -t'|' -k4 -r > "$pr_lookup_dir/$key.lookup" || true
           done
 
@@ -225,13 +221,13 @@ jobs:
             pr_number=""
             for repo in "${repo_list[@]}"; do
               key="$(echo "$repo" | tr '/' '_')"
-              match="$(grep -m1 -E "issue-${num}([-_]|[^0-9A-Za-z_-]|$)|${ISSUE_REPOSITORY}#${num}([^0-9]|$)|${ISSUE_REPOSITORY}/issues/${num}([^0-9]|$)" "$pr_lookup_dir/$key.lookup" 2>/dev/null || true)"
+              match="$(grep -m1 -E "issue-${num}([-_]|[^0-9A-Za-z_-]|$)|${ISSUE_REPOSITORY}#${num}([^0-9]|$)" "$pr_lookup_dir/$key.lookup" 2>/dev/null || true)"
               if [[ -n "$match" ]]; then
                 pr_repo="$repo"
                 pr_number="$(echo "$match" | cut -d'|' -f2 | tr -d '#')"
                 pr_created="$(echo "$match" | cut -d'|' -f3)"
                 pr_state="$(echo "$match" | cut -d'|' -f5)"
-                pr_last_commit="$(gh api --paginate --slurp "repos/$pr_repo/pulls/$pr_number/commits" | jq -er --arg fallback "$pr_created" '([.[][] | .commit.committer.date] | max) // $fallback')"
+                pr_last_commit="$(gh api --paginate --slurp "repos/$pr_repo/pulls/$pr_number/commits" | jq -er --arg fallback "$pr_created" '([.[][] | .commit.committer.date] | max) // $fallback')" || pr_last_commit="$pr_created"
                 case "$pr_state" in
                   MERGED) pr_info="merged #${pr_number} last-commit:${pr_last_commit}" ;;
                   CLOSED) pr_info="closed #${pr_number} last-commit:${pr_last_commit}" ;;

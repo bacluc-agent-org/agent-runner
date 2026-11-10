@@ -272,7 +272,14 @@ jobs:
           if (( selection_status != 0 )); then
             printf 'Selection failed (opencode=%s); not dispatching.\n' "$selection_status" >&2
             ((selection_status == 124)) && printf '::error::issue selection exceeded the %sm limit (opencode exit %s)\n' "$SELECTION_TIMEOUT_MINUTES" "$selection_status"
-            exit 1
+            printf '::group::selection output tail\n'
+            stop_token="$(openssl rand -hex 32)"
+            : "${stop_token:?stop-commands fence token generation failed}"
+            printf '::stop-commands::%s\n' "$stop_token"
+            tail -n 200 "$selection" | tee -a "$GITHUB_STEP_SUMMARY" || true
+            printf '::%s::\n' "$stop_token"
+            printf '::endgroup::\n'
+            exit "$selection_status"
           fi
           if ! grep -q '[^[:space:]]' "$selection"; then
             printf '%s\n' 'Selection produced no output; not dispatching.' >&2

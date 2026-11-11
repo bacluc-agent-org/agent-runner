@@ -396,3 +396,5 @@ Tracked in bacluc-agent/agent-todo#152.
 - **Who merges the pull request?** Mostly a human. In this repo, the agent
   already merged things by himself. The agent implements the change and opens
   the PR when the work changes code; a person reviews and merges.
+
+<!-- scratch cancellation verification push 1 -->

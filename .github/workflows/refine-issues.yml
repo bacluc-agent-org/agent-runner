@@ -57,6 +57,8 @@ jobs:
           printf '::add-mask::%s\n' "$OPENCODE_GO_2_API_KEY"
           printf '::add-mask::%s\n' "$OPENCODE_AUTH_CONTENT"
 
+          refined_marker_timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
           printf '::group::ensure agent labels\n'
           if ! gh label create agent-refined -R "$ISSUE_REPOSITORY" \
             --color 1D76DB --description 'Refined by the issue-refiner agent' --force; then
@@ -81,13 +83,13 @@ jobs:
 
           if ! gh api "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+-label:agent-refined+-label:ready-for-implementation+-label:agent-ignore+sort:created-asc&per_page=5" \
             --jq '.items' > "$unrefined_json" 2>"$RUNNER_TEMP/unrefined-err.txt"; then
-            printf '::warning::unrefined search failed: %s\n' "$(cat "$RUNNER_TEMP/unrefined-err.txt" 2>/dev/null)" >&2
-            printf '[]\n' > "$unrefined_json"
+            printf '::error::unrefined search failed: %s\n' "$(cat "$RUNNER_TEMP/unrefined-err.txt" 2>/dev/null)" >&2
+            exit 1
           fi
           if ! gh api "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:agent-refined+-label:ready-for-implementation+-label:agent-ignore+sort:updated-desc&per_page=10" \
             --jq '.items' > "$refined_json" 2>"$RUNNER_TEMP/refined-err.txt"; then
-            printf '::warning::refined search failed: %s\n' "$(cat "$RUNNER_TEMP/refined-err.txt" 2>/dev/null)" >&2
-            printf '[]\n' > "$refined_json"
+            printf '::error::refined search failed: %s\n' "$(cat "$RUNNER_TEMP/refined-err.txt" 2>/dev/null)" >&2
+            exit 1
           fi
 
           jq -r '.[].number | tostring' "$unrefined_json" > "$unrefined_numbers" 2>/dev/null || : > "$unrefined_numbers"
@@ -101,7 +103,8 @@ jobs:
               jq 'add // [] | map(select((.user.type // "") != "Bot") | select(((.body // "") | contains("<!-- agent-progress -->")) | not))' \
                 "$RUNNER_TEMP/raw-${number}.json" > "$comments_file" 2>/dev/null || printf '[]\n' > "$comments_file"
             else
-              printf '[]\n' > "$comments_file"
+              printf '::warning::comment fetch failed for #%s; skipping\n' "$number" >&2
+              continue
             fi
             printf '%s\n' "$number" >> "$candidates"
           done < "$unrefined_numbers"
@@ -118,7 +121,12 @@ jobs:
             fi
             jq 'add // [] | map(select((.user.type // "") != "Bot") | select(((.body // "") | contains("<!-- agent-progress -->")) | not))' \
               "$RUNNER_TEMP/raw-${number}.json" > "$comments_file" 2>/dev/null || printf '[]\n' > "$comments_file"
-            refined_at="$(gh issue view "$number" -R "$ISSUE_REPOSITORY" --json body,updatedAt --jq 'if (.body // "" | test("<!-- agent-refined: [^ ]+ -->")) then (.body | capture("<!-- agent-refined: (?<timestamp>[^ ]+) -->").timestamp) else .updatedAt end' 2>/dev/null || true)"
+            refined_at="$(gh issue view "$number" -R "$ISSUE_REPOSITORY" --json body \
+              --jq '(.body // "") | capture("<!-- agent-refined: (?<timestamp>[^ ]+) -->").timestamp' 2>/dev/null || true)"
+            if [[ -z "$refined_at" ]]; then
+              refined_at="$(gh api --paginate --slurp "repos/${ISSUE_REPOSITORY}/issues/${number}/events?per_page=100" 2>/dev/null \
+                | jq -r 'add // [] | map(select(.event == "labeled" and .label.name == "agent-refined")) | max_by(.created_at) | .created_at // empty' 2>/dev/null || true)"
+            fi
             if [[ -z "$refined_at" ]]; then
               printf '::warning::could not read refined_at for #%s; skipping\n' "$number" >&2
               continue
@@ -227,7 +235,7 @@ jobs:
               printf '%s\n' "$body"
               if [[ -s "$comments_file" ]] && [[ "$(jq 'length' "$comments_file" 2>/dev/null || echo 0)" -gt 0 ]]; then
                 printf '\n%s\n' 'Reviewer comments (feedback to fold into the Goal and steps; do not quote them wholesale):'
-                jq -r '.[] | "Author: \(.user.login // "unknown")\nCreated at: \(.created_at // "")\nBody:\n\(.body // "")\n"' "$comments_file"
+                jq -r '.[] | "Author: \(.user.login // "unknown")\nCreated at: \(.created_at // "")\nBody:\n\(.body // "")\n"' "$comments_file" | tail -c 32768
                 if [[ "$prior_refinement" == true ]]; then
                   printf '%s\n' 'This is a prior refinement; the newest comments are new feedback that must be reflected in the output.'
                 fi
@@ -284,7 +292,7 @@ jobs:
                 break
               fi
               if (( validation_status == 0 )); then
-                printf '\n\n<!-- agent-refined: %s -->\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$out"
+                printf '\n\n<!-- agent-refined: %s -->\n' "$refined_marker_timestamp" >> "$out"
                 if ! gh issue edit "$number" --body-file "$out" -R "$ISSUE_REPOSITORY"; then
                   printf 'Issue body edit failed for #%s; skipping.\n' "$number" >&2
                   (( failed++ )) || true

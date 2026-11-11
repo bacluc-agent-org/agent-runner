@@ -254,7 +254,7 @@ jobs:
           done < "$candidates"
 
           printf '\nRefinement complete: %s refined, %s failed.\n' "$refined" "$failed"
-          (( refined > 0 )) || exit 1
+          (( refined > 0 )) || { printf '::error::no issue was refined (%s failed)\n' "$failed"; exit 1; }
 
       - name: Dump debug output
         if: always()

@@ -167,7 +167,6 @@ jobs:
           mv "$GITHUB_WORKSPACE/$DIAGNOSTICS_CHECKOUT" "$RUNNER_TEMP/agent-runner"
 
       - name: Configure repository git identity
-        shell: bash
         run: |
           git config --local user.name "github-actions[bot]"
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"

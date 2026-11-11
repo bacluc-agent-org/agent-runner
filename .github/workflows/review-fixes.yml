@@ -81,6 +81,22 @@ jobs:
 
           mapfile -t unique_prs < <(printf '%s\n' "${!seen[@]}" | sort -t'#' -k2,2n)
 
+          # The bacluc-agent/agent-runner copies are retired; agent work
+          # happens only in bacluc-agent-org/agent-runner.
+          filtered_prs=()
+          for pr_key in "${unique_prs[@]}"; do
+            repo="${pr_key%#*}"
+            case "${repo,,}" in
+              bacluc-agent/agent-runner | bacluc-agent/agent-runner-1 | bacluc-agent/agent-runner-2)
+                printf 'Skipping legacy repository PR %s\n' "$pr_key" >&2
+                ;;
+              *)
+                filtered_prs+=("$pr_key")
+                ;;
+            esac
+          done
+          unique_prs=("${filtered_prs[@]}")
+
           if [[ ${#unique_prs[@]} -eq 0 || -z "${unique_prs[0]}" ]]; then
             printf '%s\n' 'No open PRs with review comments found.'
             {

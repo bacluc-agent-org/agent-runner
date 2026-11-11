@@ -1,6 +1,4 @@
-import { classifyEvent } from "../classify.ts";
-import type { Event } from "@opencode-ai/sdk";
-import type { Plugin } from "@opencode/plugin/promise/plugin";
+import { classifyEvent, type AnyEvent } from "../classify.ts";
 import { writeFileSync } from "node:fs";
 
 // .ts extension REQUIRED for Node type stripping
@@ -37,6 +35,15 @@ export function messageOf(error: unknown): string {
   }
 }
 
+type Cleanup = () => void;
+interface EventStream {
+  subscribe(options: { signal: AbortSignal }): AsyncIterable<AnyEvent>;
+}
+interface Plugin {
+  readonly id: string;
+  readonly setup: (context: { event: EventStream }) => Cleanup | void;
+}
+
 const plugin: Plugin = {
   id: "fatal-error-guard",
   setup(context) {
@@ -45,7 +52,7 @@ const plugin: Plugin = {
       for await (const event of context.event.subscribe({
         signal: controller.signal,
       })) {
-        const hit = classifyEvent(event as Event, {
+        const hit = classifyEvent(event, {
           model: process.env.MODEL,
         });
         if (!hit) continue;

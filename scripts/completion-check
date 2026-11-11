@@ -52,6 +52,10 @@ check 'actionlint (workflows + used actions)' docker run --rm "${mount[@]}" "rhy
 if [[ ! -d .opencode/node_modules/@opencode-ai/plugin ]]; then
   check 'opencode node dependencies (npm install)' npm install --prefix .opencode
 fi
+if [[ ! -d node_modules/typescript ]]; then
+  check 'root node dependencies (npm install)' npm install
+fi
+check 'typescript type check (tsc --noEmit)' npx --no-install tsc --noEmit
 check 'opencode plugin tests (node --test)' node --test ".opencode/plugin/*.test.mjs"
 check 'opencode tool tests (node --test)' node --test ".opencode/tool/*.test.mjs"
 if command -v uv > /dev/null 2>&1; then

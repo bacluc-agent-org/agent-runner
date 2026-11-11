@@ -350,3 +350,10 @@ def test_human_feedback_is_requeried_against_pre_update_baseline():
     assert result.index('progress_baseline=') < result.index('--mode finish')
     assert result.index('--mode finish') < result.rindex('last_human_comment=$(gh issue view')
     assert '[[ "$last_human_comment" > "$progress_baseline" ]]' in result
+
+
+def test_post_finish_requery_treats_missing_human_feedback_as_none():
+    workflow = (upc.TEMPLATE.parent.parent / '.github/workflows/opencode.yml').read_text(encoding='utf-8')
+    step = workflow.split('- name: Post run-result comment', 1)[1]
+    after_finish = step.split('--mode finish', 1)[1]
+    assert '"$last_human_comment" != "none"' in after_finish

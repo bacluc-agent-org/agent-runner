@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""Bounded ReAct loop demo — stdlib only, runs offline with stub tools."""
+"""Offline reference model of a bounded ReAct loop — not the agent harness.
+
+The harness is the OpenCode CLI installed by
+`.github/actions/setup-opencode/action.yml` and run by
+`.github/workflows/opencode.yml` (`opencode run --agent coordinator ...`), with
+real providers, agents, plugins, tools, skills, permissions and timeouts. This
+stdlib-only script models only the control loop: a scripted `fake_llm`, stub
+tools, a hard `max_steps` cap, regex action parsing with error-observation
+recovery, and approximate token costs (`len(text) // 4`). Only its pytest file
+imports it.
+"""
 import re
 from collections.abc import Callable
 

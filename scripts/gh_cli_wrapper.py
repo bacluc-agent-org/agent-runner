@@ -10,13 +10,22 @@ def deny(reason):
     raise ValueError(reason)
 
 
+LEGACY_RUNNER_REPOS = frozenset({
+    "bacluc-agent/agent-runner",
+    "bacluc-agent/agent-runner-1",
+    "bacluc-agent/agent-runner-2",
+})
+
+
 def owned_repo(repo):
     repo = re.sub(r"^(https://)?github\.com/", "", repo, flags=re.IGNORECASE)
     if not re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9_.-]+", repo):
         deny("use an explicit github.com OWNER/REPO")
     owner, name = repo.split("/")
-    if owner.lower() not in {"bacluc", "bacluc-agent"} or name in {".", ".."}:
+    if owner.lower() not in {"bacluc", "bacluc-agent", "bacluc-agent-org"} or name in {".", ".."}:
         deny("create the PR in the bacluc-agent fork, not the upstream repository")
+    if repo.lower() in LEGACY_RUNNER_REPOS:
+        deny("bacluc-agent/agent-runner and its -1/-2 copies are retired; create the PR in bacluc-agent-org/agent-runner")
 
 
 def options(args, values, switches):

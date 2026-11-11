@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from selection_tiers import Candidate, is_standing, parse_branches, render_prompt, select_tier, tier
 
 WORKFLOW = Path(__file__).parents[1] / ".github/workflows/hourly-issue.yml"
+REVIEW_FIXES = Path(__file__).parents[1] / ".github/workflows/review-fixes.yml"
 
 
 def candidate(number=1, **values):
@@ -88,6 +89,13 @@ def _enrichment_line():
     )
 
 
+def _review_fixes_filter_block():
+    content = REVIEW_FIXES.read_text()
+    start = content.index("filtered_prs=()")
+    end = content.index('unique_prs=("${filtered_prs[@]}")')
+    return content[start:end + len('unique_prs=("${filtered_prs[@]}")')]
+
+
 def _enrich(issue_ts, pr_ts):
     import json
 
@@ -118,6 +126,39 @@ def test_pr_lookup_variables_are_initialised_before_the_pr_feedback_lookup():
     content = WORKFLOW.read_text()
     assert content.index('pr_number=""') < content.index('gh pr view "$pr_number"')
     assert content.index('pr_repo=""') < content.index('gh pr view "$pr_number"')
+
+
+def test_review_fixes_filter_drops_exactly_the_legacy_runner_repos():
+    script = (
+        "unique_prs=('bacluc-agent/agent-runner#192' 'bacluc-agent/agent-runner-1#2' "
+        "'bacluc-agent/agent-runner-2#5' 'BACLUC-AGENT/Agent-Runner#9' "
+        "'bacluc-agent/agent-runner-10#7' 'bacluc-agent-org/agent-runner#201' 'ecamp/ecamp3#10722')\n"
+        f"{_review_fixes_filter_block()}\n"
+        'printf \'%s\\n\' "${unique_prs[@]}"\n'
+    )
+    result = run(["bash", "-Eeuo", "pipefail", "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (
+        "bacluc-agent/agent-runner-10#7\n"
+        "bacluc-agent-org/agent-runner#201\n"
+        "ecamp/ecamp3#10722\n"
+    )
+    assert "Skipping legacy repository PR bacluc-agent/agent-runner#192" in result.stderr
+    script = (
+        "unique_prs=('bacluc-agent/agent-runner#192' 'bacluc-agent/agent-runner-1#2')\n"
+        f"{_review_fixes_filter_block()}\n"
+        'printf \'%s\\n\' "${#unique_prs[@]}"\n'
+    )
+    result = run(["bash", "-Eeuo", "pipefail", "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "0\n"
+
+
+def test_review_fixes_filter_is_wired_before_the_push_truncation():
+    content = REVIEW_FIXES.read_text()
+    assert content.index("mapfile -t unique_prs") < content.index("filtered_prs=()")
+    assert content.index('unique_prs=("${filtered_prs[@]}")') < content.index('unique_prs=("${unique_prs[0]}")')
+    assert content.index("filtered_prs=()") < content.index("No open PRs with review comments found")
 
 
 def test_workflow_uses_latest_commit_and_created_at_when_pr_has_no_commits():

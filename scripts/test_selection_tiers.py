@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from subprocess import run
 from tempfile import TemporaryDirectory
@@ -5,6 +6,7 @@ from tempfile import TemporaryDirectory
 from selection_tiers import Candidate, is_standing, parse_branches, render_prompt, select_tier, tier
 
 WORKFLOW = Path(__file__).parents[1] / ".github/workflows/hourly-issue.yml"
+BOUNDED_ENRICHMENT = Path(__file__).with_name("bounded-enrichment.sh")
 
 
 def candidate(number=1, **values):
@@ -124,8 +126,94 @@ def test_workflow_uses_latest_commit_and_created_at_when_pr_has_no_commits():
     content = WORKFLOW.read_text()
     assert "--json number,createdAt,updatedAt,headRefName,state,title" in content
     assert "sort -t'|' -k4 -r" in content
-    assert 'gh api --paginate --slurp "repos/$pr_repo/pulls/$pr_number/commits" | jq -er --arg fallback "$pr_created"' in content
-    assert '''pr_last_commit="$(gh api --paginate --slurp "repos/$pr_repo/pulls/$pr_number/commits" | jq -er --arg fallback "$pr_created" '([.[][] | .commit.committer.date] | max) // $fallback')" || pr_last_commit="$pr_created"''' in content
+    assert 'bounded_enrichment_call "commit lookup for candidate #$num" gh api --paginate --slurp "repos/$pr_repo/pulls/$pr_number/commits"' in content
+    assert '''pr_last_commit="$(jq -er --arg fallback "$pr_created" '([.[][] | .commit.committer.date] | max) // $fallback' "$commits_json")"''' in content
     assert '([.[][] | .commit.committer.date] | max) // $fallback' in content
     assert 'pr_last_commit_at:(' in content
     assert 'map(select(test("^[0-9]")))|max // null' in content
+
+
+def test_workflow_bounds_and_reports_enrichment_without_changing_candidate_join():
+    content = WORKFLOW.read_text()
+    bounded_content = BOUNDED_ENRICHMENT.read_text()
+    assert 'enrichment_budget="${ENRICHMENT_BUDGET_SECONDS:-1200}"' in content
+    assert "enrichment_deadline=$((enrichment_started + enrichment_budget))" in content
+    assert "source scripts/bounded-enrichment.sh" in content
+    assert "timeout --signal=TERM --kill-after=2s \"${remaining}s\" \"$@\"" in bounded_content
+    assert "Enrichment %s started" in bounded_content
+    assert "Enrichment %s completed" in bounded_content
+    assert "::warning::enrichment timeout during %s (forced termination after grace period)" in bounded_content
+    assert "::warning::enrichment lookup failed during %s" in bounded_content
+    assert "processed=%s skipped=%s" in content
+    assert "enrichment finished in degraded status" in content
+    assert content.index("enrichment_started=") < content.index("branch lookup")
+    assert content.index("bounded_enrichment_call 'branch lookup'") < content.index("repository validation")
+    assert content.index("PR listing") < content.index("Enriching candidate #%s started")
+
+
+def test_partial_enrichment_join_preserves_unenriched_candidates():
+    import json
+
+    join_line = next(
+        line.strip()
+        for line in WORKFLOW.read_text().splitlines()
+        if line.strip().startswith("jq -n --slurpfile issues")
+    )
+    with TemporaryDirectory() as directory:
+        directory = Path(directory)
+        (directory / "candidates.json").write_text(json.dumps([{"number": 1}, {"number": 2}]))
+        (directory / "enrichment.jsonl").write_text('{"number":1,"pr_info":"none","last_human_comment_at":null}\n')
+        result = run(
+            [
+                "bash",
+                "-Eeuo",
+                "pipefail",
+                "-c",
+                f'RUNNER_TEMP={str(directory)!r}; enriched="$RUNNER_TEMP/candidates.json"; {join_line}',
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert json.loads((directory / "candidates.final.json").read_text()) == [
+            {"number": 1, "last_human_comment_at": None, "pr_state": "none", "pr_number": None, "pr_last_commit_at": None},
+            {"number": 2},
+        ]
+
+
+def test_ignored_term_enrichment_is_force_killed_and_keeps_valid_partial_json():
+    with TemporaryDirectory() as directory:
+        directory = Path(directory)
+        sleeper = directory / "ignore-term-and-sleep"
+        sleeper.write_text("#!/usr/bin/env python3\nimport signal\nimport time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\ntime.sleep(30)\n")
+        sleeper.chmod(sleeper.stat().st_mode | 0o111)
+        script = r'''
+set -Eeuo pipefail
+budget=1
+enrichment_started=$SECONDS
+enrichment_deadline=$((enrichment_started + budget))
+enrichment_degraded=0
+source scripts/bounded-enrichment.sh
+issues='[{"number":1},{"number":2}]'
+enrichment="$RUNNER_TEMP/enrichment.jsonl"
+: > "$enrichment"
+for number in 1 2; do
+  if bounded_enrichment_call candidate "$1" "$number"; then
+    printf '{"number":%s,"pr_info":"enriched"}\n' "$number" >> "$enrichment"
+  fi
+done
+jq -n --argjson issues "$issues" --slurpfile enrichment "$enrichment" \
+  '$issues | map(. as $issue | ($enrichment | map(select(.number == $issue.number)) | .[0]) as $entry | if $entry then . + $entry else . end)'
+printf 'degraded=%s\n' "$enrichment_degraded" >&2
+'''
+        result = run(
+            ["bash", "-Eeuo", "pipefail", "-c", script, "test", str(sleeper)],
+            env={**__import__("os").environ, "RUNNER_TEMP": str(directory)},
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout) == [{"number": 1}, {"number": 2}]
+        assert "forced termination after grace period" in result.stderr
+        assert "budget exhausted before candidate" in result.stderr
+        assert "degraded=1" in result.stderr

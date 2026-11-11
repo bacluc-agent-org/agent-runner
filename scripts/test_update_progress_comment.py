@@ -339,7 +339,7 @@ def test_human_feedback_is_checked_before_finishing_progress():
     result = workflow.split('- name: Post run-result comment', 1)[1]
     assert result.index('last_human_comment=$(gh issue view') < result.index('--mode finish')
     assert result.index('--mode finish') < result.index('gh issue comment "$ISSUE_NUMBER"')
-    assert 'actor=$(gh api user --jq .login)' in result
+    assert 'actor=$(gh api user --jq .login 2>/dev/null || echo \'\')' in result
     assert result.count('.author.login != \\\"$actor\\\"') == 3
 
 
@@ -357,3 +357,10 @@ def test_post_finish_requery_treats_missing_human_feedback_as_none():
     step = workflow.split('- name: Post run-result comment', 1)[1]
     after_finish = step.split('--mode finish', 1)[1]
     assert '"$last_human_comment" != "none"' in after_finish
+
+
+def test_post_finish_requery_requires_authenticated_actor():
+    workflow = (upc.TEMPLATE.parent.parent / '.github/workflows/opencode.yml').read_text(encoding='utf-8')
+    step = workflow.split('- name: Post run-result comment', 1)[1]
+    after_finish = step.split('--mode finish', 1)[1]
+    assert '-n "${actor:-}"' in after_finish

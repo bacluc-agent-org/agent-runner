@@ -339,7 +339,7 @@ def test_human_feedback_is_checked_before_finishing_progress():
     result = workflow.split('- name: Post run-result comment', 1)[1]
     assert result.index('last_human_comment=$(gh issue view') < result.index('--mode finish')
     assert result.index('--mode finish') < result.index('gh issue comment "$ISSUE_NUMBER"')
-    assert 'actor=$(gh api user --jq .login)' in result
+    assert 'actor=$(gh api user --jq .login 2>/dev/null || echo \'\')' in result
     assert result.count('.author.login != \\\"$actor\\\"') == 3
 
 

@@ -730,7 +730,7 @@ jobs:
           new_comment_needed="false"
           progress_baseline=""
           if [[ -n "${COMMENT_ID:-}" ]]; then
-            actor=$(gh api user --jq .login)
+            actor=$(gh api user --jq .login 2>/dev/null || echo '')
             bot_comment_updated=$(gh api "repos/$ISSUE_REPOSITORY/issues/comments/$COMMENT_ID" --jq '.updated_at // .created_at' 2>/dev/null || echo '')
             progress_baseline="$bot_comment_updated"
             last_human_comment=$(gh issue view "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --json comments --jq "[.comments[] | select(.author.login != \"$actor\")] | max_by(.createdAt) | .createdAt // \"none\"" 2>/dev/null || echo 'none')

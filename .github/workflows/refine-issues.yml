@@ -2,7 +2,7 @@ name: Refine issues
 
 on:
   schedule:
-    - cron: "7 * * * *"
+    - cron: "7 */4 * * *"
   workflow_dispatch:
   push:
     paths:
@@ -107,7 +107,7 @@ jobs:
           done < "$unrefined_numbers"
 
           # Refined issues become candidates only when a new human comment exists
-          # since the last refinement marker (idempotent across hourly runs).
+          # since the last refinement marker (idempotent across scheduled runs).
           while IFS= read -r number; do
             [[ -n "$number" ]] || continue
             grep -Fxq "$number" "$unrefined_numbers" && continue

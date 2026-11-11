@@ -485,6 +485,7 @@ jobs:
 
       - name: Run coordinator
         id: coordinator
+        continue-on-error: true
         shell: bash
         env:
           MODEL: ${{ steps.select-model.outputs.model }}
@@ -541,7 +542,7 @@ jobs:
           fi
 
       - name: Update cache on coordinator failure
-        if: (failure() || steps.fatal-guard.outputs.fatal-model != '') && (steps.select-model.outputs.model != '' || steps.fatal-guard.outputs.fatal-model != '') && steps.model-availability.outputs.cache-issue != ''
+        if: (failure() || steps.coordinator.outcome == 'failure' || steps.fatal-guard.outputs.fatal-model != '') && (steps.select-model.outputs.model != '' || steps.fatal-guard.outputs.fatal-model != '') && steps.model-availability.outputs.cache-issue != ''
         shell: bash
         env:
           MODEL: ${{ steps.fatal-guard.outputs.fatal-model || steps.select-model.outputs.model }}
@@ -678,24 +679,22 @@ jobs:
           COMMENT_ID: ${{ steps.run-start-comment.outputs.comment_id }}
           MODEL: ${{ steps.select-model.outputs.model }}
           COORDINATOR_OUTCOME: ${{ steps.coordinator.outcome }}
+          COORDINATOR_STATUS: ${{ steps.coordinator.outputs.coordinator_status }}
+          COORDINATOR_TEE_STATUS: ${{ steps.coordinator.outputs.coordinator_tee_status }}
+          SELECT_MODEL_OUTCOME: ${{ steps.select-model.outcome }}
           FATAL_REASON: ${{ steps.fatal-guard.outputs.fatal-reason }}
           BRANCH: ${{ steps.push-work.outputs.branch_name }}
+          BRANCH_NAME: ${{ steps.push-work.outputs.branch_name }}
           PUSHED_REPOS: ${{ steps.push-work.outputs.pushed_repos }}
           PUSHED_SLUGS: ${{ steps.push-work.outputs.pushed_slugs }}
+          COORDINATOR_TIMEOUT: ${{ inputs.timeout_minutes || 120 }}
         run: |
           set -Eeuo pipefail
           printf '::add-mask::%s\n' "$GITHUB_TOKEN"
 
           RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
-          # Determine status
-          if [[ "${COORDINATOR_OUTCOME:-}" == "success" ]]; then
-            STATUS="✅ completed"
-          elif [[ -n "${FATAL_REASON:-}" ]]; then
-            STATUS="❌ fatal error: $FATAL_REASON"
-          else
-            STATUS="⚠️ failed (coordinator exit ${COORDINATOR_OUTCOME:-})"
-          fi
+          STATUS="$(python3 "$RUNNER_TEMP/agent-runner/scripts/run_status.py")"
 
           # Check for existing PRs in every repo this run pushed to, not just this one.
           # ponytail: 34 repos scanned per run, cache the repo list in an artifact if this shows up in run times
@@ -765,3 +764,25 @@ jobs:
             fi
             gh issue comment "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --body "$reply_body"
           fi
+
+      - name: Enforce run outcome
+        if: always()
+        shell: bash
+        env:
+          COORDINATOR_STATUS: ${{ steps.coordinator.outputs.coordinator_status }}
+          COORDINATOR_TEE_STATUS: ${{ steps.coordinator.outputs.coordinator_tee_status }}
+          COORDINATOR_OUTCOME: ${{ steps.coordinator.outcome }}
+          SELECT_MODEL_OUTCOME: ${{ steps.select-model.outcome }}
+          FATAL_REASON: ${{ steps.fatal-guard.outputs.fatal-reason }}
+          BRANCH_NAME: ${{ steps.push-work.outputs.branch_name }}
+          PUSHED_REPOS: ${{ steps.push-work.outputs.pushed_repos }}
+          COORDINATOR_TIMEOUT: ${{ inputs.timeout_minutes || 120 }}
+        run: |
+          set -Eeuo pipefail
+          set +e
+          STATUS="$(python3 "$RUNNER_TEMP/agent-runner/scripts/run_status.py" --enforce)"
+          status=$?
+          set -e
+          printf 'Run outcome: %s (gate exit %s)\n' "$STATUS" "$status"
+          (( status == 0 )) || printf '::error::agent run failed: %s\n' "$STATUS"
+          exit "$status"

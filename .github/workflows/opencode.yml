@@ -592,6 +592,39 @@ jobs:
           PUSHED_REPOS=""
           PUSHED_SLUGS=""
           WORK_BRANCH=""
+          REUSED_BRANCH=""
+
+          # Standing issues reuse their open pull request instead of a new branch.
+          # Import from the workspace checkout (the triggering ref), never the
+          # diagnostics copy in $RUNNER_TEMP, which is always main.
+          export SELECTION_SCRIPTS="$GITHUB_WORKSPACE/scripts"
+          STANDING="false"
+          standing_json="$(gh issue view "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --json title,labels 2>/dev/null || true)"
+          if [[ -n "$standing_json" ]]; then
+            STANDING="$(printf '%s' "$standing_json" | python3 -c '
+          import json, os, sys
+          sys.path.insert(0, os.environ["SELECTION_SCRIPTS"])
+          from selection_tiers import is_standing
+          issue = json.load(sys.stdin)
+          labels = [label["name"] for label in issue.get("labels", [])]
+          print("true" if is_standing(issue.get("title", ""), labels) else "false", end="")
+          ' 2>/dev/null || true)"
+          fi
+          if [[ "$STANDING" != "true" ]]; then
+            STANDING="false"
+          fi
+          echo "standing=${STANDING}" >> "$GITHUB_OUTPUT"
+
+          # Newest open PR whose head branch belongs to this issue.
+          select_issue_branch() {
+            python3 -c '
+          import json, os, sys
+          sys.path.insert(0, os.environ["SELECTION_SCRIPTS"])
+          from selection_tiers import select_issue_pr
+          pr = select_issue_pr(json.load(sys.stdin), int(os.environ["ISSUE_NUMBER"]))
+          print(pr["headRefName"] if pr else "", end="")
+          ' 2>/dev/null || true
+          }
 
           # Find all git repos in the workspace (including subdirs)
           stop_token="$(openssl rand -hex 32)"
@@ -615,19 +648,46 @@ jobs:
               continue
             fi
 
-            git checkout -B "$BRANCH_NAME" 2>/dev/null || git checkout "$BRANCH_NAME"
+            remote_url=$(git remote get-url origin 2>/dev/null || true)
+            repo_slug="$(printf '%s' "$remote_url" | sed -E 's#^.*github\.com[:/]+##; s#\.git$##')"
+            effective_branch="$BRANCH_NAME"
+            reuse_branch=""
+
+            if [[ "$STANDING" == "true" && -n "$repo_slug" ]]; then
+              pr_json=$(gh pr list -R "$repo_slug" --state open --limit 100 --json number,headRefName,url 2>/dev/null || true)
+              if [[ -n "$pr_json" ]]; then
+                reuse_branch="$(printf '%s' "$pr_json" | select_issue_branch)"
+              fi
+            fi
+            if [[ -n "$reuse_branch" ]] && git fetch origin "$reuse_branch" 2>/dev/null; then
+              effective_branch="$reuse_branch"
+            fi
+
+            git checkout -B "$effective_branch" 2>/dev/null || git checkout "$effective_branch"
             git add -A
             git commit -m "agent-run: automated commit for issue #${ISSUE_NUMBER} (run ${GITHUB_RUN_ID})" || true
-            remote_url=$(git remote get-url origin 2>/dev/null || true)
-            git push -u origin "$BRANCH_NAME" 2>/dev/null || {
+
+            if [[ "$effective_branch" != "$BRANCH_NAME" ]]; then
+              # Bring in the PR commits; a conflict falls back to today's agent-run branch.
+              if ! git merge --no-edit FETCH_HEAD; then
+                git merge --abort 2>/dev/null || true
+                effective_branch="$BRANCH_NAME"
+                git checkout -B "$BRANCH_NAME"
+              fi
+            fi
+
+            git push -u origin "$effective_branch" 2>/dev/null || {
               # If origin push fails, try with token
               token_url="${remote_url/https:\/\//https:\/\/x-access-token:${GITHUB_TOKEN}@}"
               git remote set-url origin "$token_url"
-              git push -u origin "$BRANCH_NAME"
+              git push -u origin "$effective_branch"
             }
-            PUSHED_REPOS="${PUSHED_REPOS}${repo_dir} (${BRANCH_NAME})\n"
+            if [[ "$effective_branch" != "$BRANCH_NAME" && -z "$REUSED_BRANCH" ]]; then
+              REUSED_BRANCH="$effective_branch"
+            fi
+            PUSHED_REPOS="${PUSHED_REPOS}${repo_dir} (${effective_branch})\n"
             # owner/repo slug of the pushed remote, for the org-wide PR lookup
-            PUSHED_SLUGS="${PUSHED_SLUGS}$(printf '%s' "$remote_url" | sed -E 's#^.*github\.com[:/]+##; s#\.git$##')\n"
+            PUSHED_SLUGS="${PUSHED_SLUGS}${repo_slug}\n"
             cd - >/dev/null
           done < <(find "$GITHUB_WORKSPACE" -maxdepth 5 -name ".git" -type d 2>/dev/null)
 
@@ -641,7 +701,7 @@ jobs:
               echo "pushed_slugs<<EOF"
               printf '%b' "$PUSHED_SLUGS"
               echo "EOF"
-              echo "branch_name=${BRANCH_NAME}"
+              echo "branch_name=${REUSED_BRANCH:-$BRANCH_NAME}"
             } >> "$GITHUB_OUTPUT"
           else
             printf 'No changes to push.\n'
@@ -682,6 +742,7 @@ jobs:
           BRANCH: ${{ steps.push-work.outputs.branch_name }}
           PUSHED_REPOS: ${{ steps.push-work.outputs.pushed_repos }}
           PUSHED_SLUGS: ${{ steps.push-work.outputs.pushed_slugs }}
+          STANDING: ${{ steps.push-work.outputs.standing || 'false' }}
         run: |
           set -Eeuo pipefail
           printf '::add-mask::%s\n' "$GITHUB_TOKEN"
@@ -699,14 +760,26 @@ jobs:
 
           # Check for existing PRs in every repo this run pushed to, not just this one.
           # ponytail: 34 repos scanned per run, cache the repo list in an artifact if this shows up in run times
+          export SELECTION_SCRIPTS="$GITHUB_WORKSPACE/scripts"
           PR_URL=""
+          URLS=""
+          if [[ -n "${PUSHED_SLUGS:-}" ]]; then
+            SLUGS="$PUSHED_SLUGS"
+          elif [[ -n "${BRANCH:-}" || "${STANDING:-false}" == "true" ]]; then
+            SLUGS=$(gh repo list bacluc-agent --limit 200 --json nameWithOwner --jq '.[].nameWithOwner' 2>/dev/null || true)
+          else
+            SLUGS=""
+          fi
+          select_issue_url() {
+            python3 -c '
+          import json, os, sys
+          sys.path.insert(0, os.environ["SELECTION_SCRIPTS"])
+          from selection_tiers import select_issue_pr
+          pr = select_issue_pr(json.load(sys.stdin), int(os.environ["ISSUE_NUMBER"]))
+          print(pr["url"] if pr else "", end="")
+          ' 2>/dev/null || true
+          }
           if [[ -n "${BRANCH:-}" ]]; then
-            if [[ -n "${PUSHED_SLUGS:-}" ]]; then
-              SLUGS="$PUSHED_SLUGS"
-            else
-              SLUGS=$(gh repo list bacluc-agent --limit 200 --json nameWithOwner --jq '.[].nameWithOwner' 2>/dev/null || true)
-            fi
-            URLS=""
             while IFS= read -r repo; do
               [[ -n "$repo" ]] || continue
               url=$(gh pr list -R "$repo" --head "$BRANCH" --json url --jq '.[0].url' 2>/dev/null || true)
@@ -714,8 +787,22 @@ jobs:
                 URLS="${URLS:+$URLS$'\n'}$url"
               fi
             done < <(printf '%s\n' "$GITHUB_REPOSITORY" "$SLUGS" | sort -u)
-            PR_URL="${URLS//$'\n'/ }"
           fi
+          # A standing issue may already have an open PR on a branch this run did not push.
+          if [[ -z "$URLS" && "${STANDING:-false}" == "true" ]]; then
+            while IFS= read -r repo; do
+              [[ -n "$repo" ]] || continue
+              pr_json=$(gh pr list -R "$repo" --state open --limit 100 --json number,headRefName,url 2>/dev/null || true)
+              if [[ -n "$pr_json" ]]; then
+                url="$(printf '%s' "$pr_json" | select_issue_url)"
+                if [[ -n "$url" ]]; then
+                  URLS="$url"
+                  break
+                fi
+              fi
+            done < <(printf '%s\n' "$GITHUB_REPOSITORY" "$SLUGS" | sort -u)
+          fi
+          PR_URL="${URLS//$'\n'/ }"
 
           if [[ -n "${BRANCH:-}" ]]; then
             RUN_SUMMARY="branch \`$BRANCH\`"

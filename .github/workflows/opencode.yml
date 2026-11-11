@@ -101,7 +101,8 @@ on:
         default: coordinator
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # -opencode- infix: in reusable-workflow calls github.workflow is the caller's name, so without the infix the called job's group equals the caller's own group and deadlocks
+  group: ${{ github.workflow }}-opencode-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'push' }}
 
 permissions:

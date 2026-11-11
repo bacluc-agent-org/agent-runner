@@ -129,3 +129,14 @@ def test_workflow_uses_latest_commit_and_created_at_when_pr_has_no_commits():
     assert '([.[][] | .commit.committer.date] | max) // $fallback' in content
     assert 'pr_last_commit_at:(' in content
     assert 'map(select(test("^[0-9]")))|max // null' in content
+
+
+def test_workflow_search_sorts_oldest_first_via_query_params():
+    content = WORKFLOW.read_text()
+    # sort must be a real query parameter, not an (ignored) qualifier inside q
+    assert "sort:created-asc" not in content
+    assert (
+        'gh api "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:ready-for-implementation+-label:agent-running&sort=created&order=asc&per_page=50"'
+        in content
+    )
+    assert "&sort=created&order=asc&per_page=50" in content

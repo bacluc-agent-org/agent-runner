@@ -26,7 +26,7 @@
 /dots-studio/dots-3-note-preview
 # nex-agi/nex-n2.5-pro:free: retry_limit in run 35551496542.
 /nex-agi/nex-n2\.5-pro
-# nex-agi/nex-n2.5-mini:free: retry_limit as coordinator in run 36102637117.
+# nex-agi/nex-n2.5-mini:free: retry_limit as issue-selector in run 36102637117.
 /nex-agi/nex-n2\.5-mini
 # liquid/lfm-2.5-2.6b:free: retry_limit in run 36240950553.
 /liquid/lfm-2\.5

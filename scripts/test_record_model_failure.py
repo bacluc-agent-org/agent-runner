@@ -1,6 +1,7 @@
-import os
-import subprocess
+import json
 from datetime import datetime, timezone
+
+import pytest
 
 import record_model_failure as rmf
 
@@ -19,10 +20,14 @@ def test_record_failure_provider_scoped_updates_matching_and_adds_model():
 
 
 def test_record_failure_auth_provider_scoped():
-    cache = {"opencode-go-openai/m": {"ok": True, "checked": "old"}}
+    cache = {
+        "opencode-go-openai/m": {"ok": True, "checked": "old"},
+        "openrouter/other": {"ok": True, "checked": "old"},
+    }
     result = rmf.record_failure(cache, "opencode-go-openai/m2", "auth", "c")
     assert result["opencode-go-openai/m"] == {"ok": False, "checked": "c", "reason": "auth"}
     assert result["opencode-go-openai/m2"] == {"ok": False, "checked": "c", "reason": "auth"}
+    assert result["openrouter/other"] == {"ok": True, "checked": "old"}
 
 
 def test_record_failure_model_unavailable_model_scoped():
@@ -83,12 +88,13 @@ def test_read_cache_non_dict_json(monkeypatch):
     assert rmf.read_cache("49") == {}
 
 
-def test_read_cache_failure(monkeypatch):
+def test_read_cache_failure_propagates(monkeypatch):
     def fail(*a):
         raise RuntimeError("gh failed")
 
     monkeypatch.setattr(rmf, "run_gh", fail)
-    assert rmf.read_cache("49") == {}
+    with pytest.raises(RuntimeError):
+        rmf.read_cache("49")
 
 
 def test_write_cache(monkeypatch):
@@ -173,7 +179,12 @@ def test_main_writes_with_repo(monkeypatch):
     def fake(*a):
         calls.append(a)
         if a[:2] == ("issue", "view"):
-            return '{"m": {"ok": true, "checked": "old"}}'
+            return json.dumps(
+                {
+                    "openrouter/a": {"ok": True, "checked": "old"},
+                    "opencode/x": {"ok": True, "checked": "old"},
+                }
+            )
         return ""
 
     monkeypatch.setattr(rmf, "run_gh", fake)
@@ -185,7 +196,7 @@ def test_main_writes_with_repo(monkeypatch):
             "--cache-issue",
             "49",
             "--model",
-            "o/r2/m",
+            "openrouter/new",
             "--reason",
             "balance",
             "--checked",
@@ -193,25 +204,32 @@ def test_main_writes_with_repo(monkeypatch):
         ]
     )
     assert rc == 0
-    # read call includes -R
     assert calls[0] == ("issue", "view", "49", "-R", "o/r", "--json", "body", "--jq", ".body")
-    # write call includes -R
-    assert calls[1][0:4] == ("issue", "edit", "49", "-R") or calls[1][:3] == ("issue", "edit", "49")
-    # ensure body written
-    write_call = [c for c in calls if c and c[1] == "edit"][0]
-    assert "o/r2/m" in write_call[-1] or True
+    assert calls[1][:5] == ("issue", "edit", "49", "-R", "o/r")
+    assert json.loads(calls[1][-1]) == {
+        "openrouter/a": {"ok": False, "checked": "2026-01-01T00:00:00Z", "reason": "balance"},
+        "opencode/x": {"ok": True, "checked": "old"},
+        "openrouter/new": {"ok": False, "checked": "2026-01-01T00:00:00Z", "reason": "balance"},
+    }
 
 
 def test_main_gh_failure_returns_zero(monkeypatch, capsys):
-    def fail(*a):
-        raise RuntimeError("gh failed")
+    calls = []
 
-    monkeypatch.setattr(rmf, "run_gh", fail)
+    def fake(*a):
+        calls.append(a)
+        if a[:2] == ("issue", "view"):
+            raise RuntimeError("gh failed")
+        return ""
+
+    monkeypatch.setattr(rmf, "run_gh", fake)
     monkeypatch.delenv("ISSUE_REPOSITORY", raising=False)
     rc = rmf.main(
-        ["--repo", "o/r", "--cache-issue", "49", "--model", "m", "--reason", "balance"]
+        ["--repo", "o/r", "--cache-issue", "49", "--model", "openrouter/m", "--reason", "balance"]
     )
     assert rc == 0
+    assert "warning: failed to read cache issue 49" in capsys.readouterr().err
+    assert not any(a[:2] == ("issue", "edit") for a in calls)
 
 
 def test_main_default_checked(monkeypatch):
@@ -230,7 +248,6 @@ def test_main_default_checked(monkeypatch):
     assert rc == 0
     write_call = [c for c in calls if c and c[1] == "edit"][0]
     body = write_call[-1]
-    import json
 
     data = json.loads(body)
     checked = data["m"]["checked"]

@@ -27,14 +27,14 @@ def repo_flag() -> list[str]:
 
 
 def read_cache(cache_issue) -> dict:
+    body = run_gh(
+        "issue", "view", str(cache_issue), *repo_flag(), "--json", "body", "--jq", ".body"
+    )
     try:
-        body = run_gh(
-            "issue", "view", str(cache_issue), *repo_flag(), "--json", "body", "--jq", ".body"
-        )
         cache = json.loads(body)
-        return cache if isinstance(cache, dict) else {}
-    except Exception:
+    except json.JSONDecodeError:
         return {}
+    return cache if isinstance(cache, dict) else {}
 
 
 def write_cache(cache_issue, cache: dict) -> None:
@@ -105,11 +105,7 @@ def main(argv=None) -> int:
 
     new_cache = record_failure(cache, model, reason, checked)
 
-    try:
-        write_cache(cache_issue, new_cache)
-    except Exception as e:
-        print(f"warning: failed to write cache issue {cache_issue}: {e}", file=sys.stderr)
-        return 0
+    write_cache(cache_issue, new_cache)
 
     return 0
 

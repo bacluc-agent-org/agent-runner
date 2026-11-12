@@ -546,7 +546,6 @@ jobs:
         env:
           MODEL: ${{ steps.fatal-guard.outputs.fatal-model || steps.select-model.outputs.model }}
           FATAL_REASON: ${{ steps.fatal-guard.outputs.fatal-reason }}
-          FATAL_PROVIDER: ${{ steps.fatal-guard.outputs.fatal-provider }}
           CACHE_ISSUE: ${{ steps.model-availability.outputs.cache-issue }}
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
         run: |

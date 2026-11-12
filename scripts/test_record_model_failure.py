@@ -205,12 +205,12 @@ def test_main_writes_with_repo(monkeypatch):
     )
     assert rc == 0
     assert calls[0] == ("issue", "view", "49", "-R", "o/r", "--json", "body", "--jq", ".body")
-    assert calls[1][:5] == ("issue", "edit", "49", "-R", "o/r")
-    assert json.loads(calls[1][-1]) == {
+    expected_cache = {
         "openrouter/a": {"ok": False, "checked": "2026-01-01T00:00:00Z", "reason": "balance"},
         "opencode/x": {"ok": True, "checked": "old"},
         "openrouter/new": {"ok": False, "checked": "2026-01-01T00:00:00Z", "reason": "balance"},
     }
+    assert calls[1] == ("issue", "edit", "49", "-R", "o/r", "--body", json.dumps(expected_cache))
 
 
 def test_main_gh_failure_returns_zero(monkeypatch, capsys):

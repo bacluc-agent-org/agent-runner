@@ -288,8 +288,12 @@ jobs:
           # `|| true` is required: under `set -Eeuo pipefail` a non-matching grep fails the whole
           # pipeline, and the assignment would abort the step before the dispatch happens.
           issue_number="$(grep -E '^SELECTED_ISSUE:[[:space:]]*[0-9]+[[:space:]]*$' "$selection" | tail -1 | grep -oE '[0-9]+' || true)"
-          if [[ -z "$issue_number" ]] || ! grep -qxF "$issue_number" "$candidates"; then
-            printf '::error::missing or invalid SELECTED_ISSUE; not dispatching\n'
+          if [[ -z "$issue_number" ]]; then
+            printf '::error::issue selector completed successfully but emitted no valid SELECTED_ISSUE:<number> line; inspect the selector output above; not dispatching\n' >&2
+            exit 1
+          fi
+          if ! grep -qxF "$issue_number" "$candidates"; then
+            printf '::error::issue selector chose issue %s outside the candidate set (%s candidates); not dispatching\n' "$issue_number" "$(grep -cE '^[0-9]+$' "$candidates" || true)" >&2
             exit 1
           fi
           printf 'issue_number=%s\n' "$issue_number" >> "$GITHUB_OUTPUT"

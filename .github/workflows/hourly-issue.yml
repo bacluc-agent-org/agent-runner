@@ -103,6 +103,14 @@ jobs:
           while IFS=$'\t' read -r num claims; do
             IFS=',' read -r -a claim_labels <<< "$claims"
             for claim in "${claim_labels[@]}"; do
+              if [[ "$claim" == "agent-running" ]]; then
+                if gh api -X DELETE "repos/${ISSUE_REPOSITORY}/issues/${num}/labels/${claim}" >/dev/null; then
+                  printf 'Swept legacy claim %s from #%s\n' "$claim" "$num"
+                else
+                  printf '::warning::could not remove legacy claim %s from #%s\n' "$claim" "$num"
+                fi
+                continue
+              fi
               run_id="${claim#agent-running:}"
               status="$(gh run view "$run_id" -R bacluc-agent-org/agent-runner --json status --jq .status 2>/dev/null || true)"
               status="${status:-unknown}"
@@ -119,7 +127,7 @@ jobs:
                   ;;
               esac
             done
-          done < <(gh api --paginate "repos/${ISSUE_REPOSITORY}/issues?state=open&per_page=100" --jq '.[] | select(.pull_request == null) | [.number, ([.labels[]?.name | select(startswith("agent-running:"))] | join(","))] | select(.[1] != "") | @tsv')
+          done < <(gh api --paginate "repos/${ISSUE_REPOSITORY}/issues?state=open&per_page=100" --jq '.[] | select(.pull_request == null) | [.number, ([.labels[]?.name | select(. == "agent-running" or startswith("agent-running:"))] | join(","))] | select(.[1] != "") | @tsv')
 
           printf '\n\n\n\n\n\n'
           printf 'Fetching github issues...\n'
@@ -321,7 +329,9 @@ jobs:
           fi
           printf 'issue_number=%s\n' "$issue_number" >> "$GITHUB_OUTPUT"
           if ! gh api -X POST "repos/${ISSUE_REPOSITORY}/issues/${issue_number}/labels" -f "labels[]=${claim_label}" -f "labels[]=agent-attempted" >/dev/null; then
-            printf '::warning::could not claim issue %s; dispatching unclaimed\n' "$issue_number"
+            printf '::error::could not claim issue %s; not dispatching\n' "$issue_number"
+            printf 'claim_failed=true\n' >> "$GITHUB_OUTPUT"
+            exit 1
           fi
           {
             printf 'prompt<<%s\n' "$eof"
@@ -337,7 +347,7 @@ jobs:
           printf '::%s::\n' "$stop_token"
 
       - name: Update cache on selection failure
-        if: failure() && steps.pick.outputs.selection_model != '' && steps.model-availability.outputs.cache-issue != ''
+        if: failure() && steps.pick.outputs.selection_model != '' && steps.model-availability.outputs.cache-issue != '' && steps.pick.outputs.claim_failed != 'true'
         shell: bash
         env:
           MODEL: ${{ steps.pick.outputs.selection_model }}

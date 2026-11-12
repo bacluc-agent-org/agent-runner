@@ -159,6 +159,33 @@ def test_workflow_uses_latest_commit_and_created_at_when_pr_has_no_commits():
     assert 'map(select(test("^[0-9]")))|max // null' in content
 
 
+def _sweep_filter():
+    for line in WORKFLOW.read_text().splitlines():
+        if 'issues?state=open&per_page=100" --jq' in line:
+            return line.split("--jq '", 1)[1].rsplit("'", 1)[0]
+    raise AssertionError("sweep jq filter not found")
+
+
+def test_sweep_jq_selector_covers_bare_and_run_scoped_claims():
+    import json
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from subprocess import run
+
+    issues = [
+        {"number": 1, "labels": [{"name": "agent-running"}], "pull_request": None},
+        {"number": 2, "labels": [{"name": "agent-running:42750217969"}], "pull_request": None},
+        {"number": 3, "labels": [{"name": "agent-attempted"}], "pull_request": None},
+        {"number": 4, "labels": [{"name": "agent-running"}, {"name": "agent-running:1"}], "pull_request": None},
+        {"number": 5, "labels": [{"name": "agent-running:2"}], "pull_request": {"url": "https://example.test"}},
+    ]
+    with TemporaryDirectory() as directory:
+        path = Path(directory) / "issues.json"
+        path.write_text(json.dumps(issues))
+        result = run(["jq", "-r", _sweep_filter(), str(path)], check=True, capture_output=True, text=True)
+    assert result.stdout == "1\tagent-running\n2\tagent-running:42750217969\n4\tagent-running,agent-running:1\n"
+
+
 def test_workflow_claims_are_run_scoped_swept_and_always_released():
     content = WORKFLOW.read_text()
     assert 'claim_label="agent-running:${GITHUB_RUN_ID}"' in content
@@ -166,6 +193,12 @@ def test_workflow_claims_are_run_scoped_swept_and_always_released():
     assert 'queued|in_progress|unknown)' in content
     assert 'gh api -X POST "repos/${ISSUE_REPOSITORY}/issues/${issue_number}/labels"' in content
     assert 'any(. == "agent-running" or startswith("agent-running:"))' in content
+    assert 'select(. == "agent-running" or startswith("agent-running:"))' in content
+    assert content.index('if [[ "$claim" == "agent-running" ]]') < content.index('run_id="${claim#agent-running:}"')
+    assert 'Swept legacy claim %s from #%s' in content
+    assert '::error::could not claim issue %s; not dispatching' in content
+    assert 'claim_failed=true' in content
+    assert "steps.pick.outputs.claim_failed != 'true'" in content
     assert "-label:agent-running:*" not in content
     assert "if: always() && needs.select.outputs.issue_number != ''" not in content
     release = content[content.index("  release:"):]

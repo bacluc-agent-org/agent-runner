@@ -1,7 +1,7 @@
 import { classifyEvent } from "../classify.ts";
 import plugin, { messageOf } from "./fatal-error-guard.ts";
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import test from "node:test";
 
 const apiErr = (statusCode, message = "", responseBody = "") => ({
@@ -339,7 +339,7 @@ test("plugin setup v2: subscribe captures options.signal, exits on fatal", async
   };
   try {
     mkdirSync(tmp, { recursive: true });
-    const unsub = plugin.setup({
+    const unsub = await plugin.setup({
       event: {
         async *subscribe({ signal }) {
           await Promise.resolve();
@@ -381,7 +381,7 @@ test("plugin setup v2: benign event does not exit", async () => {
   };
   try {
     mkdirSync(tmp, { recursive: true });
-    const unsub = plugin.setup({
+    const unsub = await plugin.setup({
       event: {
         async *subscribe({ signal }) {
           yield { type: "message.part.updated", data: {} };
@@ -401,4 +401,199 @@ test("plugin setup v2: benign event does not exit", async () => {
   } catch (e) {
     assert.ok(true);
   }
+});
+
+const freshTemp = (name) => {
+  const tmp = (process.env.RUNNER_TEMP = `/tmp/fatal-guard-test-${name}`);
+  mkdirSync(tmp, { recursive: true });
+  const markerPath = `${tmp}/opencode-fatal.json`;
+  rmSync(markerPath, { force: true });
+  return markerPath;
+};
+
+const mockExit = () => {
+  const origExit = process.exit;
+  let exitCode = null;
+  process.exit = function (code) {
+    exitCode = code;
+    throw new Error("exit");
+  };
+  return {
+    restore() {
+      process.exit = origExit;
+    },
+    get code() {
+      return exitCode;
+    },
+  };
+};
+
+const captureConsoleError = async (fn) => {
+  const orig = console.error;
+  const messages = [];
+  console.error = (...args) => messages.push(args.map(String).join(" "));
+  try {
+    await fn();
+  } finally {
+    console.error = orig;
+  }
+  return messages;
+};
+
+const v1Stream = (events) => ({
+  client: {
+    event: {
+      subscribe: async () => ({
+        stream: (async function* () {
+          for (const event of events) yield event;
+        })(),
+      }),
+    },
+  },
+});
+
+test("plugin setup v1: client.event.subscribe {stream} exits on fatal", async () => {
+  const markerPath = freshTemp("v1-fatal");
+  const exit = mockExit();
+  try {
+    const unsub = await plugin.setup(
+      v1Stream([
+        {
+          type: "session.error",
+          properties: {
+            error: apiErr(402, "Insufficient balance"),
+            sessionID: "s1",
+          },
+        },
+      ]),
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    unsub();
+  } finally {
+    exit.restore();
+  }
+  assert.equal(exit.code, 1);
+  const marker = JSON.parse(readFileSync(markerPath, "utf8"));
+  assert.equal(marker.reason, "balance");
+  assert.equal(marker.message, "Insufficient balance");
+  assert.equal(marker.sessionID, "s1");
+});
+
+test("plugin setup v1: benign event does not exit", async () => {
+  const markerPath = freshTemp("v1-benign");
+  const exit = mockExit();
+  try {
+    const unsub = await plugin.setup(
+      v1Stream([{ type: "message.part.updated", properties: {} }]),
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    unsub();
+  } finally {
+    exit.restore();
+  }
+  assert.equal(exit.code, null);
+  assert.equal(existsSync(markerPath), false);
+});
+
+test("plugin setup: missing event API fails with a diagnostic", async () => {
+  let rejected;
+  const messages = await captureConsoleError(async () => {
+    try {
+      await plugin.setup({ foo: 1 });
+    } catch (error) {
+      rejected = error;
+    }
+  });
+  assert.match(String(rejected), /no usable event stream/);
+  assert.ok(
+    messages.some(
+      (m) => m.includes("no usable event stream") && m.includes("foo"),
+    ),
+  );
+});
+
+test("plugin setup: incompatible event object fails setup", async () => {
+  await assert.rejects(plugin.setup({ event: {} }), /no usable event stream/);
+});
+
+test("plugin setup: non-iterable stream fails with a diagnostic", async () => {
+  let rejected;
+  const messages = await captureConsoleError(async () => {
+    try {
+      await plugin.setup({ event: { subscribe: async () => ({}) } });
+    } catch (error) {
+      rejected = error;
+    }
+  });
+  assert.match(String(rejected), /not async-iterable/);
+  assert.ok(messages.some((m) => m.includes("not async-iterable")));
+});
+
+test("plugin setup: rejected subscribe fails with a diagnostic", async () => {
+  let rejected;
+  const messages = await captureConsoleError(async () => {
+    try {
+      await plugin.setup({
+        event: {
+          subscribe: async () => {
+            throw new Error("boom");
+          },
+        },
+      });
+    } catch (error) {
+      rejected = error;
+    }
+  });
+  assert.match(String(rejected), /boom/);
+  assert.ok(
+    messages.some((m) =>
+      m.includes("subscribing to the v2 event stream failed"),
+    ),
+  );
+});
+
+test("plugin server: push hook exits on fatal", async () => {
+  const markerPath = freshTemp("server-fatal");
+  const exit = mockExit();
+  try {
+    const hooks = await plugin.server({});
+    await assert.rejects(
+      hooks.event({
+        event: {
+          type: "session.error",
+          properties: { error: apiErr(402, "Insufficient balance") },
+        },
+      }),
+      /exit/,
+    );
+  } finally {
+    exit.restore();
+  }
+  assert.equal(exit.code, 1);
+  const marker = JSON.parse(readFileSync(markerPath, "utf8"));
+  assert.equal(marker.reason, "balance");
+  assert.equal(marker.message, "Insufficient balance");
+});
+
+test("plugin server: push hook ignores benign events", async () => {
+  const markerPath = freshTemp("server-benign");
+  const exit = mockExit();
+  try {
+    const hooks = await plugin.server({});
+    await hooks.event({
+      event: { type: "message.part.updated", properties: {} },
+    });
+  } finally {
+    exit.restore();
+  }
+  assert.equal(exit.code, null);
+  assert.equal(existsSync(markerPath), false);
+});
+
+test("plugin server: returns a fresh hook set on every call", async () => {
+  const first = await plugin.server({});
+  const second = await plugin.server({});
+  assert.equal(typeof first.event, "function");
+  assert.equal(typeof second.event, "function");
+  assert.notEqual(first, second);
 });

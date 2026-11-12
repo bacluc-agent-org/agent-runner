@@ -9,6 +9,13 @@ stdlib-only script models only the control loop: a scripted `fake_llm`, stub
 tools, a hard `max_steps` cap, regex action parsing with error-observation
 recovery, and approximate token costs (`len(text) // 4`). Only its pytest file
 imports it.
+
+The demo exists because the real harness needs a provider, network access, API
+keys and minutes per run, so its loop invariants are awkward to regression-test.
+Instead this script pins the ReAct contract — Thought -> Action -> Observation,
+a hard step cap, parse-error recovery and cumulative cost — in a sub-second
+offline pytest and gives newcomers a readable reference for the protocol. It
+neither wraps nor replaces the harness.
 """
 import re
 from collections.abc import Callable

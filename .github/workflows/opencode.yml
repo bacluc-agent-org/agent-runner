@@ -69,6 +69,11 @@ on:
         required: false
         type: number
         default: 5
+      agent:
+        description: OpenCode agent to run
+        required: false
+        type: string
+        default: coordinator
   workflow_call:
     inputs:
       prompt:
@@ -89,6 +94,11 @@ on:
         required: false
         type: number
         default: 120
+      agent:
+        description: OpenCode agent to run
+        required: false
+        type: string
+        default: coordinator
 
 permissions:
   contents: write
@@ -113,6 +123,7 @@ jobs:
       DIAGNOSTICS_CHECKOUT: .agent-runner-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
       SOURCE_BRANCH: ${{ inputs.source_branch || '' }}
       PROMPT: "${{ inputs.prompt || 'Push-triggered validation: review the changed files in this push and verify the workflows are correct and complete. Report the result; do not modify files, create issues, or open pull requests.' }}"
+      AGENT: ${{ inputs.agent || 'coordinator' }}
 
     steps:
       - name: Print inputs
@@ -126,12 +137,14 @@ jobs:
           printf "requested_model: %s\n" "$requested"
           printf "timeout_minutes: %s\n" "$TIMEOUT_MINUTES"
           printf 'discovery_timeout_minutes: %s\n' "$DISCOVERY_TIMEOUT_MINUTES"
+          printf 'agent: %s\n' "$AGENT"
           printf '::%s::\n' "$stop_token"
         env:
           MODEL_TEXT: ${{ inputs.model }}
           MODEL_CHOICE: ${{ inputs.model_choice }}
           TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
           DISCOVERY_TIMEOUT_MINUTES: ${{ inputs.discovery_timeout_minutes }}
+          AGENT: ${{ inputs.agent || 'coordinator' }}
 
       - name: Check out target repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -161,6 +174,7 @@ jobs:
 
       - name: Check model availability
         id: model-availability
+        timeout-minutes: 10
         uses: ./.github/actions/model-availability
 
       - name: Dump model probe debug output
@@ -489,6 +503,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
           BACLUC_AGENT_GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
           OPENCODE_FATAL_STAGE: coordinator
+          AGENT: ${{ inputs.agent || 'coordinator' }}
         run: |
           set -Eeuo pipefail
           rm -f "$RUNNER_TEMP/opencode-fatal.json"
@@ -498,10 +513,10 @@ jobs:
           stop_token="$(openssl rand -hex 32)"
           : "${stop_token:?stop-commands fence token generation failed}"
           printf '::stop-commands::%s\n' "$stop_token"
-          printf 'Final coordinator command: opencode run --agent coordinator --model %q --title %q\n' "$MODEL" "$coordinator_session_title"
+          printf 'Final OpenCode command: opencode run --agent %q --model %q --title %q\n' "$AGENT" "$MODEL" "$coordinator_session_title"
           printf 'Coordinator prompt:\n%s\n' "$PROMPT"
           set +e
-          timeout "${COORDINATOR_TIMEOUT}m" opencode run --agent coordinator --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
+          timeout "${COORDINATOR_TIMEOUT}m" opencode run --agent "$AGENT" --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
           coordinator_statuses=("${PIPESTATUS[@]}")
           printf '::%s::\n' "$stop_token"
           coordinator_status=${coordinator_statuses[0]}

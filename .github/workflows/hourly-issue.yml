@@ -60,6 +60,7 @@ jobs:
 
       - name: Check model availability
         id: model-availability
+        timeout-minutes: 10
         uses: ./.github/actions/model-availability
 
       - name: Dump model probe debug output

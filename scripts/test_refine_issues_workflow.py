@@ -9,6 +9,7 @@ WORKFLOW = Path(__file__).parents[1] / ".github/workflows/refine-issues.yml"
 CANDIDATE_START = 'candidates="$RUNNER_TEMP/candidate-numbers.txt"'
 CANDIDATE_END = 'mv "$RUNNER_TEMP/dedup-candidates.txt" "$candidates"'
 SEARCH_START = 'if ! gh api "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+-label:agent-refined'
+REFINED_SEARCH_START = 'if ! gh api "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:agent-refined'
 
 FAKE_GH = r"""#!/usr/bin/env bash
 set -Eeuo pipefail
@@ -26,8 +27,12 @@ if [[ "${1:-}" == "api" ]]; then
       *) url="$1"; shift ;;
     esac
   done
-  if [[ -n "${GH_FAIL_SEARCH:-}" && "$url" == *"search/issues"* ]]; then
+  if [[ -n "${GH_FAIL_SEARCH:-}" && "$url" == *"search/issues"* && "$url" != *"sort:updated-desc"* ]]; then
     printf 'search failed\n' >&2
+    exit 1
+  fi
+  if [[ -n "${GH_FAIL_REFINED_SEARCH:-}" && "$url" == *"sort:updated-desc"* ]]; then
+    printf 'refined search failed\n' >&2
     exit 1
   fi
   if [[ "$url" == *"search/issues"* ]]; then
@@ -37,6 +42,10 @@ if [[ "${1:-}" == "api" ]]; then
       fixture="$GH_FIXTURES/refined-search.json"
     fi
   elif [[ "$url" =~ /issues/([0-9]+)/comments ]]; then
+    if [[ ",${GH_FAIL_COMMENTS:-}," == *",${BASH_REMATCH[1]},"* ]]; then
+      printf 'comments failed\n' >&2
+      exit 1
+    fi
     fixture="$GH_FIXTURES/comments-${BASH_REMATCH[1]}.json"
   elif [[ "$url" =~ /issues/([0-9]+)/events ]]; then
     fixture="$GH_FIXTURES/events-${BASH_REMATCH[1]}.json"
@@ -75,6 +84,10 @@ if [[ "${1:-}" == "issue" ]]; then
     exit 0
   fi
   if [[ "$command" == "edit" ]]; then
+    if [[ -n "${GH_FAIL_LABEL_ADD:-}" && " $* " == *" --add-label "* ]]; then
+      printf 'label add failed\n' >&2
+      exit 1
+    fi
     exit 0
   fi
 fi
@@ -128,6 +141,10 @@ def search_block():
     return extract_if_block(SEARCH_START)
 
 
+def refined_search_block():
+    return extract_if_block(REFINED_SEARCH_START)
+
+
 class WorkflowRun:
     def __init__(self, tmp_path):
         self.tmp_path = tmp_path
@@ -165,10 +182,16 @@ class WorkflowRun:
     def issue(self, number, body="", updated_at="2026-11-08T10:00:00Z"):
         self.write_json(f"issue-{number}.json", {"body": body, "updatedAt": updated_at})
 
-    def run(self, script, fail_search=False):
+    def run(self, script, fail_search=False, fail_refined_search=False, fail_comments=(), fail_label_add=False):
         env = dict(self.env)
         if fail_search:
             env["GH_FAIL_SEARCH"] = "1"
+        if fail_refined_search:
+            env["GH_FAIL_REFINED_SEARCH"] = "1"
+        if fail_comments:
+            env["GH_FAIL_COMMENTS"] = ",".join(str(number) for number in fail_comments)
+        if fail_label_add:
+            env["GH_FAIL_LABEL_ADD"] = "1"
         return subprocess.run(
             ["bash", "-Eeuo", "pipefail", "-c", script],
             capture_output=True,
@@ -277,28 +300,39 @@ def test_refined_issue_needs_a_newer_human_comment(tmp_path):
     result = run.run(candidate_block())
     assert result.returncode == 0, result.stderr
     assert run.candidates() == ["2"]
-    kept = json.loads((run.runner / "comments-2.json").read_text())
-    assert [item["body"] for item in kept] == ["new feedback"]
+    kept = (run.runner / "comments-2.txt").read_text()
+    assert "Author: BacLuc" in kept
+    assert "new feedback" in kept
+    assert "old feedback" not in kept
 
 
 def test_bot_and_progress_comments_never_qualify(tmp_path):
     run = WorkflowRun(tmp_path)
     run.searches(refined=[2])
     run.issue(2, body="## Goal\nOld\n\n<!-- agent-refined: 2026-11-08T10:00:00Z -->")
-    run.comments(
-        2,
-        [
-            comment("some-bot", "2026-11-08T11:00:00Z", "bot feedback", user_type="Bot"),
-            comment("bacluc-agent", "2026-11-08T12:00:00Z", "<!-- agent-progress -->\nstatus"),
-            comment("BacLuc", "2026-11-08T09:00:00Z", "old human feedback"),
-        ],
-    )
+    bot_comments = [
+        comment("some-bot", "2026-11-08T11:00:00Z", "bot feedback", user_type="Bot"),
+        comment("bacluc-agent", "2026-11-08T12:00:00Z", "<!-- agent-progress -->\nstatus"),
+        comment("BacLuc", "2026-11-08T09:00:00Z", "old human feedback"),
+    ]
+    run.comments(2, bot_comments)
 
     result = run.run(candidate_block())
     assert result.returncode == 0, result.stderr
     assert run.candidates() == []
-    kept = json.loads((run.runner / "comments-2.json").read_text())
-    assert [item["user"]["login"] for item in kept] == ["BacLuc"]
+    assert not (run.runner / "comments-2.txt").exists()
+
+    run.comments(
+        2,
+        [*bot_comments, comment("BacLuc", "2026-11-08T13:00:00Z", "new human feedback")],
+    )
+    result = run.run(candidate_block())
+    assert result.returncode == 0, result.stderr
+    assert run.candidates() == ["2"]
+    kept = (run.runner / "comments-2.txt").read_text()
+    assert "new human feedback" in kept
+    assert "bot feedback" not in kept
+    assert "status" not in kept
 
 
 def test_searches_merge_and_deduplicate_candidates(tmp_path):
@@ -347,6 +381,92 @@ printf 'GUARD-REACHED\\n'
     assert result.returncode == 1
     assert "unrefined search failed" in result.stderr
     assert "GUARD-REACHED" not in result.stdout
+
+
+def test_refined_search_failure_fails_before_the_guard(tmp_path):
+    run = WorkflowRun(tmp_path)
+    run.searches()
+    script = f"""
+unrefined_json="$RUNNER_TEMP/unrefined-candidates.json"
+refined_json="$RUNNER_TEMP/refined-candidates.json"
+{search_block()}
+{refined_search_block()}
+printf 'GUARD-REACHED\\n'
+"""
+    result = run.run(script, fail_refined_search=True)
+    assert result.returncode == 1
+    assert "refined search failed" in result.stderr
+    assert "GUARD-REACHED" not in result.stdout
+
+
+def test_comment_at_exactly_the_marker_time_does_not_qualify(tmp_path):
+    run = WorkflowRun(tmp_path)
+    run.searches(refined=[2])
+    run.issue(2, body="## Goal\nOld\n\n<!-- agent-refined: 2026-11-08T10:00:00Z -->")
+    run.comments(2, [comment("BacLuc", "2026-11-08T10:00:00Z", "same timestamp")])
+
+    result = run.run(candidate_block())
+    assert result.returncode == 0, result.stderr
+    assert run.candidates() == []
+
+
+def test_last_marker_timestamp_wins(tmp_path):
+    run = WorkflowRun(tmp_path)
+    run.searches(refined=[2])
+    run.issue(
+        2,
+        body=(
+            "## Goal\nOld\n\n"
+            "<!-- agent-refined: 2026-11-08T10:00:00Z -->\n"
+            "<!-- agent-refined: 2026-11-08T12:00:00Z -->"
+        ),
+    )
+    run.comments(2, [comment("BacLuc", "2026-11-08T11:00:00Z", "between markers")])
+    result = run.run(candidate_block())
+    assert result.returncode == 0, result.stderr
+    assert run.candidates() == []
+
+    run.comments(2, [comment("BacLuc", "2026-11-08T13:00:00Z", "after both markers")])
+    result = run.run(candidate_block())
+    assert result.returncode == 0, result.stderr
+    assert run.candidates() == ["2"]
+    assert "after both markers" in (run.runner / "comments-2.txt").read_text()
+
+
+def test_unrefined_comment_fetch_failure_is_still_a_candidate(tmp_path):
+    run = WorkflowRun(tmp_path)
+    run.searches(unrefined=[1])
+
+    result = run.run(candidate_block(), fail_comments=[1])
+    assert result.returncode == 0, result.stderr
+    assert run.candidates() == ["1"]
+    assert (run.runner / "comments-1.txt").read_text() == ""
+    assert "treating it as having no comments" in result.stderr
+
+
+def test_label_add_failure_is_counted_as_failed(tmp_path):
+    run = WorkflowRun(tmp_path)
+    block = success_block()
+    out = tmp_path / "out.txt"
+    out.write_text("refined body\n")
+    script = f"""
+number=7
+out={shlex.quote(str(out))}
+refined=0
+failed=0
+validation_status=0
+refined_marker_timestamp='2026-11-08T10:57:18Z'
+while :; do
+{block}
+break
+done
+printf 'refined=%s failed=%s\\n' "$refined" "$failed"
+"""
+    result = run.run(script, fail_label_add=True)
+    assert result.returncode == 0
+    assert "refined=0 failed=1" in result.stdout
+    assert "refined and labeled" not in result.stdout
+    assert "label add failed" in result.stderr
 
 
 def test_marker_timestamp_is_snapshotted_before_collection():

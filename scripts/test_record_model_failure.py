@@ -73,6 +73,16 @@ def test_read_cache(monkeypatch):
     assert rmf.read_cache("49") == {"m": {"ok": True, "checked": "x"}}
 
 
+def test_read_cache_malformed_json(monkeypatch):
+    monkeypatch.setattr(rmf, "run_gh", lambda *a: "not json")
+    assert rmf.read_cache("49") == {}
+
+
+def test_read_cache_non_dict_json(monkeypatch):
+    monkeypatch.setattr(rmf, "run_gh", lambda *a: "[1, 2]")
+    assert rmf.read_cache("49") == {}
+
+
 def test_read_cache_failure(monkeypatch):
     def fail(*a):
         raise RuntimeError("gh failed")

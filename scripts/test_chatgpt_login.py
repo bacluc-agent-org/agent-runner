@@ -28,6 +28,46 @@ def test_step_for_nested_consent_route():
     assert chatgpt_login._step_for_path("/sign-in-with-chatgpt/codex/consent") == "consent"
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://auth.openai.com/log-in",
+        "https://auth.openai.com:443/log-in",
+        "https://chatgpt.com/auth/login?next=/",
+        "https://www.chatgpt.com/",
+        "https://chat.openai.com/auth/callback#code",
+        "http://localhost:1455/auth/callback",
+    ],
+)
+def test_is_auth_page_url_accepts_auth_pages(url):
+    assert chatgpt_login._is_auth_page_url(url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://evil.example.com/log-in",
+        "https://auth.openai.com.evil.example/log-in",
+        "https://user@auth.openai.com/log-in",
+        "https://auth.openai.com:8443/log-in",
+        "http://auth.openai.com/log-in",
+        "http://localhost:1456/auth/callback",
+        "http://localhost:1455/other",
+        "ftp://auth.openai.com/log-in",
+    ],
+)
+def test_is_auth_page_url_rejects_other_pages(url):
+    assert not chatgpt_login._is_auth_page_url(url)
+
+
+def test_find_auth_page_does_not_fall_back_to_the_last_page():
+    last_page = types.SimpleNamespace(url="https://evil.example.com/log-in")
+    browser = types.SimpleNamespace(
+        contexts=[types.SimpleNamespace(pages=[last_page])]
+    )
+    assert chatgpt_login._find_auth_page(browser) is None
+
+
 def test_debug_text_redacts_credentials_and_authorization_query(monkeypatch):
     monkeypatch.setenv("OPENAI_PASSWORD", "private-password")
     result = chatgpt_login._redact_debug_text(
@@ -407,6 +447,27 @@ def test_fill_first_visible_without_delay_uses_plain_fill():
     assert page.locator_instance.typed == []
 
 
+def test_refresh_workflow_does_not_persist_checkout_credentials():
+    workflow = (
+        Path(__file__).parents[1] / ".github/workflows/refresh-chatgpt-auth.yml"
+    ).read_text(encoding="utf-8")
+    checkout = workflow[
+        workflow.index("uses: actions/checkout") : workflow.index("astral-sh/setup-uv")
+    ]
+    assert "persist-credentials: false" in checkout
+
+
+def test_primitives_fallback_fences_startup_stderr():
+    helper = (Path(__file__).with_name("chatgpt-login-primitives-fallback.sh")).read_text(encoding="utf-8")
+    block = helper[
+        helper.index("Primitive login startup failed") : helper.index(
+            "Primitive login reported invalid status"
+        )
+    ]
+    assert block.index("::stop-commands::") < block.index('cat "$stderr_file" >&2')
+    assert block.index('cat "$stderr_file" >&2') < block.index("printf '::%s::")
+
+
 def test_refresh_workflow_suppresses_failed_auth_output_and_masks_stored_auth():
     workflow = (
         Path(__file__).parents[1] / ".github/workflows/refresh-chatgpt-auth.yml"
@@ -488,23 +549,40 @@ def test_primitives_fallback_observes_retries_and_validates_login_output():
     assert 'gh secret set OPENCODE_AUTH_JSON' in helper
     assert "scripts/chatgpt-login.py status || true" not in helper
     assert "scripts/chatgpt-login.py step || true" not in helper
-    assert "fill_secret\\ e[0-9]*\\ email | fill_secret" in helper
-    assert "type_secret\\ e[0-9]*\\ password" in helper
-    assert "otp\\ e[0-9]*" in helper
-    assert "goto\\ https://auth.openai.com/* | goto" in helper
+    assert "operations=snapshot|click|hover|check|uncheck|fill|type|fill_secret|type_secret|otp|select|goto|press|reload|go-back|go-forward|status" in helper
+    assert "redact_snapshot()" in helper
+    assert "type\\ (e[0-9]+)" in helper
+    assert "\\ (email|password)$" in helper
+    assert "https://(auth\\.openai\\.com|chatgpt\\.com|www\\.chatgpt\\.com|chat\\.openai\\.com)" in helper
+    assert '.openai.expires | type == "number" and . == floor and . > 0' in helper
+    for name in (
+        "ACTIONS_RUNTIME_TOKEN",
+        "GITHUB_ENV",
+        "GITHUB_OUTPUT",
+        "GITHUB_PATH",
+        "GITHUB_STATE",
+        "GITHUB_STEP_SUMMARY",
+    ):
+        assert f"-u {name}" in helper
     assert 'command_timeout="${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}"' in helper
     assert 'agent_timeout="${PLAYWRIGHT_AGENT_TIMEOUT_SECONDS:-120}"' in helper
     assert "opencode run --auto --model" in helper
 
 
 def test_primitives_fallback_steps_after_a_blocking_status():
-    workflow = (
-        Path(__file__).parents[1] / ".github/workflows/refresh-chatgpt-auth.yml"
-    ).read_text(encoding="utf-8")
     helper = (Path(__file__).with_name("chatgpt-login-primitives-fallback.sh")).read_text(encoding="utf-8")
+    assert "blocking_recovery_attempted" not in helper
     blocking_start = helper.index("if [[ -n \"$(jq -r '.blocking // empty' <<< \"$status_json\")\" ]]; then")
     blocking_end = helper.index("continue", blocking_start)
+    assert "recovery_attempted=true" in helper[blocking_start:blocking_end]
     assert "sleep 5" in helper[blocking_start:blocking_end]
+    step_start = helper.index("step_json=$(uv run scripts/chatgpt-login.py step) || step_status=$?")
+    step_end = helper.index("sleep 5", step_start)
+    step_block = helper[step_start:step_end]
+    assert "step_status == 1 || step_status == 2" in step_block
+    assert "recovery_attempted=true" in step_block
+    assert "recover_blocking_login || exit 1" in step_block
+    assert "Primitive login could not progress after Playwright recovery" in helper
 
 
 _OPENAI_ERROR_BODY = "<html><body><h1>Oops, an error occurred!</h1></body></html>"
@@ -640,8 +718,10 @@ case "${3:-}" in
     ;;
   start)
     trap 'touch "$RUNNER_TEMP/stopped"; exit 143' TERM INT
-    if [[ "$FAKE_MODE" == success || "$FAKE_MODE" == recovered ]]; then
+    if [[ "$FAKE_MODE" == success || "$FAKE_MODE" == recovered || "$FAKE_MODE" == step-failure || "$FAKE_MODE" == broadened-commands || "$FAKE_MODE" == custom-command ]]; then
       printf '%s\\n' '{"openai":{"type":"oauth","access":"test-access","refresh":"test-refresh","expires":123}}'
+    elif [[ "$FAKE_MODE" == float-expires ]]; then
+      printf '%s\\n' '{"openai":{"type":"oauth","access":"test-access","refresh":"test-refresh","expires":123.5}}'
     elif [[ "$FAKE_MODE" == invalid-output ]]; then
       printf '%s\\n' '{"openai":{"type":"oauth","access":"","refresh":"blocked-refresh","expires":123}}'
     else
@@ -654,12 +734,14 @@ case "${3:-}" in
     fi
     ;;
   status)
-    if [[ "$FAKE_MODE" == success || "$FAKE_MODE" == invalid-output ]]; then
+    if [[ "$FAKE_MODE" == success || "$FAKE_MODE" == invalid-output || "$FAKE_MODE" == float-expires ]]; then
       touch "$RUNNER_TEMP/release-start"
       printf '%s\\n' '{"step":"done","blocking":null,"code_ready":true}'
-    elif [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == handoff-write-failure || "$FAKE_MODE" == agent-timeout-retry || "$FAKE_MODE" == slow-command ]] && [[ -e "$RUNNER_TEMP/recovered" ]]; then
+    elif [[ "$FAKE_MODE" =~ ^(recovered|detach-failure|handoff-write-failure|agent-timeout-retry|slow-command|step-failure|broadened-commands|custom-command)$ ]] && [[ -e "$RUNNER_TEMP/recovered" ]]; then
       touch "$RUNNER_TEMP/release-start"
       printf '%s\\n' '{"step":"done","blocking":null,"code_ready":true}'
+    elif [[ "$FAKE_MODE" =~ ^(step-failure|broadened-commands|custom-command)$ ]]; then
+      printf '%s\\n' '{"step":"email","blocking":null,"code_ready":false}'
     elif [[ "$FAKE_MODE" == changing-snapshot ]]; then
       touch "$RUNNER_TEMP/release-start"
       count_file="$RUNNER_TEMP/status-count"
@@ -682,6 +764,7 @@ case "${3:-}" in
     ;;
   step)
     printf '%s\\n' '{"step":"email","blocking":null,"code_ready":false}'
+    if [[ "$FAKE_MODE" =~ ^(step-failure|broadened-commands|custom-command)$ ]]; then exit 1; fi
     ;;
   stop)
     touch "$RUNNER_TEMP/stopped"
@@ -703,7 +786,7 @@ printf '%s\\n' "$*" > "$RUNNER_TEMP/gh-call"
     (fake_bin / "opencode").write_text(
         """#!/usr/bin/env bash
 set -Eeuo pipefail
-for name in BACLUC_AGENT_GITHUB_TOKEN BRAVE_API_KEY CHATGPT_EMAIL CHATGPT_PASSWORD CHATGPT_TOTP_KEY CHATGPT_2FA_KEY GH_TOKEN GITHUB_TOKEN OPENAI_2FA_KEY OPENAI_PASSWORD OPENAI_USERNAME OPENCODE_AUTH_CONTENT OPENROUTER_API_KEY; do
+for name in ACTIONS_RUNTIME_TOKEN BACLUC_AGENT_GITHUB_TOKEN BRAVE_API_KEY CHATGPT_EMAIL CHATGPT_PASSWORD CHATGPT_TOTP_KEY CHATGPT_2FA_KEY GH_TOKEN GITHUB_ENV GITHUB_OUTPUT GITHUB_PATH GITHUB_STATE GITHUB_STEP_SUMMARY GITHUB_TOKEN OPENAI_2FA_KEY OPENAI_PASSWORD OPENAI_USERNAME OPENCODE_AUTH_CONTENT OPENROUTER_API_KEY; do
   [[ -z "${!name:-}" ]] || { touch "$RUNNER_TEMP/agent-secret-env"; exit 1; }
 done
 [[ -n "${OPENCODE_GO_API_KEY:-}${OPENCODE_GO_2_API_KEY:-}" ]] || { touch "$RUNNER_TEMP/missing-provider-env"; exit 1; }
@@ -726,6 +809,16 @@ elif [[ "$FAKE_MODE" == agent-timeout-retry && -e "$RUNNER_TEMP/agent-retried" ]
   printf '%s\\n' 'fill_secret e1 email' > "$RUNNER_TEMP/chatgpt-login-recovery.commands"
 elif [[ "$FAKE_MODE" == slow-command ]]; then
   printf '%s\\n' 'click e1' > "$RUNNER_TEMP/chatgpt-login-recovery.commands"
+elif [[ "$FAKE_MODE" == step-failure ]]; then
+  snapshot=$(<"$RUNNER_TEMP/chatgpt-login-recovery.snapshot")
+  [[ "$snapshot" == *'[redacted'* ]] || exit 1
+  [[ "$snapshot" != *'test@example.invalid'* && "$snapshot" != *'123456'* && "$snapshot" != *'test-password'* ]] || exit 1
+  touch "$RUNNER_TEMP/agent-read-snapshot"
+  printf '%s\\n' 'fill_secret e1 email' 'otp e2' 'fill_secret e3 password' > "$RUNNER_TEMP/chatgpt-login-recovery.commands"
+elif [[ "$FAKE_MODE" == broadened-commands ]]; then
+  printf '%s\\n' 'fill e1 hello world' 'type e1 typed text' 'select e2 option one' 'reload' 'go-back' 'go-forward' 'press Control+A' 'goto https://auth.openai.com/log-in?foo=bar#baz' 'click e3' > "$RUNNER_TEMP/chatgpt-login-recovery.commands"
+elif [[ "$FAKE_MODE" == custom-command ]]; then
+  printf '%s\\n' "$FAKE_COMMAND" > "$RUNNER_TEMP/chatgpt-login-recovery.commands"
 fi
 """,
         encoding="utf-8",
@@ -734,7 +827,9 @@ fi
     (fake_bin / "playwright-cli").write_text(
         """#!/usr/bin/env bash
 set -Eeuo pipefail
-call="$*"
+call=''
+for arg in "$@"; do call+="${arg}|"; done
+call="${call%|}"
 call="${call//test@example.invalid/[redacted]}"
 call="${call//test-password/[redacted]}"
 call="${call//123456/[redacted]}"
@@ -759,6 +854,14 @@ if [[ "$FAKE_MODE" == snapshot-failure && "${2:-}" == snapshot ]]; then
   exit 1
 fi
 if [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == detach-hang || "$FAKE_MODE" == handoff-write-failure || "$FAKE_MODE" == agent-timeout-retry ]] && [[ "${2:-}" == snapshot ]]; then
+  touch "$RUNNER_TEMP/recovered"
+  printf '%s\\n' 'inspectable snapshot'
+fi
+if [[ "$FAKE_MODE" == step-failure && "${2:-}" == snapshot ]]; then
+  touch "$RUNNER_TEMP/recovered"
+  printf '%s\\n' '- textbox "Email" [ref=e1]: test@example.invalid' '- textbox "Code" [ref=e2]: 123456' '- textbox "Password" [ref=e3]: test-password'
+fi
+if [[ "$FAKE_MODE" == broadened-commands || "$FAKE_MODE" == custom-command ]] && [[ "${2:-}" == snapshot ]]; then
   touch "$RUNNER_TEMP/recovered"
   printf '%s\\n' 'inspectable snapshot'
 fi
@@ -792,8 +895,14 @@ fi
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "RUNNER_TEMP": str(tmp_path),
         "GITHUB_REPOSITORY": "example/repository",
+        "ACTIONS_RUNTIME_TOKEN": "test-actions-runtime-token",
         "BACLUC_AGENT_GITHUB_TOKEN": "test-token",
         "BRAVE_API_KEY": "test-brave-key",
+        "GITHUB_ENV": "test-github-env",
+        "GITHUB_OUTPUT": "test-github-output",
+        "GITHUB_PATH": "test-github-path",
+        "GITHUB_STATE": "test-github-state",
+        "GITHUB_STEP_SUMMARY": "test-github-step-summary",
         "CHATGPT_EMAIL": "test@example.invalid",
         "CHATGPT_PASSWORD": "test-password",
         "CHATGPT_HEADLESS": "true",
@@ -829,16 +938,17 @@ fi
     snapshot = tmp_path / "chatgpt-login-recovery.snapshot"
     assert not snapshot.exists()
     assert (tmp_path / "playwright-cli-calls").read_text().splitlines() == [
-        "-s=chatgpt-auth-recovery attach --cdp=http://127.0.0.1:9222",
-        "-s=chatgpt-auth-recovery snapshot",
-        "-s=chatgpt-auth-recovery snapshot",
-        "-s=chatgpt-auth-recovery fill e1 email [redacted]",
-        "-s=chatgpt-auth-recovery type e2 password [redacted]",
-        "-s=chatgpt-auth-recovery fill e3 [redacted]",
-        "-s=chatgpt-auth-recovery goto https://auth.openai.com/log-in",
-        "-s=chatgpt-auth-recovery press Enter",
-        "-s=chatgpt-auth-recovery click e4",
-        "-s=chatgpt-auth-recovery detach",
+        "-s=chatgpt-auth-recovery|attach|--cdp=http://127.0.0.1:9222",
+        "-s=chatgpt-auth-recovery|snapshot",
+        "-s=chatgpt-auth-recovery|snapshot",
+        "-s=chatgpt-auth-recovery|fill|e1|[redacted]",
+        "-s=chatgpt-auth-recovery|click|e2",
+        "-s=chatgpt-auth-recovery|type|[redacted]",
+        "-s=chatgpt-auth-recovery|fill|e3|[redacted]",
+        "-s=chatgpt-auth-recovery|goto|https://auth.openai.com/log-in",
+        "-s=chatgpt-auth-recovery|press|Enter",
+        "-s=chatgpt-auth-recovery|click|e4",
+        "-s=chatgpt-auth-recovery|detach",
     ]
     assert "Playwright handoff retained" not in recovered.stderr
     handoff = tmp_path / "chatgpt-login-recovery.handoff"
@@ -915,9 +1025,9 @@ exec /bin/mv "$@"
     assert not snapshot.exists()
     assert not handoff.exists()
     assert (tmp_path / "playwright-cli-calls").read_text().splitlines() == [
-        "-s=chatgpt-auth-recovery attach --cdp=http://127.0.0.1:9222",
-        "-s=chatgpt-auth-recovery snapshot",
-        "-s=chatgpt-auth-recovery detach",
+        "-s=chatgpt-auth-recovery|attach|--cdp=http://127.0.0.1:9222",
+        "-s=chatgpt-auth-recovery|snapshot",
+        "-s=chatgpt-auth-recovery|detach",
     ]
 
     (tmp_path / "gh-call").unlink()
@@ -929,8 +1039,8 @@ exec /bin/mv "$@"
     assert (tmp_path / "stopped").exists()
     assert not (tmp_path / "gh-call").exists()
     assert (tmp_path / "playwright-cli-calls").read_text().splitlines() == [
-        "-s=chatgpt-auth-recovery attach --cdp=http://127.0.0.1:9222",
-        "-s=chatgpt-auth-recovery snapshot",
+        "-s=chatgpt-auth-recovery|attach|--cdp=http://127.0.0.1:9222",
+        "-s=chatgpt-auth-recovery|snapshot",
     ]
 
     (tmp_path / "stopped").unlink()
@@ -942,7 +1052,7 @@ exec /bin/mv "$@"
     assert (tmp_path / "stopped").exists()
     assert "secret-password" not in cli_failure.stderr
     assert (tmp_path / "playwright-cli-calls").read_text().splitlines() == [
-        "-s=chatgpt-auth-recovery attach --cdp=http://127.0.0.1:9222",
+        "-s=chatgpt-auth-recovery|attach|--cdp=http://127.0.0.1:9222",
     ]
 
     missing_credentials = dict(env)
@@ -956,12 +1066,71 @@ exec /bin/mv "$@"
     assert missing.returncode != 0
     assert "credentials" in missing.stderr.lower()
 
-    for mode in ("invalid-status", "invalid-output"):
+    for mode in ("invalid-status", "invalid-output", "float-expires"):
         invalid = subprocess.run(
             ["bash", str(helper)], env={**env, "FAKE_MODE": mode}, capture_output=True, text=True, timeout=10
         )
         assert invalid.returncode != 0
         assert not (tmp_path / "gh-call").exists()
+
+    for path in tmp_path.iterdir():
+        if path.is_file():
+            path.unlink()
+    step_failure = subprocess.run(
+        ["bash", str(helper)], env={**env, "FAKE_MODE": "step-failure"}, capture_output=True, text=True, timeout=10
+    )
+    assert step_failure.returncode == 0
+    assert (tmp_path / "agent-read-snapshot").exists()
+    assert "secret set OPENCODE_AUTH_JSON" in (tmp_path / "gh-call").read_text()
+    assert "test-access" in (tmp_path / "auth.json").read_text()
+    assert not (tmp_path / "chatgpt-login-recovery.snapshot").exists()
+    assert not (tmp_path / "agent-secret-env").exists()
+
+    for path in tmp_path.iterdir():
+        if path.is_file():
+            path.unlink()
+    broadened = subprocess.run(
+        ["bash", str(helper)], env={**env, "FAKE_MODE": "broadened-commands"}, capture_output=True, text=True, timeout=10
+    )
+    assert broadened.returncode == 0
+    assert (tmp_path / "playwright-cli-calls").read_text().splitlines() == [
+        "-s=chatgpt-auth-recovery|attach|--cdp=http://127.0.0.1:9222",
+        "-s=chatgpt-auth-recovery|snapshot",
+        "-s=chatgpt-auth-recovery|fill|e1|hello world",
+        "-s=chatgpt-auth-recovery|click|e1",
+        "-s=chatgpt-auth-recovery|type|typed text",
+        "-s=chatgpt-auth-recovery|select|e2|option one",
+        "-s=chatgpt-auth-recovery|reload",
+        "-s=chatgpt-auth-recovery|go-back",
+        "-s=chatgpt-auth-recovery|go-forward",
+        "-s=chatgpt-auth-recovery|press|Control+A",
+        "-s=chatgpt-auth-recovery|goto|https://auth.openai.com/log-in?foo=bar#baz",
+        "-s=chatgpt-auth-recovery|click|e3",
+        "-s=chatgpt-auth-recovery|detach",
+    ]
+
+    for invalid_command in (
+        "goto https://evil.example.com/log-in",
+        "goto https://auth.openai.com.evil.example/log-in",
+        "goto https://user@auth.openai.com/log-in",
+        "goto https://auth.openai.com:443/log-in",
+        "fill_secret e1 email extra",
+        "delete_everything",
+    ):
+        for path in tmp_path.iterdir():
+            if path.is_file():
+                path.unlink()
+        rejected = subprocess.run(
+            ["bash", str(helper)],
+            env={**env, "FAKE_MODE": "custom-command", "FAKE_COMMAND": invalid_command},
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert rejected.returncode != 0
+        assert not (tmp_path / "gh-call").exists()
+        calls = (tmp_path / "playwright-cli-calls").read_text().splitlines()
+        assert calls[-1] == "-s=chatgpt-auth-recovery|detach"
 
     for path in tmp_path.iterdir():
         if path.is_file():

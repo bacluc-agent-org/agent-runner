@@ -17,7 +17,45 @@ cleanup() {
 }
 trap cleanup EXIT
 
-blocking_recovery_attempted=false
+redact_snapshot() {
+  local file="$1"
+  python3 - "$file" << 'PY'
+import os
+import re
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8", errors="replace") as handle:
+    text = handle.read()
+
+for name in (
+    "OPENAI_USERNAME",
+    "OPENAI_PASSWORD",
+    "OPENAI_2FA_KEY",
+    "CHATGPT_EMAIL",
+    "CHATGPT_PASSWORD",
+    "CHATGPT_2FA_KEY",
+    "CHATGPT_TOTP_KEY",
+):
+    value = os.environ.get(name)
+    if value and len(value) >= 4:
+        text = text.replace(value, "[redacted]")
+text = re.sub(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", "[redacted email]", text, flags=re.I)
+text = re.sub(r"(?<!\d)\d{6}(?!\d)", "[redacted code]", text)
+text = re.sub(r"\b(?:rt|sk)[.-][A-Z0-9._-]{8,}\b", "[redacted token]", text, flags=re.I)
+text = re.sub(r"\beyJ[A-Z0-9_-]{10,}\.[A-Z0-9_-]{10,}(?:\.[A-Z0-9_-]+)?\b", "[redacted token]", text, flags=re.I)
+text = re.sub(
+    r"([?&](?:code|state|access_token|refresh_token|id_token|token)=)[^&#\s]*",
+    r"\1[redacted]",
+    text,
+    flags=re.I,
+)
+with open(path, "w", encoding="utf-8") as handle:
+    handle.write(text)
+PY
+}
+
+recovery_attempted=false
 recover_blocking_login() {
   local session='chatgpt-auth-recovery'
   local cdp_port="${OPENAI_CDP_PORT:-9222}"
@@ -27,6 +65,7 @@ recover_blocking_login() {
   local snapshot_tmp=''
   local handoff_tmp=''
   local command_tmp=''
+  local batch_file=''
   local attached=false
   local handoff_timeout="${PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS:-300}"
   local command_timeout="${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}"
@@ -50,12 +89,20 @@ recover_blocking_login() {
     timeout "$operation_timeout" "$@"
   }
 
+  capture_snapshot() {
+    run_with_deadline "$command_timeout" playwright-cli "-s=$session" snapshot > "$snapshot_tmp" 2> /dev/null || return 1
+    redact_snapshot "$snapshot_tmp" || return 1
+    mv -f -- "$snapshot_tmp" "$snapshot_file" || return 1
+    snapshot_tmp=$(mktemp "$snapshot_file.XXXXXX")
+    chmod 600 "$snapshot_tmp"
+  }
+
   cleanup_recovery() {
     if [[ "$attached" == true ]]; then
       run_with_deadline "$handoff_timeout" playwright-cli "-s=$session" detach > /dev/null 2>&1 || true
       attached=false
     fi
-    rm -f -- "$snapshot_tmp" "$handoff_tmp" "$command_tmp" "$snapshot_file" "$handoff_file" "$command_file"
+    rm -f -- "$snapshot_tmp" "$handoff_tmp" "$command_tmp" "$batch_file" "$snapshot_file" "$handoff_file" "$command_file"
   }
   trap cleanup_recovery RETURN
   rm -f -- "$snapshot_file" "$handoff_file" "$command_file"
@@ -81,7 +128,7 @@ status=uv run scripts/chatgpt-login.py status
 step=uv run scripts/chatgpt-login.py step
 detach=playwright-cli -s=$session detach
 commands=$command_file
-operations=snapshot|click|fill_secret|type_secret|otp|goto|press|check|uncheck|hover|status
+operations=snapshot|click|hover|check|uncheck|fill|type|fill_secret|type_secret|otp|select|goto|press|reload|go-back|go-forward|status
 timeout_seconds=$handoff_timeout
 command_timeout_seconds=$command_timeout
 EOF
@@ -90,8 +137,8 @@ EOF
     cat << EOF
 Drive the blocked ChatGPT login through the attached Playwright session.
 Read only the snapshot at $snapshot_file. Write only newline-delimited commands to $command_file, then exit.
-Allowed commands are exactly: snapshot, click eN, fill_secret eN email|password, type_secret eN email|password, otp eN, goto https://auth.openai.com/PATH, goto https://chatgpt.com/PATH, press WORD, check eN, uncheck eN, hover eN, status.
-Use symbolic secret commands for credentials and otp for TOTP; never read, print, or write credential values. Use only refs from the snapshot and safe auth URLs without query strings or fragments. Keep the batch at most 32 commands. Do not call playwright-cli directly, modify any other file, or report secrets.
+Allowed commands are exactly: snapshot, click eN, hover eN, check eN, uncheck eN, fill eN TEXT, type eN TEXT, fill_secret eN email|password, type_secret eN email|password, otp eN, select eN VALUE, goto https://auth.openai.com/PATH, goto https://chatgpt.com/PATH, press KEY, reload, go-back, go-forward, status.
+Use symbolic secret commands for credentials and otp for TOTP; never read, print, or write credential values. Use only refs from the snapshot. URLs must use https on auth.openai.com, chatgpt.com, www.chatgpt.com, or chat.openai.com, with optional path, query, and fragment. TEXT and VALUE may contain up to 200 printable characters. Keep the batch at most 32 commands. Do not call playwright-cli directly, modify any other file, or report secrets.
 EOF
   )
   local handoff_ready=false
@@ -103,17 +150,12 @@ EOF
       ((remaining > 0)) || return 1
       local operation_timeout="$max_timeout"
       ((operation_timeout > remaining)) && operation_timeout=$remaining
-      env -u BACLUC_AGENT_GITHUB_TOKEN -u BRAVE_API_KEY -u CHATGPT_EMAIL -u CHATGPT_PASSWORD -u CHATGPT_TOTP_KEY -u CHATGPT_2FA_KEY -u GH_TOKEN -u GITHUB_TOKEN -u OPENAI_2FA_KEY -u OPENAI_PASSWORD -u OPENAI_USERNAME -u OPENCODE_AUTH_CONTENT -u OPENROUTER_API_KEY timeout "$operation_timeout" "$@"
+      env -u ACTIONS_RUNTIME_TOKEN -u BACLUC_AGENT_GITHUB_TOKEN -u BRAVE_API_KEY -u CHATGPT_EMAIL -u CHATGPT_PASSWORD -u CHATGPT_TOTP_KEY -u CHATGPT_2FA_KEY -u GH_TOKEN -u GITHUB_ENV -u GITHUB_OUTPUT -u GITHUB_PATH -u GITHUB_STATE -u GITHUB_STEP_SUMMARY -u GITHUB_TOKEN -u OPENAI_2FA_KEY -u OPENAI_PASSWORD -u OPENAI_USERNAME -u OPENCODE_AUTH_CONTENT -u OPENROUTER_API_KEY timeout "$operation_timeout" "$@"
     }
-    if ! run_with_deadline "$command_timeout" playwright-cli "-s=$session" snapshot > "$snapshot_tmp" 2> /dev/null; then
+    if ! capture_snapshot; then
       printf 'Playwright CLI could not capture the login page\n' >&2
       return 1
     fi
-    if ! mv -f -- "$snapshot_tmp" "$snapshot_file"; then
-      return 1
-    fi
-    snapshot_tmp=$(mktemp "$snapshot_file.XXXXXX")
-    chmod 600 "$snapshot_tmp"
     : > "$command_file"
     local remaining=$((deadline - SECONDS))
     ((remaining > 0)) || break
@@ -124,66 +166,87 @@ EOF
       continue
     fi
     if [[ -s "$command_file" ]]; then
-      local batch_file
       batch_file=$(mktemp "$command_file.batch.XXXXXX")
       chmod 600 "$batch_file"
       mv -f -- "$command_file" "$batch_file"
       : > "$command_file"
       chmod 600 "$command_file"
-      command_count=0
+      local command_count=0
+      local command=''
+      local operation=''
+      local ref=''
+      local text=''
+      local value=''
+      local key=''
+      local url=''
+      local secret_name=''
+      local secret_value=''
+      local otp_code=''
       while IFS= read -r command || [[ -n "$command" ]]; do
-        command_count=$((command_count + 1))
+        command="${command#"${command%%[![:space:]]*}"}"
+        command="${command%"${command##*[![:space:]]}"}"
+        [[ -n "$command" ]] || continue
+        ((command_count += 1))
         ((command_count <= 32)) || return 1
-        case "$command" in
-          snapshot)
-            run_with_deadline "$command_timeout" playwright-cli "-s=$session" snapshot > "$snapshot_tmp" 2> /dev/null || return 1
-            mv -f -- "$snapshot_tmp" "$snapshot_file" || return 1
-            snapshot_tmp=$(mktemp "$snapshot_file.XXXXXX")
-            chmod 600 "$snapshot_tmp"
-            ;;
-          click\ e[0-9]*)
-            run_with_deadline "$command_timeout" playwright-cli "-s=$session" click "${command#click }" > /dev/null 2>&1 || return 1
-            ;;
-          hover\ e[0-9]*)
-            run_with_deadline "$command_timeout" playwright-cli "-s=$session" hover "${command#hover }" > /dev/null 2>&1 || return 1
-            ;;
-          press\ [A-Za-z]*)
-            run_with_deadline "$command_timeout" playwright-cli "-s=$session" press "${command#press }" > /dev/null 2>&1 || return 1
-            ;;
-          check\ e[0-9]*)
-            run_with_deadline "$command_timeout" playwright-cli "-s=$session" check "${command#check }" > /dev/null 2>&1 || return 1
-            ;;
-          uncheck\ e[0-9]*)
-            run_with_deadline "$command_timeout" playwright-cli "-s=$session" uncheck "${command#uncheck }" > /dev/null 2>&1 || return 1
-            ;;
-          fill_secret\ e[0-9]*\ email | fill_secret\ e[0-9]*\ password | type_secret\ e[0-9]*\ email | type_secret\ e[0-9]*\ password)
-            secret_name="${command##* }"
-            secret_value="${CHATGPT_EMAIL:-${OPENAI_USERNAME:-}}"
-            [[ "$secret_name" == password ]] && secret_value="${CHATGPT_PASSWORD:-${OPENAI_PASSWORD:-}}"
-            [[ -n "$secret_value" ]] || return 1
-            cli_operation="fill"
-            [[ "$command" == type_secret\ * ]] && cli_operation="type"
-            run_with_deadline "$command_timeout" playwright-cli "-s=$session" "$cli_operation" "${command#* }" "$secret_value" > /dev/null 2>&1 || return 1
-            ;;
-          otp\ e[0-9]*)
-            otp_code=$(CHATGPT_TOTP_KEY="${CHATGPT_TOTP_KEY:-${CHATGPT_2FA_KEY:-${OPENAI_2FA_KEY:-}}}" uv run python -c 'import os, pyotp; print(pyotp.TOTP(os.environ["CHATGPT_TOTP_KEY"]).now())') || return 1
-            [[ "$otp_code" =~ ^[0-9]{6}$ ]] || return 1
-            run_with_deadline "$command_timeout" playwright-cli "-s=$session" fill "${command#otp }" "$otp_code" > /dev/null 2>&1 || return 1
-            ;;
-          goto\ https://auth.openai.com/* | goto\ https://chatgpt.com/*)
-            [[ "${command#goto }" != *\?* && "${command#goto }" != *\#* ]] || return 1
-            run_with_deadline "$command_timeout" playwright-cli "-s=$session" goto "${command#goto }" > /dev/null 2>&1 || return 1
-            ;;
-          status)
-            ;;
-          *)
-            rm -f -- "$batch_file"
-            printf 'Playwright handoff rejected an invalid command\n' >&2
-            return 1
-            ;;
-        esac
+        if ((${#command} > 512)) || [[ "$command" == *$'\r'* ]]; then
+          printf 'Playwright handoff rejected an invalid command\n' >&2
+          return 1
+        fi
+        if [[ "$command" == snapshot ]]; then
+          capture_snapshot || return 1
+        elif [[ "$command" =~ ^(click|hover|check|uncheck)\ (e[0-9]+)$ ]]; then
+          operation="${BASH_REMATCH[1]}"
+          ref="${BASH_REMATCH[2]}"
+          run_with_deadline "$command_timeout" playwright-cli "-s=$session" "$operation" "$ref" > /dev/null 2>&1 || return 1
+        elif [[ "$command" =~ ^fill\ (e[0-9]+)\ ([[:print:]]{1,200})$ ]]; then
+          ref="${BASH_REMATCH[1]}"
+          text="${BASH_REMATCH[2]}"
+          run_with_deadline "$command_timeout" playwright-cli "-s=$session" fill "$ref" "$text" > /dev/null 2>&1 || return 1
+        elif [[ "$command" =~ ^type\ (e[0-9]+)\ ([[:print:]]{1,200})$ ]]; then
+          ref="${BASH_REMATCH[1]}"
+          text="${BASH_REMATCH[2]}"
+          run_with_deadline "$command_timeout" playwright-cli "-s=$session" click "$ref" > /dev/null 2>&1 || return 1
+          run_with_deadline "$command_timeout" playwright-cli "-s=$session" type "$text" > /dev/null 2>&1 || return 1
+        elif [[ "$command" =~ ^select\ (e[0-9]+)\ ([[:print:]]{1,200})$ ]]; then
+          ref="${BASH_REMATCH[1]}"
+          value="${BASH_REMATCH[2]}"
+          run_with_deadline "$command_timeout" playwright-cli "-s=$session" select "$ref" "$value" > /dev/null 2>&1 || return 1
+        elif [[ "$command" =~ ^(fill_secret|type_secret)\ (e[0-9]+)\ (email|password)$ ]]; then
+          operation="${BASH_REMATCH[1]}"
+          ref="${BASH_REMATCH[2]}"
+          secret_name="${BASH_REMATCH[3]}"
+          secret_value="${CHATGPT_EMAIL:-${OPENAI_USERNAME:-}}"
+          [[ "$secret_name" == password ]] && secret_value="${CHATGPT_PASSWORD:-${OPENAI_PASSWORD:-}}"
+          [[ -n "$secret_value" ]] || return 1
+          if [[ "$operation" == type_secret ]]; then
+            run_with_deadline "$command_timeout" playwright-cli "-s=$session" click "$ref" > /dev/null 2>&1 || return 1
+            run_with_deadline "$command_timeout" playwright-cli "-s=$session" type "$secret_value" > /dev/null 2>&1 || return 1
+          else
+            run_with_deadline "$command_timeout" playwright-cli "-s=$session" fill "$ref" "$secret_value" > /dev/null 2>&1 || return 1
+          fi
+        elif [[ "$command" =~ ^otp\ (e[0-9]+)$ ]]; then
+          ref="${BASH_REMATCH[1]}"
+          otp_code=$(CHATGPT_TOTP_KEY="${CHATGPT_TOTP_KEY:-${CHATGPT_2FA_KEY:-${OPENAI_2FA_KEY:-}}}" uv run python -c 'import os, pyotp; print(pyotp.TOTP(os.environ["CHATGPT_TOTP_KEY"]).now())') || return 1
+          [[ "$otp_code" =~ ^[0-9]{6}$ ]] || return 1
+          run_with_deadline "$command_timeout" playwright-cli "-s=$session" fill "$ref" "$otp_code" > /dev/null 2>&1 || return 1
+        elif [[ "$command" =~ ^press\ ([A-Za-z0-9+_-]{1,32})$ ]]; then
+          key="${BASH_REMATCH[1]}"
+          run_with_deadline "$command_timeout" playwright-cli "-s=$session" press "$key" > /dev/null 2>&1 || return 1
+        elif [[ "$command" =~ ^goto\ (https://(auth\.openai\.com|chatgpt\.com|www\.chatgpt\.com|chat\.openai\.com)([/?#][^[:space:]\\]*)?)$ ]]; then
+          url="${BASH_REMATCH[1]}"
+          run_with_deadline "$command_timeout" playwright-cli "-s=$session" goto "$url" > /dev/null 2>&1 || return 1
+        elif [[ "$command" =~ ^(reload|go-back|go-forward|status)$ ]]; then
+          operation="${BASH_REMATCH[1]}"
+          if [[ "$operation" != status ]]; then
+            run_with_deadline "$command_timeout" playwright-cli "-s=$session" "$operation" > /dev/null 2>&1 || return 1
+          fi
+        else
+          printf 'Playwright handoff rejected an invalid command\n' >&2
+          return 1
+        fi
       done < "$batch_file"
       rm -f -- "$batch_file"
+      batch_file=''
     fi
     status_json=$(run_with_deadline "$command_timeout" uv run scripts/chatgpt-login.py status) || return 1
     printf '%s\n' "$status_json" | jq -e 'type == "object" and (.error == null) and (.step | type == "string")' > /dev/null || return 1
@@ -215,7 +278,11 @@ for attempt in $(seq 1 120); do
   if ! kill -0 "$start_pid" 2> /dev/null; then
     if ! wait "$start_pid"; then
       printf 'Primitive login startup failed; safe diagnostics:\n' >&2
+      stop_token="$(openssl rand -hex 32)"
+      : "${stop_token:?stop-commands fence token generation failed}"
+      printf '::stop-commands::%s\n' "$stop_token"
       cat "$stderr_file" >&2
+      printf '::%s::\n' "$stop_token"
       exit 1
     fi
     break
@@ -235,11 +302,11 @@ for attempt in $(seq 1 120); do
     exit 1
   }
   if [[ -n "$(jq -r '.blocking // empty' <<< "$status_json")" ]]; then
-    if [[ "$blocking_recovery_attempted" == true ]]; then
+    if [[ "$recovery_attempted" == true ]]; then
       printf 'Primitive login remained blocked after Playwright recovery\n' >&2
       exit 1
     fi
-    blocking_recovery_attempted=true
+    recovery_attempted=true
     recover_blocking_login || exit 1
     sleep 5
     continue
@@ -253,16 +320,23 @@ for attempt in $(seq 1 120); do
   step_status=0
   step_json=$(uv run scripts/chatgpt-login.py step) || step_status=$?
   if ((step_status != 0)); then
-    if ((step_status != 1 && step_status != 2)); then
-      printf 'Primitive login step failed with status %s\n' "$step_status" >&2
-      exit "$step_status"
+    if ((step_status == 1 || step_status == 2)); then
+      if [[ "$recovery_attempted" == true ]]; then
+        printf 'Primitive login could not progress after Playwright recovery\n' >&2
+        exit 1
+      fi
+      recovery_attempted=true
+      recover_blocking_login || exit 1
+      sleep 5
+      continue
     fi
-  else
-    printf '%s\n' "$step_json" | jq -e 'type == "object" and (.error == null) and (.step | type == "string")' > /dev/null || {
-      printf 'Primitive login step returned invalid status\n' >&2
-      exit 1
-    }
+    printf 'Primitive login step failed with status %s\n' "$step_status" >&2
+    exit "$step_status"
   fi
+  printf '%s\n' "$step_json" | jq -e 'type == "object" and (.error == null) and (.step | type == "string")' > /dev/null || {
+    printf 'Primitive login step returned invalid status\n' >&2
+    exit 1
+  }
   sleep 5
 done
 
@@ -271,7 +345,7 @@ if kill -0 "$start_pid" 2> /dev/null; then
   exit 1
 fi
 auth_json=$(cat "$auth_file")
-printf '%s\n' "$auth_json" | jq -e '.openai.type == "oauth" and (.openai.access | type == "string" and length > 0) and (.openai.refresh | type == "string" and length > 0) and (.openai.expires | type == "number")' > /dev/null || {
+printf '%s\n' "$auth_json" | jq -e '.openai.type == "oauth" and (.openai.access | type == "string" and length > 0) and (.openai.refresh | type == "string" and length > 0) and (.openai.expires | type == "number" and . == floor and . > 0)' > /dev/null || {
   printf 'Primitive login produced invalid authentication JSON\n' >&2
   exit 1
 }

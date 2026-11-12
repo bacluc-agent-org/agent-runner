@@ -58,7 +58,7 @@ REDIRECT_URI = f"http://localhost:{CALLBACK_PORT}/auth/callback"
 AUTHORIZE_PATH = "/oauth/authorize"
 CALLBACK_PATH = "/auth/callback"
 
-ISSUER_HOST = urllib.parse.urlparse(ISSUER).netloc
+AUTH_HOSTS = {"auth.openai.com", "chatgpt.com", "www.chatgpt.com", "chat.openai.com"}
 
 STEP_BY_PATH = {
     "/log-in-or-create-account": "email",
@@ -337,17 +337,33 @@ def _capture_debug(page, stage: str, step: str, reason: str, errors=()) -> None:
         pass
 
 
+def _is_auth_page_url(url: str) -> bool:
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return False
+    if parsed.username or parsed.password:
+        return False
+    if parsed.scheme == "https":
+        return parsed.hostname in AUTH_HOSTS and port in (None, 443)
+    if parsed.scheme == "http":
+        return (
+            parsed.hostname == "localhost"
+            and port == CALLBACK_PORT
+            and parsed.path == CALLBACK_PATH
+        )
+    return False
+
+
 def _find_auth_page(browser):
     for context in browser.contexts:
         for page in context.pages:
             try:
-                if ISSUER_HOST in page.url or CALLBACK_PATH in page.url:
+                if _is_auth_page_url(page.url):
                     return page
             except Exception:
                 continue
-    for context in browser.contexts:
-        if context.pages:
-            return context.pages[-1]
     return None
 
 
@@ -642,7 +658,8 @@ def cmd_start() -> int:
                 break
             time.sleep(1)
 
-        _write_state({"verifier": verifier, "state": state, "cdp_port": cdp_port, "code": callback.code})
+        _write_state({"verifier": verifier, "state": state, "cdp_port": cdp_port, "code": callback.code,
+                      "pid": os.getpid(), "started_at": started_at})
 
         try:
             tokens = _exchange_code(callback.code, verifier)

@@ -67,6 +67,33 @@ class TestLoadArtifact:
         artifact_path.write_text(json.dumps({"steps": 12}))
         assert loop_metrics.load_artifact(str(artifact_path)) is None
 
+    def test_sanitizes_untrusted_failure_mode_from_artifact(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with open("loop-metrics.json", "w") as f:
+            json.dump(
+                {
+                    "steps": 3,
+                    "tokenCostPerStep": 0.01,
+                    "convergenceRate": 1,
+                    "failureMode": "injected<script>",
+                    "terminatedAt": "2026-11-12T00:00:00+00:00",
+                },
+                f,
+            )
+        summary_path = tmp_path / "summary.md"
+        output_path = tmp_path / "output.txt"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+        monkeypatch.setenv("GITHUB_OUTPUT", str(output_path))
+        monkeypatch.setenv("LOOP_FAILURE_MODE", "unknown")
+
+        assert loop_metrics.main() == 0
+
+        summary_text = summary_path.read_text()
+        assert "injected<script>" not in summary_text
+        assert "| Failure mode | unknown |" in summary_text
+        with open(output_path) as f:
+            assert "injected<script>" not in f.read()
+
 
 class TestMain:
     def test_reads_artifact_and_emits_snake_case_metrics(self, tmp_path, monkeypatch):

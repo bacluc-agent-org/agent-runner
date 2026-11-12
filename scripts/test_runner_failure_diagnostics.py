@@ -45,9 +45,9 @@ def _run(script, **env):
 
 def test_auth_diagnostic_executes_and_never_prints_credentials():
     script = _step_script(ROOT / ".github/workflows/opencode.yml", "Run coordinator")
-    start = script.index("auth_status='not-required'", script.index("Coordinator statuses:"))
+    start = script.index("if ((coordinator_status != 0)); then", script.index("Coordinator statuses:"))
     end = script.index("\nfi\necho \"coordinator_status=", start) + len("\nfi")
-    diagnostic = "if ((coordinator_status != 0)); then\n" + script[start:end]
+    diagnostic = script[start:end]
     credential = "representative-secret-never-log"
     with tempfile.TemporaryDirectory() as home:
         auth_file = Path(home) / ".local/share/opencode/auth.json"
@@ -93,12 +93,15 @@ def test_openai_model_validation_executes_missing_malformed_and_valid_auth_witho
             assert result.returncode == (0 if valid else 1)
             assert expected in result.stdout + result.stderr
             assert credential not in result.stdout + result.stderr
+            if valid:
+                assert "model=openai/example" in (Path(home) / "output").read_text()
 
 
 def test_selector_validation_executes_missing_malformed_and_valid_outputs():
     script = _step_script(ROOT / ".github/workflows/hourly-issue.yml", "Pick issue and dispatch")
     start = script.index('issue_number="$(grep -E')
-    end = script.index("\nprintf 'issue_number=%s", start)
+    marker = "printf 'issue_number=%s\\n' \"$issue_number\" >> \"$GITHUB_OUTPUT\""
+    end = script.index(marker, start) + len(marker)
     validation = script[start:end]
     with tempfile.TemporaryDirectory() as directory:
         candidates = Path(directory) / "candidates"
@@ -109,6 +112,6 @@ def test_selector_validation_executes_missing_malformed_and_valid_outputs():
             result = _run(f"candidates={candidates}; selection={directory}/selection; printf '%s' \"$SELECTION\" > \"$selection\"; GITHUB_OUTPUT={output}; {validation}", SELECTION=selection)
             assert result.returncode != 0
             assert expected in result.stderr
-        result = _run(f"candidates={candidates}; selection={directory}/selection; printf '%s' \"$SELECTION\" > \"$selection\"; GITHUB_OUTPUT={output}; {validation}; printf 'issue_number=%s\\n' \"$issue_number\" >> \"$GITHUB_OUTPUT\"", SELECTION="SELECTED_ISSUE: 42")
+        result = _run(f"candidates={candidates}; selection={directory}/selection; printf '%s' \"$SELECTION\" > \"$selection\"; GITHUB_OUTPUT={output}; {validation}", SELECTION="SELECTED_ISSUE: 42")
         assert result.returncode == 0
         assert "issue_number=42" in output.read_text()

@@ -13,13 +13,10 @@ import sys
 
 MARKER_RE = re.compile(r"^AGENT-RUN-RESULT:\s*outcome=(\S+)\s+summary=(.*)$", re.MULTILINE)
 VALID_MARKER_OUTCOMES = {"work_produced", "no_op"}
-KNOWN_FAILURE_MODES = {"success", "max-steps", "error", "timeout", "unknown"}
 NOOP_INTENT_PHRASES = (
     "do not modify",
     "return exactly",
-    "smoke",
-    "validation",
-    "report the result",
+    "smoke test",
     "no-op",
 )
 SUMMARY_MAX_CHARS = 200
@@ -38,13 +35,10 @@ def sanitize_summary(text: str) -> str:
 
 def parse_marker(text: str) -> dict | None:
     """Return the last valid AGENT-RUN-RESULT marker in the output, else None."""
-    matches = MARKER_RE.findall(text or "")
-    if not matches:
-        return None
-    outcome, summary = matches[-1]
-    if outcome not in VALID_MARKER_OUTCOMES:
-        return None
-    return {"outcome": outcome, "summary": sanitize_summary(summary)}
+    for outcome, summary in reversed(MARKER_RE.findall(text or "")):
+        if outcome in VALID_MARKER_OUTCOMES:
+            return {"outcome": outcome, "summary": sanitize_summary(summary)}
+    return None
 
 
 def detect_prompt_intent(prompt: str) -> bool:
@@ -71,6 +65,8 @@ def classify_run_outcome(
         outcome, reason = "failure", f"fatal:{sanitize_reason(fatal)}"
     elif coordinator_status == 124:
         outcome, reason = "failure", "timeout"
+    elif coordinator_status == -1:
+        outcome, reason = "failure", "coordinator_not_run"
     elif coordinator_status != 0 or tee_status != 0:
         outcome, reason = "failure", "process_error"
     else:

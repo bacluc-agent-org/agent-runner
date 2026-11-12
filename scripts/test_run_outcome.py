@@ -151,7 +151,10 @@ def run_main(tmp_path, monkeypatch, **env):
         "BRANCH": "agent-run/issue-419-1",
     }
     for key, value in {**defaults, **env}.items():
-        monkeypatch.setenv(key, value)
+        if value is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, value)
     assert run_outcome.main() == 0
     record = json.loads((tmp_path / "run-outcome.json").read_text())
     outputs = {}
@@ -202,7 +205,7 @@ class TestMain:
     def test_garbage_status_env_does_not_crash(self, tmp_path, monkeypatch):
         record, outputs, _ = run_main(tmp_path, monkeypatch, COORDINATOR_STATUS="not-a-number")
         assert record["outcome"] == "failure"
-        assert record["reason"] == "process_error"
+        assert record["reason"] == "coordinator_not_run"
 
     def test_fatal_file_with_garbage_json_treated_as_fatal(self, tmp_path, monkeypatch):
         fatal_path = tmp_path / "opencode-fatal.json"
@@ -210,3 +213,61 @@ class TestMain:
         record, outputs, _ = run_main(tmp_path, monkeypatch, FATAL_MARKER=str(fatal_path))
         assert record["outcome"] == "failure"
         assert record["reason"] == "fatal:unknown"
+
+
+TEMPLATE_MARKER_LINE = "AGENT-RUN-RESULT: outcome=<work_produced|no_op> summary=<one short line>."
+
+
+class TestEdgeCases:
+    @pytest.mark.parametrize(
+        ("text", "outcome", "summary"),
+        [
+            (f"work done\r\n{marker_line('work_produced', 'pushed branch')}\r\n", "work_produced", "pushed branch"),
+            (f"work done\r\n{marker_line('no_op', 'report only')}\r\n", "no_op", "report only"),
+        ],
+    )
+    def test_crlf_line_endings_still_parsed(self, text, outcome, summary):
+        result = run_outcome.parse_marker(text)
+        assert result is not None
+        assert result["outcome"] == outcome
+        assert result["summary"] == summary
+        assert "\r" not in result["summary"]
+
+    @pytest.mark.parametrize(
+        ("prompt", "outcome", "reason"),
+        [
+            (SUBSTANTIVE_PROMPT, "failure", "missing_result"),
+            (SMOKE_PROMPT, "valid_noop", "explicit_noop_intent"),
+        ],
+    )
+    def test_marker_without_summary_part_is_ignored(self, prompt, outcome, reason):
+        result = run_outcome.classify_run_outcome(
+            0, 0, None, "AGENT-RUN-RESULT: outcome=work_produced\n", prompt
+        )
+        assert result["outcome"] == outcome
+        assert result["reason"] == reason
+
+    def test_empty_coordinator_output_is_missing_result(self, tmp_path, monkeypatch):
+        empty = tmp_path / "coordinator.out"
+        empty.write_text("")
+        record, outputs, _ = run_main(tmp_path, monkeypatch, COORDINATOR_OUTPUT=str(empty))
+        assert record["outcome"] == "failure"
+        assert record["reason"] == "missing_result"
+        assert outputs["loop_failure_mode"] == "error"
+
+    def test_valid_marker_survives_later_template_marker(self):
+        text = f"{marker_line('no_op', 'report only')}\n{TEMPLATE_MARKER_LINE}\n"
+        result = run_outcome.parse_marker(text)
+        assert result == {"outcome": "no_op", "summary": "report only"}
+        classified = run_outcome.classify_run_outcome(0, 0, None, text, SUBSTANTIVE_PROMPT)
+        assert classified["outcome"] == "valid_noop"
+        assert classified["reason"] == "result_marker"
+
+    @pytest.mark.parametrize("status", [None, "", "not-a-number"])
+    def test_missing_or_unparseable_coordinator_status_is_coordinator_not_run(
+        self, tmp_path, monkeypatch, status
+    ):
+        record, outputs, _ = run_main(tmp_path, monkeypatch, COORDINATOR_STATUS=status)
+        assert record["outcome"] == "failure"
+        assert record["reason"] == "coordinator_not_run"
+        assert outputs["loop_failure_mode"] == "error"

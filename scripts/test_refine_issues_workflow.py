@@ -10,6 +10,8 @@ CANDIDATE_START = 'candidates="$RUNNER_TEMP/candidate-numbers.txt"'
 CANDIDATE_END = 'mv "$RUNNER_TEMP/dedup-candidates.txt" "$candidates"'
 SEARCH_START = 'if ! gh api "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+-label:agent-refined'
 REFINED_SEARCH_START = 'if ! gh api "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:agent-refined'
+REFINE_STEP_START = "set -Eeuo pipefail"
+REFINE_STEP_END = "(( refined > 0 )) || exit 1"
 
 FAKE_GH = r"""#!/usr/bin/env bash
 set -Eeuo pipefail
@@ -93,11 +95,19 @@ if [[ "${1:-}" == "issue" ]]; then
 fi
 
 if [[ "${1:-}" == "label" ]]; then
+  if [[ -n "${GH_FAIL_LABEL_CREATE:-}" && "${2:-}" == "create" ]]; then
+    printf 'label create failed\n' >&2
+    exit 1
+  fi
   exit 0
 fi
 
 printf 'unexpected gh invocation: %s\n' "$*" >&2
 exit 1
+"""
+
+FAKE_OPENCODE = r"""#!/usr/bin/env bash
+printf '## Goal\nDo the thing.\n\n## How to implement\nChange the code.\n'
 """
 
 
@@ -145,6 +155,10 @@ def refined_search_block():
     return extract_if_block(REFINED_SEARCH_START)
 
 
+def refine_step_block():
+    return extract_block(REFINE_STEP_START, REFINE_STEP_END)
+
+
 class WorkflowRun:
     def __init__(self, tmp_path):
         self.tmp_path = tmp_path
@@ -157,6 +171,9 @@ class WorkflowRun:
         gh = bin_dir / "gh"
         gh.write_text(FAKE_GH)
         gh.chmod(0o755)
+        opencode = bin_dir / "opencode"
+        opencode.write_text(FAKE_OPENCODE)
+        opencode.chmod(0o755)
         self.env = {
             **os.environ,
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
@@ -164,6 +181,10 @@ class WorkflowRun:
             "GH_LOG": str(tmp_path / "gh.log"),
             "RUNNER_TEMP": str(self.runner),
             "ISSUE_REPOSITORY": "bacluc-agent/agent-todo",
+            "GITHUB_TOKEN": "test-token",
+            "OPENCODE_GO_API_KEY": "",
+            "OPENCODE_GO_2_API_KEY": "",
+            "OPENCODE_AUTH_CONTENT": "",
         }
 
     def write_json(self, name, value):
@@ -182,8 +203,18 @@ class WorkflowRun:
     def issue(self, number, body="", updated_at="2026-11-08T10:00:00Z"):
         self.write_json(f"issue-{number}.json", {"body": body, "updatedAt": updated_at})
 
-    def run(self, script, fail_search=False, fail_refined_search=False, fail_comments=(), fail_label_add=False):
+    def run(
+        self,
+        script,
+        fail_search=False,
+        fail_refined_search=False,
+        fail_comments=(),
+        fail_label_add=False,
+        fail_label_create=False,
+        available_models="opencode/big-pickle",
+    ):
         env = dict(self.env)
+        env["AVAILABLE_MODELS"] = available_models
         if fail_search:
             env["GH_FAIL_SEARCH"] = "1"
         if fail_refined_search:
@@ -192,11 +223,14 @@ class WorkflowRun:
             env["GH_FAIL_COMMENTS"] = ",".join(str(number) for number in fail_comments)
         if fail_label_add:
             env["GH_FAIL_LABEL_ADD"] = "1"
+        if fail_label_create:
+            env["GH_FAIL_LABEL_CREATE"] = "1"
         return subprocess.run(
             ["bash", "-Eeuo", "pipefail", "-c", script],
             capture_output=True,
             text=True,
             env=env,
+            cwd=WORKFLOW.parents[2],
         )
 
     def candidates(self):
@@ -467,6 +501,26 @@ printf 'refined=%s failed=%s\\n' "$refined" "$failed"
     assert "refined=0 failed=1" in result.stdout
     assert "refined and labeled" not in result.stdout
     assert "label add failed" in result.stderr
+
+
+def test_label_create_failure_does_not_abort_the_refine_step(tmp_path):
+    run = WorkflowRun(tmp_path)
+    run.searches(unrefined=[1])
+    run.comments(1, [])
+    run.write_json(
+        "issue-1.json",
+        {
+            "title": "Vague issue",
+            "body": "Make it better",
+            "updatedAt": "2026-11-08T10:00:00Z",
+        },
+    )
+
+    result = run.run(refine_step_block(), fail_label_create=True)
+    assert result.returncode == 0, result.stderr
+    assert "could not ensure the agent-refined label exists" in result.stdout
+    assert "could not ensure the ready-for-implementation label exists" in result.stdout
+    assert "Refinement complete: 1 refined, 0 failed." in result.stdout
 
 
 def test_marker_timestamp_is_snapshotted_before_collection():

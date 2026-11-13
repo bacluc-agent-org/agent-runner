@@ -60,10 +60,14 @@ jobs:
           refined_marker_timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
           printf '::group::ensure agent labels\n'
-          gh label create agent-refined -R "$ISSUE_REPOSITORY" \
-            --color 1D76DB --description 'Refined by the issue-refiner agent' --force
-          gh label create ready-for-implementation -R "$ISSUE_REPOSITORY" \
-            --color 0E8A16 --description 'Approved for agent implementation' --force
+          if ! gh label create agent-refined -R "$ISSUE_REPOSITORY" \
+            --color 1D76DB --description 'Refined by the issue-refiner agent' --force; then
+            printf '::warning::could not ensure the agent-refined label exists; refined issues may not be listed\n'
+          fi
+          if ! gh label create ready-for-implementation -R "$ISSUE_REPOSITORY" \
+            --color 0E8A16 --description 'Approved for agent implementation' --force; then
+            printf '::warning::could not ensure the ready-for-implementation label exists; issues may not be selected\n'
+          fi
           printf '::endgroup::\n'
 
           printf '\n\n\n\n\n\n'

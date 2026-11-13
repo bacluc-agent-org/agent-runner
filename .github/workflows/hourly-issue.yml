@@ -81,6 +81,7 @@ jobs:
           AVAILABLE_MODELS: ${{ steps.model-availability.outputs.available-models }}
           OPENCODE_FATAL_STAGE: selection
           SELECTION_TIMEOUT_MINUTES: ${{ inputs.selection_timeout_minutes || 10 }}
+          GH_CLI_WRAPPER_MAX_SLEEP_SECONDS: "600"
         run: |
           set -Eeuo pipefail
           rm -f "$RUNNER_TEMP/opencode-fatal.json"

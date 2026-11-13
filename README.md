@@ -125,13 +125,14 @@ apply to subsequent steps and child shells, including work in other checkouts.
 The installer saves the real CLI's absolute path before changing PATH.
 
 - `gh pr create` and `gh pr new` require exactly one explicit `-R`/`--repo`
-  targeting `BacLuc` or `bacluc-agent` (case-insensitive) on github.com.
-  For outsider repositories, create the fork and a branch representing upstream
-  main, then open the PR with `-R bacluc-agent/<repo>` against that branch.
+  targeting `BacLuc`, `bacluc-agent` or `bacluc-agent-org` (case-insensitive)
+  on github.com. For outsider repositories, create the fork and a branch
+  representing upstream main, then open the PR with `-R bacluc-agent/<repo>`
+  against that branch.
 - `gh pr revert` requires exactly one PR number or github.com PR URL and an
-  explicit `-R`/`--repo` (or a URL selector) targeting `BacLuc` or
-  `bacluc-agent`; implicit destinations fail closed. The REST revert endpoint
-  `repos/OWNER/REPO/pulls/N/reverts` is checked the same way.
+  explicit `-R`/`--repo` (or a URL selector) targeting `BacLuc`,
+  `bacluc-agent` or `bacluc-agent-org`; implicit destinations fail closed. The
+  REST revert endpoint `repos/OWNER/REPO/pulls/N/reverts` is checked the same way.
 - REST PR creation is checked too, including implicit POST via fields or
   `--input`. Ambiguous options, noncanonical paths and routing overrides fail
   closed. Ordinary REST reads, issue comments, PATCH, forks and dispatches remain
@@ -140,6 +141,17 @@ The installer saves the real CLI's absolute path before changing PATH.
   extension commands are denied. Use builtin CLI commands or canonical REST
   endpoints instead. Unknown builtin commands/options on guarded routes require
   review before adding support; this is not a complete CLI parser.
+- Rate-limited calls are retried with identical argv and stdin, and only the
+  final attempt's output is shown with the real CLI exit status. Retries use the
+  bucket from the failure (`core`, `search` or `graphql`): primary limits read
+  `remaining` and `reset` from the free `api rate_limit` endpoint and wait until
+  reset plus 2 s, while secondary limits and HTTP 429 use exponential backoff
+  capped at `GH_CLI_WRAPPER_MAX_SLEEP_SECONDS` (default 600). A failed quota
+  probe falls back to exponential backoff; permission 403s are not retried.
+  After `GH_CLI_WRAPPER_MAX_ATTEMPTS` (default 4) attempts the wrapper prints
+  `::warning::`, and it prints `::notice::` per retry. Streaming or interactive
+  commands such as `pr create`, `issue create`, `auth` and `--web` still use
+  `execv`.
 
 This is an accidental-misrouting guardrail, **not a sandbox or universal PR
 prevention**. An absolute executable path, direct HTTP, changing PATH or changing

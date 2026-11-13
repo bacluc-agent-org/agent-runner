@@ -25,6 +25,9 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    concurrency:
+      group: openai-oauth-refresh-${{ github.workflow }}
+      cancel-in-progress: false
     env:
       BACLUC_AGENT_GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
     steps:

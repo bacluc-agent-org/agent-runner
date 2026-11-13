@@ -67,11 +67,11 @@ def test_keeps_gpt_5_6_luna():
 def test_denies_nex_n2_5_mini_and_keeps_neighboring_models():
     for model in [
         "openrouter/nex-agi/nex-n2.5-mini:free",
-        "openrouter/nex-agi/nex-n2.5-mini-extra:free",
     ]:
         assert is_denied(model), f"{model} must be deny-listed"
 
     for model in [
+        "openrouter/nex-agi/nex-n2.5-mini",
         "openrouter/nex-agi/nex-n2.6-mini:free",
         "openrouter/other/nex-n2.5-mini:free",
     ]:

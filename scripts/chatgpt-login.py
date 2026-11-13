@@ -58,7 +58,7 @@ REDIRECT_URI = f"http://localhost:{CALLBACK_PORT}/auth/callback"
 AUTHORIZE_PATH = "/oauth/authorize"
 CALLBACK_PATH = "/auth/callback"
 
-ISSUER_HOST = urllib.parse.urlparse(ISSUER).netloc
+AUTH_HOSTS = {"auth.openai.com", "chatgpt.com", "www.chatgpt.com", "chat.openai.com"}
 
 STEP_BY_PATH = {
     "/log-in-or-create-account": "email",
@@ -83,7 +83,8 @@ OTP_SELECTORS = [
 TWO_FA_TEXTS = ["Two-factor", "Two-factor authentication", "authenticator"]
 
 def _is_headless() -> bool:
-    return os.environ.get("CHATGPT_HEADLESS", "").lower() in ("1", "true")
+    value = os.environ.get("CHATGPT_HEADLESS", "").lower()
+    return value in ("1", "true") or (value not in ("0", "false") and not os.environ.get("DISPLAY"))
 
 
 _DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.7103.92 Safari/537.36"
@@ -98,6 +99,23 @@ def _launch_browser(p, headless: bool, cdp_port: int | None = None):
         return p.chromium.launch(headless=headless, channel="chrome", args=args)
     except Exception:
         return p.chromium.launch(headless=headless, args=args)
+
+
+def _credential(name: str, *aliases: str) -> str | None:
+    for key in (name, *aliases):
+        value = os.environ.get(key)
+        if value:
+            return value
+    return None
+
+
+def _browser_startup_error(error: Exception, headless: bool) -> str:
+    detail = _redact_debug_text(str(error)).strip() or "no diagnostic details"
+    display = os.environ.get("DISPLAY") or "<unset>"
+    return (
+        f"Browser startup failed ({type(error).__name__}, headless={headless}, "
+        f"DISPLAY={display}): {detail}. Install Chrome with `uv run playwright install --with-deps chrome`."
+    )
 
 
 def _log_step(page, name: str) -> None:
@@ -230,7 +248,15 @@ def _step_for_path(path: str) -> str:
 
 
 def _redact_debug_text(value: str) -> str:
-    for name in ("OPENAI_USERNAME", "OPENAI_PASSWORD", "OPENAI_2FA_KEY"):
+    for name in (
+        "OPENAI_USERNAME",
+        "OPENAI_PASSWORD",
+        "OPENAI_2FA_KEY",
+        "CHATGPT_EMAIL",
+        "CHATGPT_PASSWORD",
+        "CHATGPT_2FA_KEY",
+        "CHATGPT_TOTP_KEY",
+    ):
         secret = os.environ.get(name)
         if secret:
             value = value.replace(secret, "[redacted]")
@@ -311,17 +337,33 @@ def _capture_debug(page, stage: str, step: str, reason: str, errors=()) -> None:
         pass
 
 
+def _is_auth_page_url(url: str) -> bool:
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return False
+    if parsed.username or parsed.password:
+        return False
+    if parsed.scheme == "https":
+        return parsed.hostname in AUTH_HOSTS and port in (None, 443)
+    if parsed.scheme == "http":
+        return (
+            parsed.hostname == "localhost"
+            and port == CALLBACK_PORT
+            and parsed.path == CALLBACK_PATH
+        )
+    return False
+
+
 def _find_auth_page(browser):
     for context in browser.contexts:
         for page in context.pages:
             try:
-                if ISSUER_HOST in page.url or CALLBACK_PATH in page.url:
+                if _is_auth_page_url(page.url):
                     return page
             except Exception:
                 continue
-    for context in browser.contexts:
-        if context.pages:
-            return context.pages[-1]
     return None
 
 
@@ -471,21 +513,20 @@ def _exchange_code(code: str, verifier: str) -> dict:
 
 
 def _do_email_step(page, email: str) -> bool:
-    if not _fill_first_visible(page, ['input[type="email"]', 'input[name="email"]', 'input[id="email"]'], email, delay_ms=100):
+    if not _fill_first_visible(page, ['input[type="email"]', 'input[name="email"]', 'input[id="email"]'], email, delay_ms=200):
         return False
-    time.sleep(1)
+    time.sleep(2)
     return _click_first_visible(page, ['button[type="submit"]', 'button:has-text("Continue")'])
 
 
 def _do_password_step(page, password: str) -> bool:
-    if not _fill_first_visible(page, ['input[type="password"]'], password, delay_ms=100):
+    if not _fill_first_visible(page, ['input[type="password"]'], password, delay_ms=200):
         return False
-    time.sleep(2)
+    time.sleep(4)
     clicked = _click_first_visible(page, ['button[type="submit"]', 'button:has-text("Continue")'])
     if clicked:
-        # Password submit triggers a SPA navigation; give it time to land
-        # before callers inspect the page again.
-        time.sleep(2)
+        time.sleep(8)
+        _wait_for_blocking_clear(page, timeout_s=30)
     return clicked
 
 
@@ -573,8 +614,9 @@ def cmd_start() -> int:
         try:
             browser = _launch_browser(p, _is_headless(), cdp_port=cdp_port)
         except Exception as e:
-            print(f"Failed to launch browser: {e}. If chrome is not installed, run: playwright install chrome", file=sys.stderr)
+            print(_browser_startup_error(e, _is_headless()), file=sys.stderr)
             callback.close()
+            STATE_FILE.unlink(missing_ok=True)
             return 1
         context = browser.new_context(user_agent=_DESKTOP_UA, viewport=_DESKTOP_VIEWPORT)
         page = context.new_page()
@@ -589,13 +631,10 @@ def cmd_start() -> int:
             return 1
 
         _log_step(page, "authorize")
-        blocking = _wait_for_blocking_clear(page, timeout_s=120)
+        blocking = _has_blocking_screen(page)
         if blocking:
             _capture_debug(page, "start", "authorize", blocking, page_errors)
             print(f"Login blocked: {blocking}", file=sys.stderr)
-            browser.close()
-            callback.close()
-            return 2
         print(
             f"[chatgpt-login] attach: playwright-cli attach --cdp=http://localhost:{cdp_port}; "
             f"drive: scripts/chatgpt-login.py status|step",
@@ -619,7 +658,8 @@ def cmd_start() -> int:
                 break
             time.sleep(1)
 
-        _write_state({"verifier": verifier, "state": state, "cdp_port": cdp_port, "code": callback.code})
+        _write_state({"verifier": verifier, "state": state, "cdp_port": cdp_port, "code": callback.code,
+                      "pid": os.getpid(), "started_at": started_at})
 
         try:
             tokens = _exchange_code(callback.code, verifier)
@@ -719,11 +759,13 @@ def cmd_step() -> int:
             json.dump({"step": "done"}, sys.stdout)
             return 0
 
-        email = os.environ.get("OPENAI_USERNAME")
-        password = os.environ.get("OPENAI_PASSWORD")
-        totp_key = os.environ.get("OPENAI_2FA_KEY")
+        email = _credential("CHATGPT_EMAIL", "OPENAI_USERNAME")
+        password = _credential("CHATGPT_PASSWORD", "OPENAI_PASSWORD")
+        totp_key = _credential("CHATGPT_TOTP_KEY", "CHATGPT_2FA_KEY", "OPENAI_2FA_KEY")
         if not email or not password:
-            print("OPENAI_USERNAME and OPENAI_PASSWORD must be set", file=sys.stderr)
+            message = "CHATGPT_EMAIL/OPENAI_USERNAME and CHATGPT_PASSWORD/OPENAI_PASSWORD must be set"
+            json.dump({"error": message}, sys.stdout)
+            print(message, file=sys.stderr)
             return 1
 
         page_errors = _watch_page_errors(page)
@@ -758,12 +800,12 @@ def cmd_step() -> int:
 
 
 def _full_login() -> int:
-    email = os.environ.get("OPENAI_USERNAME")
-    password = os.environ.get("OPENAI_PASSWORD")
-    totp_key = os.environ.get("OPENAI_2FA_KEY")
+    email = _credential("CHATGPT_EMAIL", "OPENAI_USERNAME")
+    password = _credential("CHATGPT_PASSWORD", "OPENAI_PASSWORD")
+    totp_key = _credential("CHATGPT_TOTP_KEY", "CHATGPT_2FA_KEY", "OPENAI_2FA_KEY")
 
     if not email or not password:
-        print("OPENAI_USERNAME and OPENAI_PASSWORD must be set", file=sys.stderr)
+        print("CHATGPT_EMAIL/OPENAI_USERNAME and CHATGPT_PASSWORD/OPENAI_PASSWORD must be set", file=sys.stderr)
         return 1
 
     verifier, _ = _generate_pkce()
@@ -787,8 +829,9 @@ def _full_login() -> int:
         try:
             browser = _launch_browser(p, _is_headless())
         except Exception as e:
-            print(f"Failed to launch browser: {e}. If chrome is not installed, run: playwright install chrome", file=sys.stderr)
+            print(_browser_startup_error(e, _is_headless()), file=sys.stderr)
             callback.close()
+            STATE_FILE.unlink(missing_ok=True)
             return 1
         context = browser.new_context(user_agent=_DESKTOP_UA, viewport=_DESKTOP_VIEWPORT)
         page = context.new_page()

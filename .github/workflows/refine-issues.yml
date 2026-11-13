@@ -96,8 +96,8 @@ jobs:
           # Exclude known-weak free models per scripts/model-deny-list.txt (shared with
           # hourly-issue.yml and opencode.yml); they pass the trivial OK probe but
           # fail as coordinator/selector in 10+ runs (e.g. 34029380869, 34042660858).
-          mapfile -t free_models < <(grep -E '^(opencode|openrouter)/[^[:space:]]+(-free|:free)$' "$available_models_file" | grep -Ev -f scripts/model-deny-list.txt | awk '!seen[$0]++')
-          mapfile -t openai_models < <(grep -E '^openai/' "$available_models_file" | grep -Ev -f scripts/model-deny-list.txt | awk '!seen[$0]++')
+           mapfile -t free_models < <(grep -E '^(opencode|openrouter)/[^[:space:]]+(-free|:free)$' "$available_models_file" | grep -Ev -f "$AGENT_RUNNER_SCRIPTS/model-deny-list.txt" | awk '!seen[$0]++')
+           mapfile -t openai_models < <(grep -E '^openai/' "$available_models_file" | grep -Ev -f "$AGENT_RUNNER_SCRIPTS/model-deny-list.txt" | awk '!seen[$0]++')
           for candidate in \
             'opencode-go-openai/qwen3.8-flash' \
             'opencode-go-openai-2/qwen3.8-flash' \
@@ -125,7 +125,7 @@ jobs:
             break
           done
           if [[ -z "$selection_model" ]]; then
-            selection_model="$(grep -Ev -f scripts/model-deny-list.txt "$available_models_file" | head -n1 || true)"
+             selection_model="$(grep -Ev -f "$AGENT_RUNNER_SCRIPTS/model-deny-list.txt" "$available_models_file" | head -n1 || true)"
             selection_source='last resort (deny-list filtered)'
             if [[ -z "$selection_model" ]]; then
               printf '%s\n' 'No refinement model is available; not dispatching.' >&2
@@ -262,4 +262,4 @@ jobs:
         env:
           COORDINATOR_SESSION_TITLE: issue-refiner
         run: |
-          python3 scripts/dump_subagent_transcripts.py || true
+          python3 "$AGENT_RUNNER_SCRIPTS/dump_subagent_transcripts.py" || true

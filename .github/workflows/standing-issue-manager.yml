@@ -1,0 +1,33 @@
+name: Standing issue project manager
+
+on:
+  schedule:
+    - cron: "42 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: standing-issue-project-manager
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  repository-projects: write
+
+jobs:
+  manage:
+    if: vars.STANDING_PROJECT_NUMBER != ''
+    uses: ./.github/workflows/opencode.yml
+    with:
+      agent: standing-issue-manager
+      prompt: >-
+        Manage the standing-issues GitHub Project. Use the project conventions
+        and the complete instructions in
+        .opencode/agent/standing-issue-manager.md. The project owner is
+        bacluc-agent-org, the project number is
+        ${{ vars.STANDING_PROJECT_NUMBER || '1' }}, the issue repository is
+        ${{ vars.ISSUE_REPOSITORY || github.repository }}, and the maximum
+        number of new agent dispatches for this run is
+        ${{ vars.MAX_AGENT_DISPATCHES || '5' }}.
+    secrets: inherit

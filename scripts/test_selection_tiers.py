@@ -148,7 +148,7 @@ def test_issue_selection_and_refinement_can_choose_verified_openai_oauth_models(
     assert 'if [[ "$fallback_model" == openai/* ]]; then' in opencode
     assert 'opencode run "${discovery_standalone_args[@]}" --agent model-discovery' in opencode
     assert 'if [[ "$MODEL" == openai/* ]]; then' in opencode
-    assert 'opencode run "${coordinator_standalone_args[@]}" --agent coordinator' in opencode
+    assert 'opencode run "${coordinator_standalone_args[@]}" --agent "$AGENT"' in opencode
     assert "export OPENCODE_DB=" not in opencode
     assert 'unset OPENAI_ACCESS_TOKEN OPENAI_REFRESH_TOKEN OPENCODE_AUTH_CONTENT' in opencode
     assert 'baseURL:$baseURL,apiKey:$apiKey' in opencode

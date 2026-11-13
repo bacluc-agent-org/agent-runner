@@ -37,6 +37,7 @@ PROBE_BUDGET = 30
 PROBE_PROMPT = "Respond with exactly OK."
 CACHE_ISSUE_TITLE = "model-discovery cache"
 DISCOVERY_TIMEOUT_SECONDS = 120
+DISCOVERY_TIMED_OUT = False
 GITHUB_ISSUE_BODY_LIMIT = 65536
 OPENAI_CODEX_MODELS_URL = "https://chatgpt.com/backend-api/codex/models?client_version=2.2.5"
 
@@ -374,6 +375,8 @@ def fetch_openai_oauth_model_ids() -> list[str]:
 
 def discover_models() -> tuple[list[str], dict[str, list[str]]]:
     """whitelisted_models from `opencode models`; provider_models: {provider: model_ids} per provider."""
+    global DISCOVERY_TIMED_OUT
+    DISCOVERY_TIMED_OUT = False
     for attempt in range(5):
         try:
             result = subprocess.run(
@@ -390,6 +393,13 @@ def discover_models() -> tuple[list[str], dict[str, list[str]]]:
                 print(f"ERROR: {e}\n{e.stderr or ''}", file=sys.stderr)
                 raise
             time.sleep(2**attempt)
+        except subprocess.TimeoutExpired:
+            DISCOVERY_TIMED_OUT = True
+            print(
+                f"warning: opencode models timed out after {DISCOVERY_TIMEOUT_SECONDS}s; model discovery unavailable",
+                file=sys.stderr,
+            )
+            return [], {}
     log_dir = os.path.join(
         os.environ.get("RUNNER_TEMP") or tempfile.gettempdir(), "model-probes"
     )
@@ -639,6 +649,16 @@ def main() -> int:
             file=sys.stderr,
         )
         provider_models = {}
+    if DISCOVERY_TIMED_OUT:
+        available = [
+            model
+            for model, entry in cache.items()
+            if isinstance(entry, dict) and entry.get("ok") is True
+        ]
+        write_outputs(cache_issue, cache, available)
+        print("Available models:")
+        print("\n".join(available) if available else "(none)")
+        return 0
     candidates = build_candidates(whitelisted_models, provider_models, os.environ)
     pending, skipped = select_pending(candidates, cache, now)
     if skipped:

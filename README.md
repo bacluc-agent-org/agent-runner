@@ -160,12 +160,25 @@ and verifies forwarding and historical denial in a later step outside the checko
 
 Set these in Settings → Secrets and variables → Actions → Variables:
 
-| Variable                         | Description                                                                                                                                                                                                                           | Default                   |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| `ISSUE_REPOSITORY`               | Repository for issue tracking and cache (format: `owner/repo`)                                                                                                                                                                        | `github.repository`       |
-| `MODEL_AVAILABILITY_CACHE_ISSUE` | Issue number used as the model-availability cache                                                                                                                                                                                     | auto-detected             |
-| `FORK_INVITE_USER`               | GitHub user invited with `push` on every new fork and swept as collaborator onto every `bacluc-agent` repository daily by `invite-owner.yml` (exposed to the `github-fork-invite` skill as `GITHUB_FORK_INVITE_USER`; empty disables) | unset (skill no-op)       |
-| `REVIEW_FIXES_OWNER`             | GitHub account (organization or user) whose authored pull requests the _review-fixes_ workflow searches for review comments                                                                                                           | `github.repository_owner` |
+| Variable                         | Description                                                                                                                                                                                                                           | Default                             |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `ISSUE_REPOSITORY`               | Repository for issue tracking and cache (format: `owner/repo`)                                                                                                                                                                        | `github.repository`                 |
+| `MODEL_AVAILABILITY_CACHE_ISSUE` | Issue number used as the model-availability cache                                                                                                                                                                                     | auto-detected                       |
+| `FORK_INVITE_USER`               | GitHub user invited with `push` on every new fork and swept as collaborator onto every `bacluc-agent` repository daily by `invite-owner.yml` (exposed to the `github-fork-invite` skill as `GITHUB_FORK_INVITE_USER`; empty disables) | unset (skill no-op)                 |
+| `REVIEW_FIXES_OWNER`             | GitHub account (organization or user) whose authored pull requests the _review-fixes_ workflow searches for review comments                                                                                                           | `github.repository_owner`           |
+| `KANBAN_PROJECT_NUMBER`          | Organization project number for the implementation Kanban manager                                                                                                                                                                     | unset (Kanban manager skips work)   |
+| `STANDING_PROJECT_NUMBER`        | Organization project number for the standing-issues manager                                                                                                                                                                           | unset (standing manager skips work) |
+| `MAX_AGENT_DISPATCHES`           | Maximum new coordinator dispatches per project-manager run                                                                                                                                                                            | `5`                                 |
+
+### Project manager configuration
+
+The `kanban-manager` and `standing-issue-manager` workflows run hourly and can
+also be started manually. Set `KANBAN_PROJECT_NUMBER` and
+`STANDING_PROJECT_NUMBER` to the pre-provisioned organization project numbers
+in `bacluc-agent-org`. Set `MAX_AGENT_DISPATCHES` to cap
+each run (the default is 5). The workflows use `BACLUC_AGENT_GITHUB_TOKEN`,
+which must be allowed to read and edit organization projects as well as issues,
+pull requests, and workflow dispatches.
 
 ## Secrets
 

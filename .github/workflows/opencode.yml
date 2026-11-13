@@ -304,16 +304,17 @@ jobs:
             set +e
             timeout "${DISCOVERY_TIMEOUT}m" opencode run --agent model-discovery --model "$fallback_model" --title "model-discovery" "$discovery_prompt" | tee "$discovery_output"
             discovery_statuses=("${PIPESTATUS[@]}")
-            printf '::%s::\n' "$stop_token"
+            printf '\n::%s::\n' "$stop_token"
             discovery_status=${discovery_statuses[0]}
             discovery_tee_status=${discovery_statuses[1]}
             set -e
             printf 'Model detection statuses: opencode=%s tee=%s\n' "$discovery_status" "$discovery_tee_status"
-            if ((discovery_tee_status != 0)); then
-              exit "$discovery_tee_status"
-            fi
             if ((discovery_status == 124)); then
               printf '::warning::model discovery exceeded the %sm limit; falling back to the verified model %q\n' "$DISCOVERY_TIMEOUT" "$fallback_model"
+            fi
+            if ((discovery_tee_status != 0)); then
+              printf '::warning::model discovery log capture failed (tee exit %s); falling back to the verified model %q\n' "$discovery_tee_status" "$fallback_model"
+              discovery_status=1
             fi
             stop_token="$(openssl rand -hex 32)"
             : "${stop_token:?stop-commands fence token generation failed}"
@@ -510,7 +511,7 @@ jobs:
           set +e
           timeout "${COORDINATOR_TIMEOUT}m" opencode run --agent "$AGENT" --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
           coordinator_statuses=("${PIPESTATUS[@]}")
-          printf '::%s::\n' "$stop_token"
+          printf '\n::%s::\n' "$stop_token"
           coordinator_status=${coordinator_statuses[0]}
           coordinator_tee_status=${coordinator_statuses[1]}
           set -e
@@ -531,15 +532,21 @@ jobs:
 
       - name: Dump coordinator output tail
         if: always() && steps.coordinator.outcome == 'failure'
+        continue-on-error: true
         shell: bash
         run: |
           set -Eeuo pipefail
+          coordinator_out="$RUNNER_TEMP/coordinator.out"
+          if [[ ! -f "$coordinator_out" ]]; then
+            printf 'no coordinator output captured at %s\n' "$coordinator_out"
+            exit 0
+          fi
           stop_token="$(openssl rand -hex 32)"
           : "${stop_token:?stop-commands fence token generation failed}"
           printf '::group::coordinator output tail\n'
           printf '::stop-commands::%s\n' "$stop_token"
-          tail -n 200 "$RUNNER_TEMP/coordinator.out" | tee -a "$GITHUB_STEP_SUMMARY" || true
-          printf '::%s::\n' "$stop_token"
+          tail -n 200 "$coordinator_out" || true
+          printf '\n::%s::\n' "$stop_token"
           printf '::endgroup::\n'
 
       - name: Fatal guard
@@ -698,8 +705,6 @@ jobs:
           COMMENT_ID: ${{ steps.run-start-comment.outputs.comment_id }}
           MODEL: ${{ steps.select-model.outputs.model }}
           COORDINATOR_OUTCOME: ${{ steps.coordinator.outcome }}
-          COORDINATOR_STATUS: ${{ steps.coordinator.outputs.coordinator_status }}
-          COORDINATOR_TEE_STATUS: ${{ steps.coordinator.outputs.coordinator_tee_status }}
           FATAL_REASON: ${{ steps.fatal-guard.outputs.fatal-reason }}
           BRANCH: ${{ steps.push-work.outputs.branch_name }}
           PUSHED_REPOS: ${{ steps.push-work.outputs.pushed_repos }}
@@ -710,21 +715,11 @@ jobs:
 
           RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
-          # Classify from the coordinator's real exit codes, not the step conclusion word.
+          # Determine status
           if [[ "${COORDINATOR_OUTCOME:-}" == "success" ]]; then
-            if [[ -n "${COORDINATOR_TEE_STATUS:-}" && "${COORDINATOR_TEE_STATUS}" != "0" ]]; then
-              STATUS="✅ completed (log capture failed, tee exit ${COORDINATOR_TEE_STATUS})"
-            else
-              STATUS="✅ completed"
-            fi
+            STATUS="✅ completed"
           elif [[ -n "${FATAL_REASON:-}" ]]; then
             STATUS="❌ fatal error: $FATAL_REASON"
-          elif [[ "${COORDINATOR_OUTCOME:-}" == "cancelled" ]]; then
-            STATUS="⚠️ cancelled before the coordinator finished"
-          elif [[ "${COORDINATOR_STATUS:-}" == "124" ]]; then
-            STATUS="⏱️ timed out (coordinator exit 124)"
-          elif [[ -n "${COORDINATOR_STATUS:-}" ]]; then
-            STATUS="⚠️ failed (coordinator exit ${COORDINATOR_STATUS})"
           else
             STATUS="⚠️ failed (coordinator exit ${COORDINATOR_OUTCOME:-})"
           fi

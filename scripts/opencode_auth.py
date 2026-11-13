@@ -5,6 +5,7 @@ Used by scripts/chatgpt-login.py (browser login) and scripts/refresh-token.py
 primary and fallback credential paths.
 """
 import json
+import os
 from pathlib import Path
 
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -28,4 +29,16 @@ def write_auth_file(auth: dict, path: Path | None = None) -> Path:
     dest = path or Path.home() / ".local" / "share" / "opencode" / "auth.json"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(json.dumps(auth), encoding="utf-8")
+    os.chmod(dest, 0o600)
     return dest
+
+
+def write_auth_content(content: str, path: Path | None = None) -> Path:
+    auth = json.loads(content)
+    account = auth.get("openai") if isinstance(auth, dict) else None
+    if not isinstance(account, dict) or account.get("type") != "oauth" or not all(
+        isinstance(account.get(key), str) and account[key]
+        for key in ("access", "refresh")
+    ) or not isinstance(account.get("expires"), int):
+        raise ValueError("auth content is not valid OpenCode OAuth JSON")
+    return write_auth_file(auth, path)

@@ -1,18 +1,21 @@
 name: Set up OpenCode
 description: >-
   Installs the OpenCode CLI and prepares the shared OpenCode configuration
-  from the provision-machines repository. Relies on the job-level
-  GITHUB_TOKEN set by the caller.
+  from the provision-machines repository, refreshes ChatGPT OAuth outside
+  OpenCode, and routes OpenAI requests through a per-job AISIX proxy.
 runs:
   using: composite
   steps:
     - name: Install GitHub CLI wrapper
       shell: bash
-      run: bash "$GITHUB_ACTION_PATH/../../../scripts/install-gh-cli-wrapper.sh"
+      run: |
+        scripts_root="$RUNNER_TEMP/agent-runner/scripts"
+        [[ -d "$scripts_root" ]] || scripts_root="$GITHUB_ACTION_PATH/../../../scripts"
+        bash "$scripts_root/install-gh-cli-wrapper.sh"
 
     - name: Install OpenCode
       shell: bash
-      run: npm install --global opencode-ai@1.18.32
+      run: npm install --global @opencode/cli@2.2.5
 
     - name: Fetch and prepare OpenCode configuration
       id: config
@@ -23,6 +26,9 @@ runs:
         SKILLS_PATH: deploys/development_tools/ai_agent_devcontainer/files/claude/skills
       run: |
         set -Eeuo pipefail
+        agent_runner_root="$RUNNER_TEMP/agent-runner"
+        [[ -d "$agent_runner_root/scripts" ]] || agent_runner_root="$GITHUB_ACTION_PATH/../../.."
+        printf 'AGENT_RUNNER_SCRIPTS=%s\n' "$agent_runner_root/scripts" >> "$GITHUB_ENV"
 
         printf '::add-mask::%s\n' "$GITHUB_TOKEN"
         printf '::add-mask::%s\n' "${OPENCODE_GO_API_KEY:-}"
@@ -105,21 +111,91 @@ runs:
         rm -rf "$HOME/.config/opencode"
         cp -a "$config_dir" "$HOME/.config/opencode"
 
-    - name: Materialize OpenCode auth
+    - name: Refresh OpenAI OAuth and start AISIX
       shell: bash
       run: |
         set -Eeuo pipefail
         umask 077
-        if [[ -n "${OPENCODE_AUTH_CONTENT:-}" ]]; then
-          printf '::add-mask::%s\n' "$OPENCODE_AUTH_CONTENT"
-          printf '%s' "$OPENCODE_AUTH_CONTENT" | while IFS= read -r line || [[ -n "$line" ]]; do [[ -n "$line" ]] && printf '::add-mask::%s\n' "$line"; done
-          mkdir -p ~/.local/share/opencode
-          printf '%s' "$OPENCODE_AUTH_CONTENT" > ~/.local/share/opencode/auth.json
-          if ! jq -e '.openai.type == "oauth" and .openai.access != "" and .openai.refresh != "" and (.openai.expires | type == "number")' ~/.local/share/opencode/auth.json >/dev/null 2>&1; then
-            echo "::warning::OPENCODE_AUTH_CONTENT is not valid opencode auth JSON (expected {openai:{type:oauth,access,refresh,expires:number}}); removing auth.json and continuing without it" >&2
-            rm -f ~/.local/share/opencode/auth.json
-          elif command -v opencode >/dev/null 2>&1 && ! opencode --help >/dev/null 2>&1; then
-            echo "::warning::opencode config check failed with provided auth.json; removing auth.json and continuing" >&2
-            rm -f ~/.local/share/opencode/auth.json
+        auth_file_created=0
+        aisix_dir="$RUNNER_TEMP/aisix-oauth"
+        oauth_file="$RUNNER_TEMP/chatgpt-oauth.json"
+        access_token_file="$RUNNER_TEMP/chatgpt-access-token"
+        cleanup() {
+          rm -f "$oauth_file"
+          rm -f "$aisix_dir/config.yaml" "$aisix_dir/resources.yaml"
+          if ((auth_file_created)); then
+            rm -f "$HOME/.local/share/opencode/auth.json"
           fi
+        }
+        trap cleanup EXIT
+        printf '::add-mask::%s\n' "${OPENAI_ACCESS_TOKEN:-}"
+        printf '::add-mask::%s\n' "${OPENAI_REFRESH_TOKEN:-}"
+        printf '::add-mask::%s\n' "${OPENCODE_AUTH_CONTENT:-}"
+        if [[ -n "${OPENCODE_AUTH_CONTENT:-}" ]]; then
+          auth_file_created=1
+          PYTHONPATH="$AGENT_RUNNER_SCRIPTS" OPENCODE_AUTH_CONTENT="$OPENCODE_AUTH_CONTENT" python3 -c 'import os; from opencode_auth import write_auth_content; write_auth_content(os.environ["OPENCODE_AUTH_CONTENT"])'
         fi
+        if [[ -s "$HOME/.local/share/opencode/auth.json" ]]; then
+          printf 'OpenCode auth file is present\n'
+        else
+          printf 'OpenCode auth content is not configured\n'
+        fi
+        if [[ -z "${OPENAI_REFRESH_TOKEN:-}" && -z "${OPENCODE_AUTH_CONTENT:-}" ]]; then
+          printf 'ChatGPT OAuth credentials are not configured; skipping AISIX startup\n'
+          exit 0
+        fi
+        if [[ -n "${OPENAI_REFRESH_TOKEN:-}" ]]; then
+          OPENCODE_AUTH_CONTENT="$(jq -cn --arg refresh "$OPENAI_REFRESH_TOKEN" '{openai:{refresh:$refresh}}')"
+        fi
+        OPENCODE_AUTH_CONTENT="${OPENCODE_AUTH_CONTENT:-}" PYTHONPATH="$AGENT_RUNNER_SCRIPTS" python3 "$AGENT_RUNNER_SCRIPTS/refresh-token.py" > "$oauth_file"
+        jq -e '.access_token != "" and .refresh_token != "" and (.expires_at | type == "number")' "$oauth_file" >/dev/null
+        OPENAI_ACCESS_TOKEN="$(jq -r '.access_token' "$oauth_file")"
+        OPENAI_REFRESH_TOKEN="$(jq -r '.refresh_token' "$oauth_file")"
+        AISIX_CALLER_KEY="$(openssl rand -hex 32)"
+        printf '::add-mask::%s\n' "$OPENAI_ACCESS_TOKEN"
+        printf '::add-mask::%s\n' "$OPENAI_REFRESH_TOKEN"
+        printf '::add-mask::%s\n' "$AISIX_CALLER_KEY"
+        export OPENAI_ACCESS_TOKEN OPENAI_REFRESH_TOKEN AISIX_CALLER_KEY
+        printf '%s' "$OPENAI_ACCESS_TOKEN" > "$access_token_file"
+        chmod 600 "$access_token_file"
+        python3 "$AGENT_RUNNER_SCRIPTS/aisix_oauth.py"
+        # renovate: datasource=docker depName=ghcr.io/api7/aisix
+        AISIX_VERSION=1.8.0
+        AISIX_IMAGE="ghcr.io/api7/aisix:$AISIX_VERSION"
+        docker pull "$AISIX_IMAGE" >/dev/null
+        docker run --rm --user "$(id -u):$(id -g)" --entrypoint aisix \
+          -v "$AISIX_DIR/config.yaml:/etc/aisix/config.yaml:ro" \
+          -v "$AISIX_DIR/resources.yaml:/etc/aisix/resources.yaml:ro" \
+          -e AISIX_CALLER_KEY \
+          "$AISIX_IMAGE" validate --resources /etc/aisix/resources.yaml
+        docker run --detach --rm --user "$(id -u):$(id -g)" --name aisix-oauth-proxy \
+          -v "$AISIX_DIR/config.yaml:/etc/aisix/config.yaml:ro" \
+          -v "$AISIX_DIR/resources.yaml:/etc/aisix/resources.yaml:ro" \
+          -e AISIX_CALLER_KEY \
+          -p 127.0.0.1:3000:3000 \
+          "$AISIX_IMAGE" >/dev/null
+        for attempt in $(seq 1 30); do
+          if curl --silent --fail --max-time 2 \
+            -H "Authorization: Bearer $AISIX_CALLER_KEY" \
+            http://127.0.0.1:3000/v1/models >/dev/null; then
+            break
+          fi
+          if ((attempt == 30)); then
+            printf '::error::AISIX did not become ready\n' >&2
+            exit 1
+          fi
+          sleep 1
+        done
+        github_token="${BACLUC_AGENT_GITHUB_TOKEN:-$GITHUB_TOKEN}"
+        printf '%s' "$OPENAI_ACCESS_TOKEN" | GH_TOKEN="$github_token" gh secret set CHATGPT_ACCESS_TOKEN --repo "$GITHUB_REPOSITORY"
+        printf '%s' "$OPENAI_REFRESH_TOKEN" | GH_TOKEN="$github_token" gh secret set CHATGPT_REFRESH_TOKEN --repo "$GITHUB_REPOSITORY"
+        {
+          printf 'OPENAI_ACCESS_TOKEN=\n'
+          printf 'OPENAI_REFRESH_TOKEN=\n'
+          printf 'OPENCODE_AUTH_CONTENT=\n'
+          printf 'OPENAI_ACCESS_TOKEN_FILE=%s\n' "$access_token_file"
+          printf 'AISIX_CALLER_KEY=%s\n' "$AISIX_CALLER_KEY"
+          printf 'AISIX_PROXY_URL=http://127.0.0.1:3000/v1\n'
+          printf 'OPENCODE_CONFIG_CONTENT=%s\n' "$(jq -cn --arg key "$AISIX_CALLER_KEY" '{provider:{openai:{options:{baseURL:"http://127.0.0.1:3000/v1",apiKey:$key}}}}')"
+        } >> "$GITHUB_ENV"
+        printf 'OpenAI OAuth is refreshed and routed through AISIX\n'

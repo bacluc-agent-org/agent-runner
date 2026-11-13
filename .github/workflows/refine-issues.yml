@@ -49,6 +49,7 @@ jobs:
         shell: bash
         env:
           AVAILABLE_MODELS: ${{ steps.model-availability.outputs.available-models }}
+          GH_CLI_WRAPPER_MAX_SLEEP_SECONDS: "180"
         run: |
           set -Eeuo pipefail
 

@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 
@@ -11,12 +12,36 @@ ROOT = Path(__file__).resolve().parents[1]
 FAKE = '''#!/usr/bin/env python3
 import json, os, sys
 from pathlib import Path
+
+
+def append(path, line):
+    with Path(path).open("a") as handle:
+        handle.write(line + "\\n")
+
+
 if sys.argv[1:] == ["alias", "list"]:
     print(os.environ.get("TEST_ALIASES", ""), end="")
     sys.exit(int(os.environ.get("TEST_ALIAS_STATUS", "0")))
-with Path(os.environ["TEST_LOG"]).open("a") as log:
-    log.write(json.dumps(sys.argv[1:]) + "\\n")
-print(json.dumps({"argv": sys.argv[1:], "stdin": sys.stdin.read()}))
+if sys.argv[1:] == ["api", "rate_limit"]:
+    append(os.environ["TEST_LOG"] + ".probes", "probe")
+    if "TEST_PROBE" in os.environ:
+        print(os.environ["TEST_PROBE"])
+    sys.exit(int(os.environ.get("TEST_PROBE_STATUS", "0")))
+append(os.environ["TEST_LOG"], json.dumps(sys.argv[1:]))
+count_path = Path(os.environ["TEST_LOG"] + ".count")
+calls = int(count_path.read_text()) if count_path.exists() else 0
+calls += 1
+count_path.write_text(str(calls))
+if calls <= int(os.environ.get("TEST_FAIL_COUNT", "0")):
+    sys.stdout.write(os.environ.get("TEST_FAIL_STDOUT", ""))
+    sys.stderr.write(os.environ.get("TEST_FAIL_STDERR", ""))
+    sys.exit(int(os.environ.get("TEST_FAIL_STATUS", "1")))
+size = int(os.environ.get("TEST_STDOUT_SIZE", "0"))
+if size:
+    sys.stdout.buffer.write(b"x" * size)
+    sys.stdout.buffer.flush()
+else:
+    print(json.dumps({"argv": sys.argv[1:], "stdin": sys.stdin.read()}))
 print("backend stderr", file=sys.stderr)
 sys.exit(int(os.environ.get("TEST_STATUS", "0")))
 '''
@@ -88,11 +113,25 @@ class CliWrapperTest(unittest.TestCase):
             self.assertIn("gh cli wrapper:", result.stderr)
             self.assertFalse(log.exists(), result.stdout)
 
+    def run_retry(self, argv, **env):
+        log = Path(self.env["TEST_LOG"])
+        log.unlink(missing_ok=True)
+        for suffix in (".count", ".probes"):
+            Path(str(log) + suffix).unlink(missing_ok=True)
+        result = subprocess.run(["bash", "-c", 'exec gh "$@"', "test", *argv],
+                                cwd="/tmp", env=dict(self.env, **env), input="payload\n",
+                                capture_output=True, text=True, timeout=60)
+        calls = log.read_text().splitlines() if log.exists() else []
+        probe_log = Path(str(log) + ".probes")
+        probes = probe_log.read_text().splitlines() if probe_log.exists() else []
+        return result, calls, probes
+
     def test_creation(self):
         self.call(["pr", "create", "-R", "ecamp/ecamp3", "--base", "devel", "--head",
                    "bacluc-agent:issue-221-move-doctrine-validate-to-required-ci"], False)
         for command in ("create", "new"):
-            for repo in ("BacLuc/r", "BaClUc-AgEnT/r", "github.com/BacLuc/r", "https://github.com/BacLuc/r"):
+            for repo in ("BacLuc/r", "BaClUc-AgEnT/r", "bacluc-agent-org/r", "BACLUC-AGENT-ORG/r",
+                         "github.com/BacLuc/r", "https://github.com/BacLuc/r"):
                 for flags in (["-R", repo], ["-R" + repo], ["-R=" + repo], ["--repo", repo], ["--repo=" + repo]):
                     self.call(["pr", command, *flags, "--title", "--repo=outsider/r", "--body", "-Rbad/r"])
             for flags in ([], ["-R", "outsider/r"], ["-R", "BacLuc-evil/r"],
@@ -143,6 +182,7 @@ class CliWrapperTest(unittest.TestCase):
             self.call(argv, False)
         for argv in (
             ["pr", "revert", "123", "-R", "BaClUc-AgEnT/r", "--title", "Revert change", "--body", "Revert change"],
+            ["pr", "revert", "123", "-R", "BACLUC-AGENT-ORG/r", "--title", "Revert change", "--body", "Revert change"],
             ["pr", "revert", "https://github.com/BacLuc/r/pull/123"],
             ["pr", "-R", "BacLuc/r", "revert", "123"],
             ["api", "repos/BacLuc/r/pulls/123/reverts", "-XPOST"],
@@ -167,6 +207,142 @@ class CliWrapperTest(unittest.TestCase):
         self.call(["pr", "view"], False, TEST_ALIASES="pr: !echo bypass\n")
         self.call(["pr", "view"], False, TEST_ALIAS_STATUS="1")
         self.call(["pr", "view"], TEST_ALIASES="co: pr checkout\n")
+
+    def test_core_retry_success_preserves_io(self):
+        argv = ["api", "repos/BacLuc/r/issues"]
+        result, calls, probes = self.run_retry(
+            argv,
+            TEST_FAIL_COUNT="1", TEST_FAIL_STATUS="23",
+            TEST_FAIL_STDERR="HTTP 403: API rate limit exceeded for installation\n",
+            TEST_FAIL_STDOUT="failed attempt output\n",
+            TEST_STATUS="23",
+            TEST_PROBE=json.dumps({"resources": {"core": {"remaining": 0, "reset": int(time.time()) - 10}}}),
+        )
+        self.assertEqual(result.returncode, 23)
+        self.assertEqual(calls, [json.dumps(argv)] * 2)
+        self.assertEqual(len(probes), 1)
+        self.assertEqual(json.loads(result.stdout), {"argv": argv, "stdin": "payload\n"})
+        self.assertNotIn("failed attempt output", result.stdout)
+        self.assertIn("::notice::gh cli wrapper: retrying api repos/BacLuc/r/issues", result.stderr)
+        self.assertIn("attempt 1/4, core primary limit", result.stderr)
+        self.assertTrue(result.stderr.endswith("backend stderr\n"))
+
+    def test_search_limit_does_not_wait_on_healthy_core(self):
+        result, calls, probes = self.run_retry(
+            ["api", "search/issues?q=repo:BacLuc/r"],
+            TEST_FAIL_COUNT="1",
+            TEST_FAIL_STDERR="HTTP 403: API rate limit exceeded for installation\n",
+            TEST_PROBE=json.dumps({"resources": {
+                "search": {"remaining": 0, "reset": int(time.time()) - 10},
+                "core": {"remaining": 0, "reset": int(time.time()) + 5000},
+            }}),
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(probes), 1)
+        self.assertNotIn("::warning::", result.stderr)
+        self.assertIn("search primary limit", result.stderr)
+
+    def test_graphql_limit_does_not_wait_on_healthy_core(self):
+        result, calls, probes = self.run_retry(
+            ["issue", "view", "303"],
+            TEST_FAIL_COUNT="1",
+            TEST_FAIL_STDERR="GraphQL: API rate limit exceeded for user ID 1.\n",
+            TEST_PROBE=json.dumps({"resources": {
+                "graphql": {"remaining": 0, "reset": int(time.time()) - 10},
+                "core": {"remaining": 0, "reset": int(time.time()) + 5000},
+            }}),
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("::warning::", result.stderr)
+        self.assertIn("graphql primary limit", result.stderr)
+
+    def test_probe_failure_retries_with_fallback(self):
+        result, calls, probes = self.run_retry(
+            ["label", "create", "agent-running", "-R", "BacLuc/r"],
+            TEST_FAIL_COUNT="1",
+            TEST_FAIL_STDERR="API rate limit exceeded\n",
+            TEST_PROBE="not json",
+            GH_CLI_WRAPPER_MAX_SLEEP_SECONDS="0",
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(probes), 1)
+        self.assertIn("::warning::gh cli wrapper: could not read core rate limit", result.stderr)
+        self.assertIn("::notice::", result.stderr)
+
+    def test_secondary_403_retries(self):
+        result, calls, probes = self.run_retry(
+            ["label", "create", "agent-running"],
+            TEST_FAIL_COUNT="1",
+            TEST_FAIL_STDERR="HTTP 403: You have exceeded a secondary rate limit.\n",
+            GH_CLI_WRAPPER_MAX_SLEEP_SECONDS="0",
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(probes, [])
+        self.assertIn("secondary limit", result.stderr)
+        self.assertNotIn("::warning::", result.stderr)
+
+    def test_http_429_retries(self):
+        result, calls, probes = self.run_retry(
+            ["api", "repos/BacLuc/r/issues"],
+            TEST_FAIL_COUNT="1",
+            TEST_FAIL_STDERR="HTTP 429: Too Many Requests\n",
+            GH_CLI_WRAPPER_MAX_SLEEP_SECONDS="0",
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(probes, [])
+        self.assertIn("secondary limit", result.stderr)
+
+    def test_permission_403_not_retried(self):
+        result, calls, probes = self.run_retry(
+            ["issue", "edit", "1", "-R", "BacLuc/r", "--body", "x"],
+            TEST_FAIL_COUNT="5", TEST_FAIL_STATUS="1",
+            TEST_FAIL_STDERR="HTTP 403: Resource not accessible by integration\n",
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(probes, [])
+        self.assertIn("Resource not accessible by integration", result.stderr)
+        self.assertNotIn("::warning::", result.stderr)
+
+    def test_exhaustion(self):
+        result, calls, probes = self.run_retry(
+            ["api", "repos/BacLuc/r/issues"],
+            TEST_FAIL_COUNT="5", TEST_FAIL_STATUS="1",
+            TEST_FAIL_STDERR="HTTP 429: Too Many Requests\n",
+            GH_CLI_WRAPPER_MAX_ATTEMPTS="2", GH_CLI_WRAPPER_MAX_SLEEP_SECONDS="0",
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(probes, [])
+        self.assertIn("::warning::gh cli wrapper: gh api repos/BacLuc/r/issues still rate limited after 2 attempts",
+                      result.stderr)
+
+    def test_reset_beyond_cap_fails_fast(self):
+        result, calls, probes = self.run_retry(
+            ["api", "repos/BacLuc/r/issues"],
+            TEST_FAIL_COUNT="5", TEST_FAIL_STATUS="1",
+            TEST_FAIL_STDERR="API rate limit exceeded\n",
+            TEST_PROBE=json.dumps({"resources": {"core": {"remaining": 0, "reset": int(time.time()) + 5000}}}),
+            GH_CLI_WRAPPER_MAX_SLEEP_SECONDS="60",
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(probes), 1)
+        self.assertIn("::warning::gh cli wrapper: core primary rate limit", result.stderr)
+        self.assertIn("exceeds the 60s cap", result.stderr)
+
+    def test_broken_pipe_has_no_traceback(self):
+        env = dict(self.env, TEST_STDOUT_SIZE="1000000")
+        result = subprocess.run(
+            ["bash", "-c", 'exec gh api repos/BacLuc/r/issues | head -c 1 >/dev/null'],
+            cwd="/tmp", env=env, capture_output=True, text=True, timeout=60,
+        )
+        self.assertNotIn("Traceback", result.stderr)
 
     def test_subsequent_step_probe(self):
         result = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--verify-installed"],

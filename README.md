@@ -197,6 +197,7 @@ in Docker and exits non-zero if any check fails:
 
 - Prettier formatting check (`prettier --check .`)
 - actionlint (workflow syntax)
+- TypeScript type check (`npx tsc --noEmit`)
 - OpenCode plugin tests (`node --test`)
 - pytest (script tests)
 
@@ -263,7 +264,7 @@ The model-availability probe had five compounding problems:
 Contrast — old code (main): hourly run 34665106771 took **29 min 38 s** in the same step.
 
 ## Tests
-`uv run --group dev pytest -q` → **116 passed**. `./scripts/completion-check` → green.
+`uv run --group dev pytest -q` → **255 passed**. `./scripts/completion-check` → green.
 ```
 
 **The change** (excerpt, 6 files, +560/−41):

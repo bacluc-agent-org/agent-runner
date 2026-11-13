@@ -1,0 +1,31 @@
+name: Kanban project manager
+
+on:
+  schedule:
+    - cron: "32 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: kanban-project-manager
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  repository-projects: write
+
+jobs:
+  manage:
+    if: vars.KANBAN_PROJECT_NUMBER != ''
+    uses: ./.github/workflows/opencode.yml
+    with:
+      agent: kanban-manager
+      prompt: >-
+        Manage the Kanban GitHub Project for implementation work. The project owner is
+        bacluc-agent-org, the project number is
+        ${{ vars.KANBAN_PROJECT_NUMBER || '2' }}, the issue repository is
+        ${{ vars.ISSUE_REPOSITORY || github.repository }}, and the maximum
+        number of new agent dispatches for this run is
+        ${{ vars.MAX_AGENT_DISPATCHES || '5' }}.
+    secrets: inherit

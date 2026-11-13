@@ -27,6 +27,13 @@ def _provider_api_keys(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-or-key")
 
 
+@pytest.fixture(autouse=True)
+def _reset_discovery_timeout():
+    model_availability.DISCOVERY_TIMED_OUT = False
+    yield
+    model_availability.DISCOVERY_TIMED_OUT = False
+
+
 def fake_run(args, *a, **kw):
     if args == ["opencode", "models"]:
         return types.SimpleNamespace(stdout="opencode/a-free\n")
@@ -1508,9 +1515,164 @@ class TestDiscoveryTimeout:
     def test_discovery_timeout_is_bounded(self):
         assert model_availability.DISCOVERY_TIMEOUT_SECONDS <= 120
 
+    def test_timeout_returns_empty_and_sets_flag_without_other_discovery(self, monkeypatch, capsys):
+        calls = []
+
+        def fake_run(args, *a, **kw):
+            calls.append(args)
+            raise subprocess.TimeoutExpired(args, model_availability.DISCOVERY_TIMEOUT_SECONDS)
+
+        def unexpected_urlopen(*args, **kwargs):
+            raise AssertionError("urlopen must not run after a discovery timeout")
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+        monkeypatch.setattr(model_availability.urllib.request, "urlopen", unexpected_urlopen)
+
+        assert model_availability.discover_models() == ([], {})
+        assert model_availability.DISCOVERY_TIMED_OUT is True
+        assert calls == [["opencode", "models"]]
+        assert (
+            "warning: opencode models timed out after 120s; model discovery unavailable"
+            in capsys.readouterr().err.splitlines()
+        )
+
+    def test_empty_output_success_returns_empty_without_timeout_flag(self, monkeypatch, capsys):
+        def fake_run(args, *a, **kw):
+            if args == ["opencode", "models"]:
+                return types.SimpleNamespace(stdout="", stderr="")
+            if args == ["opencode", "debug", "config"]:
+                kw["stdout"].write(json.dumps(CONFIG))
+                return types.SimpleNamespace(stdout="")
+            raise AssertionError(f"unexpected args: {args}")
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+        monkeypatch.setattr(model_availability, "load_provider_config", lambda: {})
+
+        assert model_availability.discover_models() == ([], {})
+        assert model_availability.DISCOVERY_TIMED_OUT is False
+        assert "timed out" not in capsys.readouterr().err
+
+    def test_success_after_prior_timeout_resets_flag(self, monkeypatch):
+        model_availability.DISCOVERY_TIMED_OUT = True
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+        monkeypatch.setattr(model_availability, "fetch_model_ids", lambda *a, **kw: [])
+
+        models, _ = model_availability.discover_models()
+
+        assert models == ["opencode/a-free"]
+        assert model_availability.DISCOVERY_TIMED_OUT is False
+
+    def test_non_timeout_subprocess_error_propagates_with_flag_clear(self, monkeypatch):
+        def fake_run(args, *a, **kw):
+            raise subprocess.CalledProcessError(1, args)
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+
+        with pytest.raises(subprocess.CalledProcessError):
+            model_availability.discover_models()
+        assert model_availability.DISCOVERY_TIMED_OUT is False
+
+
+class TestMainDiscoveryTimeout:
+    CACHE = {
+        "opencode/a-free": {"ok": True, "checked": "2026-11-10T00:00:00Z"},
+        "opencode/b-failed": {"ok": False, "checked": "2026-11-10T00:00:00Z"},
+        "opencode/c-stale": {"ok": True, "checked": "2020-01-01T00:00:00Z"},
+        "malformed": "not-a-dict",
+    }
+
+    @staticmethod
+    def _timed_out_discovery():
+        model_availability.DISCOVERY_TIMED_OUT = True
+        return [], {}
+
+    @staticmethod
+    def _fail_if_called(name):
+        def fail(*args, **kwargs):
+            raise AssertionError(f"{name} must not be called when discovery times out")
+
+        return fail
+
+    def test_uses_unchanged_cache_for_available_outputs(self, monkeypatch, capsys):
+        read_cache_calls = []
+        outputs = []
+
+        def fake_read_cache(cache_issue):
+            read_cache_calls.append(cache_issue)
+            return dict(self.CACHE)
+
+        monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: "49")
+        monkeypatch.setattr(model_availability, "read_cache", fake_read_cache)
+        monkeypatch.setattr(model_availability, "discover_models", self._timed_out_discovery)
+        for name in (
+            "build_candidates",
+            "select_pending",
+            "probe_candidates",
+            "merge_results",
+            "write_cache",
+        ):
+            monkeypatch.setattr(model_availability, name, self._fail_if_called(name))
+        monkeypatch.setattr(
+            model_availability,
+            "write_outputs",
+            lambda *args: outputs.append(args),
+        )
+
+        assert model_availability.main() == 0
+        assert read_cache_calls == ["49"]
+        expected_available = ["opencode/a-free", "opencode/c-stale"]
+        assert outputs == [("49", self.CACHE, expected_available)]
+        out = capsys.readouterr().out
+        assert "Available models:" in out
+        assert "opencode/a-free" in out
+        assert "opencode/c-stale" in out
+        assert "opencode/b-failed" not in out
+
+    def test_reports_none_with_empty_cache(self, monkeypatch, capsys):
+        outputs = []
+        monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: "49")
+        monkeypatch.setattr(model_availability, "read_cache", lambda issue: {})
+        monkeypatch.setattr(model_availability, "discover_models", self._timed_out_discovery)
+        monkeypatch.setattr(
+            model_availability,
+            "write_outputs",
+            lambda *args: outputs.append(args),
+        )
+
+        assert model_availability.main() == 0
+        assert outputs == [("49", {}, [])]
+        out = capsys.readouterr().out
+        assert "Available models:" in out
+        assert "(none)" in out
+
+    def test_writes_cached_models_to_github_output(self, monkeypatch, tmp_path):
+        github_output = tmp_path / "github-output"
+        monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
+        monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: "49")
+        monkeypatch.setattr(model_availability, "read_cache", lambda issue: dict(self.CACHE))
+        monkeypatch.setattr(model_availability, "discover_models", self._timed_out_discovery)
+
+        assert model_availability.main() == 0
+
+        output = github_output.read_text()
+        assert "cache-issue=49" in output
+        assert "cache-json<<CACHE_EOF" in output
+        available_block = output.split("available-models<<MODELS_EOF\n", 1)[1].split(
+            "\nMODELS_EOF", 1
+        )[0]
+        assert available_block == "opencode/a-free\nopencode/c-stale"
+
 
 class TestRefineIssuesExitCode:
     WORKFLOW = Path(__file__).parents[3] / ".github/workflows/refine-issues.yml"
+
+    def test_openai_selection_uses_deny_filtered_models(self):
+        content = self.WORKFLOW.read_text()
+        assignment = "mapfile -t openai_models < <(grep -E '^openai/' \"$available_models_file\" | grep -Ev -f scripts/model-deny-list.txt"
+        assert assignment in content
+        loop_start = content.index("for candidate in \\")
+        loop_end = content.index("done", loop_start)
+        assert '"${openai_models[@]}"' in content[loop_start:loop_end]
 
     @classmethod
     def _completion_tail(cls):
@@ -1757,53 +1919,3 @@ class TestWorkflowOpenRouterSelection:
             text=True,
         )
         assert kept.returncode == 0, "opencode/big-pickle must be kept"
-
-    def test_opencode_loads_deny_list_for_all_selections(self):
-        """Verify opencode.yml loads the deny-list regardless of explicit request."""
-        content = Path(".github/workflows/opencode.yml").read_text()
-        # Deny-list should be loaded unconditionally (not inside 'if [[ -z "$requested" ]]')
-        deny_load = content.index('deny_file="$RUNNER_TEMP/agent-runner/scripts/model-deny-list.txt"')
-        requested_check = content.index('requested="${MODEL_TEXT:-}"')
-        # The deny-list load should come after requested is determined but not be gated by it
-        assert deny_load > requested_check
-        # Should not have the old gated pattern
-        assert 'if [[ -z "$requested" ]]; then' not in content[deny_load:deny_load+200]
-
-    def test_opencode_falls_back_for_deny_listed_explicit_request(self, tmp_path):
-        """Explicit request for a deny-listed model should fall back, not fail closed."""
-        deny_list = tmp_path / "deny-list.txt"
-        deny_list.write_text("bad-model\n")
-        available = tmp_path / "available-models.txt"
-        available.write_text("bad-model\ngood-model\n")
-        fallback = "good-model"
-        result = subprocess.run(
-            [
-                "bash",
-                "-Eeuo",
-                "pipefail",
-                "-c",
-                """
-                deny_re="$(awk '!/^[[:space:]]*(#|$)/' "$1" | paste -sd'|' -)"
-                [[ -n "$deny_re" ]] || deny_re='^$'
-                requested_model="bad-model"
-                resolved="bad-model"
-                if grep -Eq "$deny_re" <<<"$resolved"; then
-                  if [[ -n "$2" ]]; then
-                    printf 'fallback: %s\n' "$2"
-                    exit 0
-                  else
-                    printf 'no fallback\n' >&2
-                    exit 1
-                  fi
-                fi
-                printf 'no deny match\n'
-                """,
-                "bash",
-                str(deny_list),
-                fallback,
-            ],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0
-        assert "fallback: good-model" in result.stdout

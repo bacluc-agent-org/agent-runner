@@ -111,7 +111,7 @@ jobs:
           # hourly-issue.yml and opencode.yml); they pass the trivial OK probe but
           # fail as coordinator/selector in 10+ runs (e.g. 34029380869, 34042660858).
           mapfile -t free_models < <(grep -E '^(opencode|openrouter)/[^[:space:]]+(-free|:free)$' "$available_models_file" | grep -Ev -f scripts/model-deny-list.txt | awk '!seen[$0]++')
-          mapfile -t openai_models < <(grep -E '^openai/' "$available_models_file" | awk '!seen[$0]++')
+          mapfile -t openai_models < <(grep -E '^openai/' "$available_models_file" | grep -Ev -f scripts/model-deny-list.txt | awk '!seen[$0]++')
           for candidate in \
             'opencode-go-openai/qwen3.8-flash' \
             'opencode-go-openai-2/qwen3.8-flash' \

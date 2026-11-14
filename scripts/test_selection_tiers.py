@@ -2,7 +2,7 @@ from pathlib import Path
 from subprocess import run
 from tempfile import TemporaryDirectory
 
-from selection_tiers import Candidate, is_standing, parse_branches, render_prompt, select_tier, tier
+from selection_tiers import Candidate, is_claimed, is_standing, parse_branches, render_prompt, select_tier, tier
 
 WORKFLOW = Path(__file__).parents[1] / ".github/workflows/hourly-issue.yml"
 
@@ -51,6 +51,34 @@ def test_durable_attempt_label_counts_as_history_without_branch():
     assert "attempts for 42: 1" in result.stderr
     assert "Candidate tiers: 0=0 1=0 2=1 3=0" in result.stderr
     assert "[attempts: 1] [tier: 2]" in result.stdout
+
+
+def test_claimed_candidates_are_excluded_bare_and_run_scoped():
+    import json
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from subprocess import run
+
+    assert is_claimed(["agent-running"])
+    assert is_claimed(["agent-running:42745795778"])
+    assert not is_claimed(["agent-attempted"])
+    assert not is_claimed([])
+    assert not is_claimed(None)
+    with TemporaryDirectory() as directory:
+        candidates = Path(directory) / "candidates.json"
+        branches = Path(directory) / "branches.txt"
+        tail = Path(directory) / "tail.txt"
+        candidates.write_text(json.dumps([
+            {"number": 3, "title": "Issue", "labels": [{"name": "agent-running"}]},
+            {"number": 4, "title": "Issue", "labels": [{"name": "agent-running:42745795778"}]},
+            {"number": 5, "title": "Issue", "labels": []},
+        ]))
+        branches.write_text("")
+        tail.write_text("Choose\n")
+        result = run(["python3", "scripts/selection_tiers.py", "--candidates", str(candidates), "--branches", str(branches), "--tail-file", str(tail)], check=True, capture_output=True, text=True)
+    assert "3: Issue" not in result.stdout
+    assert "4: Issue" not in result.stdout
+    assert "5: Issue" in result.stdout
 
 
 def test_tiers_cover_feedback_history_and_finished_work():
@@ -129,3 +157,51 @@ def test_workflow_uses_latest_commit_and_created_at_when_pr_has_no_commits():
     assert '([.[][] | .commit.committer.date] | max) // $fallback' in content
     assert 'pr_last_commit_at:(' in content
     assert 'map(select(test("^[0-9]")))|max // null' in content
+
+
+def _sweep_filter():
+    for line in WORKFLOW.read_text().splitlines():
+        if 'issues?state=open&per_page=100" --jq' in line:
+            return line.split("--jq '", 1)[1].rsplit("'", 1)[0]
+    raise AssertionError("sweep jq filter not found")
+
+
+def test_sweep_jq_selector_covers_bare_and_run_scoped_claims():
+    import json
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+    from subprocess import run
+
+    issues = [
+        {"number": 1, "labels": [{"name": "agent-running"}], "pull_request": None},
+        {"number": 2, "labels": [{"name": "agent-running:42750217969"}], "pull_request": None},
+        {"number": 3, "labels": [{"name": "agent-attempted"}], "pull_request": None},
+        {"number": 4, "labels": [{"name": "agent-running"}, {"name": "agent-running:1"}], "pull_request": None},
+        {"number": 5, "labels": [{"name": "agent-running:2"}], "pull_request": {"url": "https://example.test"}},
+    ]
+    with TemporaryDirectory() as directory:
+        path = Path(directory) / "issues.json"
+        path.write_text(json.dumps(issues))
+        result = run(["jq", "-r", _sweep_filter(), str(path)], check=True, capture_output=True, text=True)
+    assert result.stdout == "1\tagent-running\n2\tagent-running:42750217969\n4\tagent-running,agent-running:1\n"
+
+
+def test_workflow_claims_are_run_scoped_swept_and_always_released():
+    content = WORKFLOW.read_text()
+    assert 'claim_label="agent-running:${GITHUB_RUN_ID}"' in content
+    assert 'gh run view "$run_id" -R bacluc-agent-org/agent-runner --json status --jq .status' in content
+    assert 'queued|in_progress|unknown)' in content
+    assert 'gh api -X POST "repos/${ISSUE_REPOSITORY}/issues/${issue_number}/labels"' in content
+    assert 'any(. == "agent-running" or startswith("agent-running:"))' in content
+    assert 'select(. == "agent-running" or startswith("agent-running:"))' in content
+    assert content.index('if [[ "$claim" == "agent-running" ]]') < content.index('run_id="${claim#agent-running:}"')
+    assert 'Swept legacy claim %s from #%s' in content
+    assert '::error::could not claim issue %s; not dispatching' in content
+    assert 'claim_failed=true' in content
+    assert "steps.pick.outputs.claim_failed != 'true'" in content
+    assert "-label:agent-running:*" not in content
+    assert "if: always() && needs.select.outputs.issue_number != ''" not in content
+    release = content[content.index("  release:"):]
+    assert "if: always()" in release
+    assert "labels=${claim_label}" in release
+    assert "issue_number" not in release

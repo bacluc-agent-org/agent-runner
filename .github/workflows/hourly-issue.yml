@@ -58,8 +58,12 @@ jobs:
         with:
           token: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
 
+      # Only the run job refreshes OAuth: secrets are resolved once per workflow run, so this
+      # job's refresh would rotate the token and the run job would receive the stale snapshot.
       - name: Set up OpenCode
         uses: ./.github/actions/setup-opencode
+        with:
+          refresh_oauth: "false"
 
       - name: Warm up OpenCode CLI
         shell: bash

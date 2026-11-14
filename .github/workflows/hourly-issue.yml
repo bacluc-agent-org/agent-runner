@@ -33,7 +33,7 @@ jobs:
     # claim leaks and the issue stays out of selection until a human unlabels it. Upgrade path:
     # timeout-based claims — encode the run id in the claim (agent-running:<run_id>) and treat a
     # claim whose run is no longer in-progress as expired at selection time.
-    runs-on: blacksmith-2vcpu-ubuntu-2404-arm
+    runs-on: ubuntu-latest
     timeout-minutes: 120
     outputs:
       prompt: ${{ steps.pick.outputs.prompt }}
@@ -58,8 +58,12 @@ jobs:
         with:
           token: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
 
+      # Only the run job refreshes OAuth: secrets are resolved once per workflow run, so this
+      # job's refresh would rotate the token and the run job would receive the stale snapshot.
       - name: Set up OpenCode
         uses: ./.github/actions/setup-opencode
+        with:
+          refresh_oauth: "false"
 
       - name: Warm up OpenCode CLI
         shell: bash
@@ -414,7 +418,7 @@ jobs:
     if: always() && needs.select.outputs.issue_number != ''
     permissions:
       issues: write
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     env:
       GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
       ISSUE_REPOSITORY: ${{ vars.ISSUE_REPOSITORY || github.repository }}

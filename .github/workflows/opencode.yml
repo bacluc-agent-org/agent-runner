@@ -408,9 +408,19 @@ jobs:
           : "${stop_token:?stop-commands fence token generation failed}"
           printf '::stop-commands::%s\n' "$stop_token"
           IFS=$'\t' read -r resolution resolved < <(resolve_model "$requested_model")
-          if [[ "$resolution" == available ]] && ! grep -Eq "$deny_re" <<<"$resolved"; then
+          if [[ "$resolution" == available ]]; then
             printf 'Model availability: requested %q is available; resolved model %q\n' "$requested_model" "$resolved"
             model="$resolved"
+            if grep -Eq "$deny_re" <<<"$resolved"; then
+              if [[ -n "$fallback_model" ]]; then
+                printf 'Model availability: requested %q resolved to deny-listed model %q; falling back to %q\n' "$requested_model" "$model" "$fallback_model"
+                model="$fallback_model"
+                model_source='fallback: deny-listed requested model'
+              else
+                printf 'Model availability: requested %q resolved to deny-listed model %q and no fallback is available; not dispatching.\n' "$requested_model" "$model" >&2
+                exit 1
+              fi
+            fi
           else
             printf 'Model availability: requested %q is unavailable (%s)\n' "$requested_model" "$resolution"
             if [[ "$resolution" == ambiguous ]]; then

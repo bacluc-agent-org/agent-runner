@@ -1499,12 +1499,14 @@ class TestWorkflowOpenRouterSelection:
             assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in content
             assert "model-deny-list.txt" in content
 
-    def test_opencode_dispatches_only_deny_list_filtered_resolved_models(self):
+    def test_opencode_rechecks_deny_list_after_model_resolution(self):
         content = Path(".github/workflows/opencode.yml").read_text()
-        assert (
-            'if [[ "$resolution" == available ]] && ! grep -Eq "$deny_re" <<<"$resolved"; then'
-            in content
-        )
+        assert 'if [[ "$resolution" == available ]]; then' in content
+        assert 'if grep -Eq "$deny_re" <<<"$resolved"; then' in content
+        assert '[[ -z "$requested" ]] && grep -Eq "$deny_re" <<<"$resolved"' not in content
+        assert "resolved to deny-listed model %q; falling back to %q" in content
+        assert "resolved to deny-listed model %q and no fallback is available" in content
+        assert "exit 1" in content
 
     def test_last_resort_is_deny_list_filtered_and_fails_closed(self):
         for path in self.WORKFLOWS:

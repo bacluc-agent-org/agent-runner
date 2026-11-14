@@ -38,18 +38,6 @@ def parse_branches(names: list[str]) -> list[tuple[int, int]]:
     return sorted(parsed, key=lambda item: item[1], reverse=True)
 
 
-def is_branch_for_issue(branch: str, number: int) -> bool:
-    return bool(
-        re.search(rf"(?:^|/)issue-{int(number)}(?=[-_]|[^0-9A-Za-z_-]|$)", branch)
-    )
-
-
-def select_issue_pr(prs: list[dict], number: int) -> dict | None:
-    """Newest open PR whose head branch belongs to the issue."""
-    matches = [pr for pr in prs if is_branch_for_issue(pr.get("headRefName", ""), number)]
-    return max(matches, key=lambda pr: int(pr.get("number", 0))) if matches else None
-
-
 def is_standing(title: str, labels: list[str] | None = None) -> bool:
     return bool(re.match(r"^standing\b", title, re.IGNORECASE)) or any(
         label.casefold() == "meta: standing" for label in labels or []

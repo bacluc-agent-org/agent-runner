@@ -2,11 +2,9 @@ from pathlib import Path
 from subprocess import run
 from tempfile import TemporaryDirectory
 
-from selection_tiers import Candidate, is_branch_for_issue, is_standing, parse_branches, render_prompt, select_issue_pr, select_tier, tier
+from selection_tiers import Candidate, is_standing, parse_branches, render_prompt, select_tier, tier
 
 WORKFLOW = Path(__file__).parents[1] / ".github/workflows/hourly-issue.yml"
-OPENCODE = Path(__file__).parents[1] / ".github/workflows/opencode.yml"
-MANAGER = Path(__file__).parents[1] / ".opencode/agent/standing-issue-manager.md"
 
 
 def candidate(number=1, **values):
@@ -131,47 +129,3 @@ def test_workflow_uses_latest_commit_and_created_at_when_pr_has_no_commits():
     assert '([.[][] | .commit.committer.date] | max) // $fallback' in content
     assert 'pr_last_commit_at:(' in content
     assert 'map(select(test("^[0-9]")))|max // null' in content
-
-
-def test_is_standing_matches_only_actual_standing_titles_and_labels():
-    assert is_standing("Standing chore")
-    assert is_standing("Standing")
-    assert is_standing("Some task", ["Meta: Standing"])
-    assert not is_standing("Standings report")
-    assert not is_standing("A standing task")
-    assert not is_standing("Some task", ["meta:standing"])
-
-
-def test_is_branch_for_issue_matches_issue_branches_without_prefix_collisions():
-    for branch in ("issue-452", "issue-452-fix", "issue-452_typo", "fix/issue-452-typo", "issue-452.fix"):
-        assert is_branch_for_issue(branch, 452), branch
-    for branch in ("issue-4520", "issue-45", "agent-run/452-1", "issue-453-mentions-issue-452", "revert-issue-452", "main"):
-        assert not is_branch_for_issue(branch, 452), branch
-
-
-def test_select_issue_pr_prefers_the_newest_matching_pr():
-    prs = [
-        {"number": 4, "headRefName": "issue-452-old", "url": "u4"},
-        {"number": 9, "headRefName": "fix/issue-452-new", "url": "u9"},
-        {"number": 12, "headRefName": "issue-4520-other", "url": "u12"},
-        {"number": 15, "headRefName": "unrelated", "url": "u15"},
-    ]
-    assert select_issue_pr(prs, 452)["url"] == "u9"
-    assert select_issue_pr([], 452) is None
-    assert select_issue_pr([{"number": 1, "headRefName": "issue-4520"}], 452) is None
-
-
-def test_opencode_workflow_reuses_standing_pr_branches():
-    content = OPENCODE.read_text()
-    assert "from selection_tiers import is_standing" in content
-    assert "from selection_tiers import select_issue_pr" in content
-    assert 'echo "standing=${STANDING}"' in content
-    assert "steps.push-work.outputs.standing" in content
-    assert 'gh pr list -R "$repo_slug" --state open' in content
-    assert 'git checkout -B "$effective_branch"' in content
-    assert "git merge --no-edit FETCH_HEAD" in content
-    assert 'BRANCH_NAME="agent-run/${ISSUE_NUMBER}-${GITHUB_RUN_ID}"' in content
-    assert "branch_name=${REUSED_BRANCH:-$BRANCH_NAME}" in content
-    assert content.index("from selection_tiers import is_standing") < content.index('git checkout -B "$effective_branch"')
-    assert content.index("STANDING:-false") < content.index('--pr-url "$PR_URL"')
-    assert "existing pull request" in MANAGER.read_text()

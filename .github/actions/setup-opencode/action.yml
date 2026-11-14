@@ -3,6 +3,11 @@ description: >-
   Installs the OpenCode CLI and prepares the shared OpenCode configuration
   from the provision-machines repository, refreshes ChatGPT OAuth outside
   OpenCode, and routes OpenAI requests through a per-job AISIX proxy.
+inputs:
+  refresh_oauth:
+    description: Refresh the ChatGPT OAuth tokens and start AISIX
+    required: false
+    default: "true"
 runs:
   using: composite
   steps:
@@ -106,6 +111,7 @@ runs:
         cp -a "$config_dir" "$HOME/.config/opencode"
 
     - name: Refresh OpenAI OAuth and start AISIX
+      if: ${{ inputs.refresh_oauth == 'true' }}
       shell: bash
       run: |
         set -Eeuo pipefail

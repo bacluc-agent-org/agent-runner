@@ -4,3 +4,11 @@ __pycache__/
 .playwright-cli/
 # opencode generates .opencode/.gitignore at runtime (without trailing newline)
 .opencode/.gitignore
+# Markdown: prettier only rewrites table column padding and list markers here,
+# so agent-authored prose reports produce cosmetic-only CI failures.
+# Re-include the tracked, hand-maintained Markdown; extend when adding more.
+*.md
+!/README.md
+!/AGENTS.md
+!.opencode/agent/*.md
+!scripts/progress-comment-template.md

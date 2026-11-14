@@ -174,6 +174,15 @@ def test_setup_opencode_refreshes_tokens_outside_opencode_and_starts_aisix():
     assert "Materialize OpenCode auth" not in setup
 
 
+def test_select_job_skips_oauth_refresh_but_run_job_keeps_it():
+    root = Path(__file__).parents[1]
+    setup = (root / ".github/actions/setup-opencode/action.yml").read_text()
+    assert 'refresh_oauth:\n    description:' in setup
+    assert 'default: "true"' in setup
+    assert 'refresh_oauth: "false"' in WORKFLOW.read_text()
+    assert "refresh_oauth" not in (root / ".github/workflows/opencode.yml").read_text()
+
+
 def test_selection_tail_requires_fast_tool_free_selection():
     tail = (Path(__file__).parents[1] / "scripts/issue-selection-tail.txt").read_text()
     agent = (Path(__file__).parents[1] / ".opencode/agent/issue-selector.md").read_text()

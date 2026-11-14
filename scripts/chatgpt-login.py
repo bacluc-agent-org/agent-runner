@@ -471,21 +471,21 @@ def _exchange_code(code: str, verifier: str) -> dict:
 
 
 def _do_email_step(page, email: str) -> bool:
-    if not _fill_first_visible(page, ['input[type="email"]', 'input[name="email"]', 'input[id="email"]'], email, delay_ms=100):
+    if not _fill_first_visible(page, ['input[type="email"]', 'input[name="email"]', 'input[id="email"]'], email, delay_ms=200):
         return False
-    time.sleep(1)
+    time.sleep(2)
     return _click_first_visible(page, ['button[type="submit"]', 'button:has-text("Continue")'])
 
 
 def _do_password_step(page, password: str) -> bool:
-    if not _fill_first_visible(page, ['input[type="password"]'], password, delay_ms=100):
+    if not _fill_first_visible(page, ['input[type="password"]'], password, delay_ms=200):
         return False
-    time.sleep(2)
+    time.sleep(4)
     clicked = _click_first_visible(page, ['button[type="submit"]', 'button:has-text("Continue")'])
     if clicked:
         # Password submit triggers a SPA navigation; give it time to land
         # before callers inspect the page again.
-        time.sleep(2)
+        time.sleep(8)
     return clicked
 
 
@@ -738,7 +738,18 @@ def cmd_step() -> int:
                 json.dump({"error": "status failed while blocked", "blocking": blocking}, sys.stdout)
             return 2
 
+        step_path_before = _page_path(page)
         ok = _do_current_step(page, email, password, totp_key)
+        if ok and step_path_before == "/log-in/password":
+            blocking = _wait_for_blocking_clear(page, timeout_s=30)
+            if blocking:
+                print(f"Login blocked: {blocking}", file=sys.stderr)
+                try:
+                    step = _step_for_path(_page_path(page))
+                    json.dump({"step": step, "url": page.url.split("?", 1)[0].split("#", 1)[0], "title": page.title(), "blocking": blocking, "code_ready": state.get("code") is not None}, sys.stdout)
+                except Exception:
+                    json.dump({"error": "status failed while blocked", "blocking": blocking}, sys.stdout)
+                return 2
         if not ok:
             step_name = _step_for_path(_page_path(page)) or "unknown"
             _capture_debug(page, "primitives", step_name, "automation step made no progress", page_errors)
@@ -862,9 +873,9 @@ def _full_login() -> int:
                         if not _is_error_page(page):
                             break
                         print(f"[chatgpt-login] OpenAI error page after password submit, retry {attempt + 1}/2", file=sys.stderr)
-                        time.sleep(2)
+                        time.sleep(4)
                         _click_first_visible(page, ['a:has-text("Try again")', 'button:has-text("Try again")'])
-                        time.sleep(1)
+                        time.sleep(2)
                         _do_password_step(page, password)
                     blocking = _wait_for_blocking_clear(page, timeout_s=90)
                     if blocking:

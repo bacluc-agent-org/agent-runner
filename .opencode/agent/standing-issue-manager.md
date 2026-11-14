@@ -35,8 +35,10 @@ workflow is dispatched from this repository (`bacluc-agent-org/agent-runner`),
 not from the issue repository. Run
 `gh pr list -R <repo> --state open --limit 100 --json number,url,headRefName,title,body`
 and match either branches like `issue-<number>` or `fix/issue-<number>-...` in
-`headRefName`, or a standalone `#<number>` or `<issue-repo>#<number>` reference
-in the pull request title or body. If several pull requests match, use the one
+`headRefName`, or a standalone `#<number>`, `<issue-repo>#<number>`, or
+`<issue-repo>/issues/<number>` reference (optionally as a full
+`https://github.com/...` URL) in the pull request title or body. If several
+pull requests match, use the one
 with the highest number. Dispatch the `opencode.yml` workflow with the issue
 number, a precise implementation prompt, and the `coordinator` agent. When the
 issue has an open pull request, include its URL and head branch in the dispatch

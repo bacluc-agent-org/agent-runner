@@ -519,11 +519,12 @@ jobs:
           printf 'Coordinator statuses: opencode=%s tee=%s\n' "$coordinator_status" "$coordinator_tee_status"
           echo "coordinator_status=${coordinator_status}" >> "$GITHUB_OUTPUT"
           echo "coordinator_tee_status=${coordinator_tee_status}" >> "$GITHUB_OUTPUT"
-          failure_mode=$(python3 "$RUNNER_TEMP/agent-runner/scripts/coordinator_result.py" \
-            --coordinator-status "$coordinator_status" \
-            --tee-status "$coordinator_tee_status" \
-            --field failure-mode)
-          echo "failure_mode=${failure_mode}" >> "$GITHUB_OUTPUT"
+          if ((coordinator_status == 124)); then
+            echo "failure_mode=timeout" >> "$GITHUB_OUTPUT"
+          fi
+          if ((coordinator_tee_status != 0)); then
+            printf '::warning::coordinator log capture failed (tee exit %s); the coordinator result is unaffected\n' "$coordinator_tee_status"
+          fi
           if ((coordinator_status != 0)); then
             exit "$coordinator_status"
           fi
@@ -684,8 +685,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
           COMMENT_ID: ${{ steps.run-start-comment.outputs.comment_id }}
           MODEL: ${{ steps.select-model.outputs.model }}
-          COORDINATOR_STATUS: ${{ steps.coordinator.outputs.coordinator_status || '1' }}
-          COORDINATOR_TEE_STATUS: ${{ steps.coordinator.outputs.coordinator_tee_status || '0' }}
+          COORDINATOR_STATUS: ${{ steps.coordinator.outputs.coordinator_status }}
           FATAL_REASON: ${{ steps.fatal-guard.outputs.fatal-reason }}
           BRANCH: ${{ steps.push-work.outputs.branch_name }}
           PUSHED_REPOS: ${{ steps.push-work.outputs.pushed_repos }}
@@ -697,9 +697,9 @@ jobs:
           RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
           STATUS=$(python3 "$RUNNER_TEMP/agent-runner/scripts/coordinator_result.py" \
-            --coordinator-status "${COORDINATOR_STATUS:-1}" \
-            --tee-status "${COORDINATOR_TEE_STATUS:-0}" \
+            --coordinator-status "${COORDINATOR_STATUS:-}" \
             --fatal-reason "${FATAL_REASON:-}")
+          printf 'Run result: %s\n' "$STATUS"
 
           # Check for existing PRs in every repo this run pushed to, not just this one.
           # ponytail: 34 repos scanned per run, cache the repo list in an artifact if this shows up in run times

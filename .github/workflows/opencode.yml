@@ -309,13 +309,17 @@ jobs:
             set +e
             timeout "${DISCOVERY_TIMEOUT}m" opencode run --agent model-discovery --model "$fallback_model" --title "model-discovery" "$discovery_prompt" | tee "$discovery_output"
             discovery_statuses=("${PIPESTATUS[@]}")
-            printf '::%s::\n' "$stop_token"
+            printf '\n::%s::\n' "$stop_token"
             discovery_status=${discovery_statuses[0]}
             discovery_tee_status=${discovery_statuses[1]}
             set -e
             printf 'Model detection statuses: opencode=%s tee=%s\n' "$discovery_status" "$discovery_tee_status"
+            if ((discovery_status == 124)); then
+              printf '::warning::model discovery exceeded the %sm limit; falling back to the verified model %q\n' "$DISCOVERY_TIMEOUT" "$fallback_model"
+            fi
             if ((discovery_tee_status != 0)); then
-              exit "$discovery_tee_status"
+              printf '::warning::model discovery log capture failed (tee exit %s); falling back to the verified model %q\n' "$discovery_tee_status" "$fallback_model"
+              discovery_status=1
             fi
             stop_token="$(openssl rand -hex 32)"
             : "${stop_token:?stop-commands fence token generation failed}"
@@ -512,7 +516,7 @@ jobs:
           set +e
           timeout "${COORDINATOR_TIMEOUT}m" opencode run --agent "$AGENT" --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
           coordinator_statuses=("${PIPESTATUS[@]}")
-          printf '::%s::\n' "$stop_token"
+          printf '\n::%s::\n' "$stop_token"
           coordinator_status=${coordinator_statuses[0]}
           coordinator_tee_status=${coordinator_statuses[1]}
           set -e
@@ -522,10 +526,33 @@ jobs:
           if ((coordinator_status == 124)); then
             echo "failure_mode=timeout" >> "$GITHUB_OUTPUT"
           fi
+          if ((coordinator_tee_status != 0)); then
+            printf '::warning::coordinator log capture failed (tee exit %s); the coordinator result is unaffected\n' "$coordinator_tee_status"
+          fi
           if ((coordinator_status != 0)); then
+            ((coordinator_status == 124)) && printf '::error::coordinator exceeded the %sm limit (opencode exit %s)\n' "$COORDINATOR_TIMEOUT" "$coordinator_status"
             exit "$coordinator_status"
           fi
-          exit "$coordinator_tee_status"
+          exit 0
+
+      - name: Dump coordinator output tail
+        if: always() && steps.coordinator.outcome == 'failure'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          coordinator_out="$RUNNER_TEMP/coordinator.out"
+          if [[ ! -f "$coordinator_out" ]]; then
+            printf 'no coordinator output captured at %s\n' "$coordinator_out"
+            exit 0
+          fi
+          stop_token="$(openssl rand -hex 32)"
+          : "${stop_token:?stop-commands fence token generation failed}"
+          printf '::group::coordinator output tail\n'
+          printf '::stop-commands::%s\n' "$stop_token"
+          tail -n 200 "$coordinator_out" || true
+          printf '\n::%s::\n' "$stop_token"
+          printf '::endgroup::\n'
 
       - name: Fatal guard
         id: fatal-guard

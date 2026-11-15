@@ -1,7 +1,7 @@
 import { classifyEvent } from "../classify.ts";
 import plugin, { messageOf } from "./fatal-error-guard.ts";
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import test from "node:test";
 
 const apiErr = (statusCode, message = "", responseBody = "") => ({
@@ -400,5 +400,40 @@ test("plugin setup v2: benign event does not exit", async () => {
     assert.fail("marker should not exist");
   } catch (e) {
     assert.ok(true);
+  }
+});
+
+test("plugin setup failure writes an infrastructure marker and exits", async () => {
+  for (const subscribe of [
+    () => {
+      throw new Error("subscription unavailable");
+    },
+    () => ({}),
+  ]) {
+    const tmp =
+      (process.env.RUNNER_TEMP = `/tmp/fatal-guard-test-${Math.random()}`);
+    const markerPath = `${tmp}/opencode-fatal.json`;
+    const origExit = process.exit;
+    let exitCode = null;
+    process.exit = function (code) {
+      exitCode = code;
+      throw new Error("exit");
+    };
+    try {
+      mkdirSync(tmp, { recursive: true });
+      plugin.setup({ event: { subscribe } });
+      await new Promise((r) => setTimeout(r, 10));
+    } catch (e) {
+      // ignore exit throw
+    } finally {
+      process.exit = origExit;
+    }
+    assert.equal(exitCode, 1);
+    const marker = JSON.parse(readFileSync(markerPath, "utf8"));
+    assert.equal(marker.reason, "infrastructure");
+    assert.equal(marker.kind, "infrastructure_failure");
+    assert.match(marker.message, /subscription unavailable|async iterable/i);
+    assert.match(marker.error.name, /Error$/);
+    rmSync(tmp, { recursive: true, force: true });
   }
 });

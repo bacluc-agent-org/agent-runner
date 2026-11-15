@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import textwrap
 import types
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1498,6 +1499,93 @@ class TestWorkflowOpenRouterSelection:
             assert '[[ -n "$OPENROUTER_API_KEY" ]]' in content
             assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in content
             assert "model-deny-list.txt" in content
+
+    def test_opencode_rechecks_deny_list_after_model_resolution(self):
+        content = Path(".github/workflows/opencode.yml").read_text()
+        assert 'if [[ "$resolution" == available ]]; then' in content
+        assert 'if grep -Eq "$deny_re" <<<"$resolved"; then' in content
+        assert '[[ -z "$requested" ]] && grep -Eq "$deny_re" <<<"$resolved"' not in content
+        assert "resolved to deny-listed model %q; falling back to %q" in content
+        assert "resolved to deny-listed model %q and no fallback is available" in content
+        assert "exit 1" in content
+
+    @staticmethod
+    def _opencode_model_selection_fragments():
+        content = Path(".github/workflows/opencode.yml").read_text()
+        selection_start = content.index("          fallback_model=''")
+        selection_end = content.index("          stop_token=", selection_start)
+        resolver_start = content.index("          resolve_model() {")
+        resolver_end = content.index(
+            '\n          }\n\n          if grep -Eq "$deny_re"', resolver_start
+        ) + len("\n          }")
+        resolution_start = content.index(
+            "          IFS=$'\\t' read -r resolution resolved", resolver_end
+        )
+        resolution_end = content.index("\n            fi\n          else", resolution_start) + len("\n            fi")
+        return tuple(
+            textwrap.dedent(content[start:end])
+            for start, end in (
+                (selection_start, selection_end),
+                (resolver_start, resolver_end),
+                (resolution_start, resolution_end),
+            )
+        )
+
+    def _run_resolved_deny_list_case(self, tmp_path, available_models):
+        available = tmp_path / "available-models.txt"
+        available.write_text("\n".join(available_models) + "\n")
+        deny_list = Path(__file__).parents[3] / "scripts/model-deny-list.txt"
+        selection, resolver, resolution = self._opencode_model_selection_fragments()
+        script = f"""
+        set -Eeuo pipefail
+        available_models_file="$1"
+        deny_file="$2"
+        RUNNER_TEMP="$(dirname "$available_models_file")"
+        mkdir -p "$RUNNER_TEMP/agent-runner/scripts"
+        cp "$deny_file" "$RUNNER_TEMP/agent-runner/scripts/model-deny-list.txt"
+        AVAILABLE_MODELS=$(cat "$available_models_file")
+        OPENCODE_GO_API_KEY='test-key'
+        OPENCODE_GO_2_API_KEY=''
+        OPENROUTER_API_KEY='test-key'
+        deny_re="$(awk '!/^[[:space:]]*(#|$)/' "$deny_file" | paste -sd'|' - || true)"
+        [[ -n "$deny_re" ]] || deny_re='^$'
+        model_source='requested'
+        requested='north-mini-code:free'
+        {selection}
+        requested_model="$requested"
+        model="$requested"
+        {resolver}
+        {resolution}
+        fi
+        printf 'DISPATCHED %s\\n' "$model"
+        """
+        return subprocess.run(
+            ["bash", "-Eeuo", "pipefail", "-c", textwrap.dedent(script), "bash", str(available), str(deny_list)],
+            capture_output=True,
+            text=True,
+        )
+
+    def test_alias_resolved_to_deny_list_model_uses_allowed_fallback(self, tmp_path):
+        result = self._run_resolved_deny_list_case(
+            tmp_path,
+            [
+                "openrouter/cohere/north-mini-code:free",
+                "opencode/big-pickle",
+            ],
+        )
+        assert result.returncode == 0, result.stderr
+        dispatched = [line for line in result.stdout.splitlines() if line.startswith("DISPATCHED ")]
+        assert dispatched == ["DISPATCHED opencode/big-pickle"]
+        assert not any("north-mini-code:free" in line for line in dispatched)
+
+    def test_alias_resolved_to_deny_list_model_without_fallback_does_not_dispatch(self, tmp_path):
+        result = self._run_resolved_deny_list_case(
+            tmp_path,
+            ["openrouter/cohere/north-mini-code:free"],
+        )
+        assert result.returncode == 1
+        assert "no fallback is available; not dispatching" in result.stderr
+        assert not any(line.startswith("DISPATCHED ") for line in result.stdout.splitlines())
 
     def test_last_resort_is_deny_list_filtered_and_fails_closed(self):
         for path in self.WORKFLOWS:

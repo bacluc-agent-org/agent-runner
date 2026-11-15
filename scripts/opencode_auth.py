@@ -19,8 +19,8 @@ def build_auth_json(access: str, refresh: str, expires: int) -> dict:
         raise ValueError("access must be a non-empty string")
     if not isinstance(refresh, str) or not refresh:
         raise ValueError("refresh must be a non-empty string")
-    if not isinstance(expires, int):
-        raise ValueError("expires must be an int (millisecond epoch)")
+    if isinstance(expires, bool) or not isinstance(expires, int) or expires <= 0:
+        raise ValueError("expires must be a positive int (millisecond epoch)")
     return {"openai": {"type": "oauth", "access": access, "refresh": refresh, "expires": expires}}
 
 

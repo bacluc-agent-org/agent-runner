@@ -28,6 +28,49 @@ def test_step_for_nested_consent_route():
     assert chatgpt_login._step_for_path("/sign-in-with-chatgpt/codex/consent") == "consent"
 
 
+def test_status_payload_describes_email_verification_and_unknown_routes():
+    verification = chatgpt_login._status_payload(
+        types.SimpleNamespace(
+            url="https://auth.openai.com/email-verification",
+            title=lambda: "Verify your email",
+        ),
+        blocking="email verification required",
+        code_ready=False,
+    )
+    assert verification == {
+        "step": "email-verification",
+        "url": "https://auth.openai.com/email-verification",
+        "title": "Verify your email",
+        "blocking": "email verification required",
+        "code_ready": False,
+    }
+
+    unknown = chatgpt_login._status_payload(
+        types.SimpleNamespace(url="https://auth.openai.com/unexpected", title=lambda: "Unexpected"),
+        blocking=None,
+        code_ready=False,
+    )
+    assert unknown["step"] == "unknown"
+    assert unknown["blocking"] == "unknown authentication route; use playwright-cli attach --cdp=http://localhost:9222"
+
+
+def test_start_failure_cleanup_closes_resources_and_removes_state(tmp_path, monkeypatch):
+    browser = types.SimpleNamespace(close=lambda: setattr(browser, "closed", True), closed=False)
+    callback = types.SimpleNamespace(close=lambda: setattr(callback, "closed", True), closed=False)
+    state_file = tmp_path / "state.json"
+    state_file.write_text("{}")
+    monkeypatch.setattr(chatgpt_login, "STATE_FILE", state_file)
+    chatgpt_login._cleanup_start_resources(browser, callback)
+    assert browser.closed and callback.closed
+    assert not state_file.exists()
+
+
+def test_build_auth_json_rejects_non_positive_expiry():
+    for expires in (0, -1, True):
+        with pytest.raises(ValueError):
+            chatgpt_login.build_auth_json("acc", "ref", expires)
+
+
 @pytest.mark.parametrize(
     "url",
     [
@@ -499,7 +542,7 @@ def test_refresh_workflow_rejects_nonempty_string_tokens_before_storage(invalid_
     validation = (
         '.openai.type == "oauth" and (.openai.access | type == "string" and length > 0) '
         'and (.openai.refresh | type == "string" and length > 0) '
-        'and (.openai.expires | type == "number")'
+        'and (.openai.expires | type == "number" and . == floor and . > 0)'
     )
     assert workflow.count(validation) == 3
     pre_storage = workflow[: workflow.index("- name: Require refreshed authentication")]
@@ -519,6 +562,13 @@ def test_refresh_workflow_rejects_nonempty_string_tokens_before_storage(invalid_
         check=False,
     )
     assert result.returncode != 0
+
+
+def test_primitives_fallback_uses_explicit_recovery_environment_allowlist():
+    helper = (Path(__file__).with_name("chatgpt-login-primitives-fallback.sh")).read_text(encoding="utf-8")
+    assert "env -i" in helper
+    assert "OPENCODE_GO_API_KEY" in helper
+    assert "CHATGPT_EMAIL" not in helper[helper.index("run_agent_with_deadline()") : helper.index("if ! capture_snapshot")]
 
 
 def test_primitives_fallback_observes_retries_and_validates_login_output():
@@ -563,7 +613,9 @@ def test_primitives_fallback_observes_retries_and_validates_login_output():
         "GITHUB_STATE",
         "GITHUB_STEP_SUMMARY",
     ):
-        assert f"-u {name}" in helper
+        assert f'"{name}' not in helper[helper.index("run_agent_with_deadline()") : helper.index("if ! capture_snapshot")]
+    assert 'env -i' in helper
+    assert 'RUNNER_TEMP="${RUNNER_TEMP:-}"' in helper
     assert 'command_timeout="${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}"' in helper
     assert 'agent_timeout="${PLAYWRIGHT_AGENT_TIMEOUT_SECONDS:-120}"' in helper
     assert "opencode run --auto --model" in helper

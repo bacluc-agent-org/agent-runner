@@ -67,6 +67,7 @@ STEP_BY_PATH = {
     "/mfa-challenge": "2fa",
     "/choose-an-account": "choose-account",
     "/sign-in-with-chatgpt": "consent",
+    "/email-verification": "email-verification",
 }
 _STOP_REQUESTED = False
 
@@ -245,6 +246,36 @@ def _step_for_path(path: str) -> str:
         (step for route, step in STEP_BY_PATH.items() if path.startswith(f"{route}/")),
         "",
     )
+
+
+def _status_payload(page, blocking: str | None, code_ready: bool) -> dict:
+    path = _page_path(page)
+    step = _step_for_path(path) or "unknown"
+    if step == "email-verification" and blocking is None:
+        blocking = "email verification required; use an allowed recovery command or stop the session"
+    elif step == "unknown" and blocking is None:
+        blocking = "unknown authentication route; use playwright-cli attach --cdp=http://localhost:9222"
+    try:
+        url = page.url.split("?", 1)[0].split("#", 1)[0]
+        title = _redact_debug_text(page.title())
+    except Exception:
+        url = ""
+        title = ""
+    return {"step": step, "url": url, "title": title, "blocking": blocking, "code_ready": code_ready}
+
+
+def _cleanup_start_resources(browser=None, callback=None) -> None:
+    if browser is not None:
+        try:
+            browser.close()
+        except Exception:
+            pass
+    if callback is not None:
+        try:
+            callback.close()
+        except Exception:
+            pass
+    STATE_FILE.unlink(missing_ok=True)
 
 
 def _redact_debug_text(value: str) -> str:
@@ -593,21 +624,27 @@ def cmd_start() -> int:
         callback.start()
     except OSError as e:
         print(f"Failed to start callback server on port {CALLBACK_PORT}: {e}", file=sys.stderr)
+        _cleanup_start_resources(callback=callback)
         return 1
 
     try:
         started_at = int(Path(f"/proc/{os.getpid()}/stat").read_text().split()[21])
     except (OSError, IndexError, ValueError):
         started_at = None
-    _write_state({"verifier": verifier, "state": state, "cdp_port": cdp_port, "code": None,
-                  "pid": os.getpid(), "started_at": started_at})
+    try:
+        _write_state({"verifier": verifier, "state": state, "cdp_port": cdp_port, "code": None,
+                      "pid": os.getpid(), "started_at": started_at})
+    except Exception as error:
+        print(f"Failed to write login state: {type(error).__name__}", file=sys.stderr)
+        _cleanup_start_resources(callback=callback)
+        return 1
     signal.signal(signal.SIGTERM, _request_stop)
 
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
         print("playwright not installed; run pip install playwright", file=sys.stderr)
-        callback.close()
+        _cleanup_start_resources(callback=callback)
         return 1
 
     with sync_playwright() as p:
@@ -615,19 +652,22 @@ def cmd_start() -> int:
             browser = _launch_browser(p, _is_headless(), cdp_port=cdp_port)
         except Exception as e:
             print(_browser_startup_error(e, _is_headless()), file=sys.stderr)
-            callback.close()
-            STATE_FILE.unlink(missing_ok=True)
+            _cleanup_start_resources(callback=callback)
             return 1
-        context = browser.new_context(user_agent=_DESKTOP_UA, viewport=_DESKTOP_VIEWPORT)
-        page = context.new_page()
+        try:
+            context = browser.new_context(user_agent=_DESKTOP_UA, viewport=_DESKTOP_VIEWPORT)
+            page = context.new_page()
+        except Exception as error:
+            print(f"Failed to create browser context: {type(error).__name__}", file=sys.stderr)
+            _cleanup_start_resources(browser, callback)
+            return 1
         page_errors = _watch_page_errors(page)
         try:
             page.goto(_authorize_url(verifier, state), wait_until="domcontentloaded")
         except Exception as e:
             _capture_debug(page, "start", "authorize", str(e), page_errors)
             print(f"Failed to reach auth.openai.com: {e}", file=sys.stderr)
-            browser.close()
-            callback.close()
+            _cleanup_start_resources(browser, callback)
             return 1
 
         _log_step(page, "authorize")
@@ -644,30 +684,31 @@ def cmd_start() -> int:
         while True:
             if _STOP_REQUESTED:
                 _capture_debug(page, "start", _step_for_path(_page_path(page)), "stopped", page_errors)
-                browser.close()
-                callback.close()
-                STATE_FILE.unlink(missing_ok=True)
+                _cleanup_start_resources(browser, callback)
                 return 1
             if callback.error:
                 _capture_debug(page, "start", _step_for_path(_page_path(page)), callback.error, page_errors)
                 print(f"OAuth callback error: {callback.error}", file=sys.stderr)
-                browser.close()
-                callback.close()
+                _cleanup_start_resources(browser, callback)
                 return 1
             if callback.code:
                 break
             time.sleep(1)
 
-        _write_state({"verifier": verifier, "state": state, "cdp_port": cdp_port, "code": callback.code,
-                      "pid": os.getpid(), "started_at": started_at})
+        try:
+            _write_state({"verifier": verifier, "state": state, "cdp_port": cdp_port, "code": callback.code,
+                          "pid": os.getpid(), "started_at": started_at})
+        except Exception as error:
+            print(f"Failed to update login state: {type(error).__name__}", file=sys.stderr)
+            _cleanup_start_resources(browser, callback)
+            return 1
 
         try:
             tokens = _exchange_code(callback.code, verifier)
         except Exception as e:
             _capture_debug(page, "start", "callback", str(e), page_errors)
             print(f"Token exchange failed: {e}", file=sys.stderr)
-            browser.close()
-            callback.close()
+            _cleanup_start_resources(browser, callback)
             return 1
 
         access = tokens.get("access_token", "")
@@ -676,24 +717,25 @@ def cmd_start() -> int:
         if not access or not refresh:
             _capture_debug(page, "start", "callback", "token exchange returned no tokens", page_errors)
             print("Token exchange returned no access/refresh token", file=sys.stderr)
-            browser.close()
-            callback.close()
+            _cleanup_start_resources(browser, callback)
             return 1
 
         try:
             auth = build_auth_json(access, refresh, int(time.time() * 1000) + int(expires_in) * 1000)
         except ValueError as e:
             print(str(e), file=sys.stderr)
-            browser.close()
-            callback.close()
+            _cleanup_start_resources(browser, callback)
             return 1
 
-        write_auth_file(auth)
-        json.dump(auth, sys.stdout)
-        sys.stdout.write("\n")
-        browser.close()
-        callback.close()
-        STATE_FILE.unlink(missing_ok=True)
+        try:
+            write_auth_file(auth)
+            json.dump(auth, sys.stdout)
+            sys.stdout.write("\n")
+        except Exception as error:
+            print(f"Failed to store authentication: {type(error).__name__}", file=sys.stderr)
+            _cleanup_start_resources(browser, callback)
+            return 1
+        _cleanup_start_resources(browser, callback)
         return 0
 
 
@@ -720,12 +762,11 @@ def cmd_status() -> int:
             json.dump({"error": "no pages"}, sys.stdout)
             return 1
         try:
-            step = _step_for_path(_page_path(page))
             blocking = _has_blocking_screen(page)
-            if blocking:
-                _capture_debug(page, "primitives", step or "unknown", blocking)
-            code_ready = state.get("code") is not None
-            json.dump({"step": step, "url": page.url.split("?", 1)[0].split("#", 1)[0], "title": page.title(), "blocking": blocking, "code_ready": code_ready}, sys.stdout)
+            payload = _status_payload(page, blocking, state.get("code") is not None)
+            if payload["blocking"]:
+                _capture_debug(page, "primitives", payload["step"], payload["blocking"])
+            json.dump(payload, sys.stdout)
         except Exception as e:
             json.dump({"error": str(e)}, sys.stdout)
             return 1
@@ -774,8 +815,7 @@ def cmd_step() -> int:
             _capture_debug(page, "primitives", _step_for_path(_page_path(page)), blocking, page_errors)
             print(f"Login blocked: {blocking}", file=sys.stderr)
             try:
-                step = _step_for_path(_page_path(page))
-                json.dump({"step": step, "url": page.url.split("?", 1)[0].split("#", 1)[0], "title": page.title(), "blocking": blocking, "code_ready": state.get("code") is not None}, sys.stdout)
+                json.dump(_status_payload(page, blocking, state.get("code") is not None), sys.stdout)
             except Exception:
                 json.dump({"error": "status failed while blocked", "blocking": blocking}, sys.stdout)
             return 2
@@ -789,10 +829,8 @@ def cmd_step() -> int:
                 file=sys.stderr,
             )
         try:
-            step = _step_for_path(_page_path(page))
             blocking = _has_blocking_screen(page)
-            code_ready = state.get("code") is not None
-            json.dump({"step": step, "url": page.url.split("?", 1)[0].split("#", 1)[0], "title": page.title(), "blocking": blocking, "code_ready": code_ready}, sys.stdout)
+            json.dump(_status_payload(page, blocking, state.get("code") is not None), sys.stdout)
         except Exception as e:
             json.dump({"error": str(e)}, sys.stdout)
             return 1
@@ -822,7 +860,7 @@ def _full_login() -> int:
         from playwright.sync_api import sync_playwright
     except ImportError:
         print("playwright not installed; run pip install playwright", file=sys.stderr)
-        callback.close()
+        _cleanup_start_resources(callback=callback)
         return 1
 
     with sync_playwright() as p:
@@ -830,19 +868,22 @@ def _full_login() -> int:
             browser = _launch_browser(p, _is_headless())
         except Exception as e:
             print(_browser_startup_error(e, _is_headless()), file=sys.stderr)
-            callback.close()
-            STATE_FILE.unlink(missing_ok=True)
+            _cleanup_start_resources(callback=callback)
             return 1
-        context = browser.new_context(user_agent=_DESKTOP_UA, viewport=_DESKTOP_VIEWPORT)
-        page = context.new_page()
+        try:
+            context = browser.new_context(user_agent=_DESKTOP_UA, viewport=_DESKTOP_VIEWPORT)
+            page = context.new_page()
+        except Exception as error:
+            print(f"Failed to create browser context: {type(error).__name__}", file=sys.stderr)
+            _cleanup_start_resources(browser, callback)
+            return 1
         page_errors = _watch_page_errors(page)
         try:
             page.goto(_authorize_url(verifier, state), wait_until="domcontentloaded")
         except Exception as e:
             _capture_debug(page, "browser", "authorize", str(e), page_errors)
             print(f"Failed to reach auth.openai.com: {e}", file=sys.stderr)
-            browser.close()
-            callback.close()
+            _cleanup_start_resources(browser, callback)
             return 1
 
         _log_step(page, "authorize")
@@ -851,8 +892,7 @@ def _full_login() -> int:
         if blocking:
             _capture_debug(page, "browser", "authorize", blocking, page_errors)
             print(f"Login blocked: {blocking} — cannot automate with credentials alone", file=sys.stderr)
-            browser.close()
-            callback.close()
+            _cleanup_start_resources(browser, callback)
             return 2
 
         # Drive the login state machine until the callback fires. Step
@@ -933,8 +973,7 @@ def _full_login() -> int:
                 _capture_debug(page, "browser", step or path, str(e), page_errors)
                 print(f"Failed at step {step or path}: {e}", file=sys.stderr)
                 _dump_page_state(page)
-                browser.close()
-                callback.close()
+                _cleanup_start_resources(browser, callback)
                 return 1
 
             time.sleep(1)
@@ -942,15 +981,13 @@ def _full_login() -> int:
         code = callback.wait(timeout_s=10)
         if callback.error:
             print(f"OAuth callback error: {callback.error}", file=sys.stderr)
-            browser.close()
-            callback.close()
+            _cleanup_start_resources(browser, callback)
             return 1
         if not code:
             _capture_debug(page, "browser", _step_for_path(_page_path(page)), "timed out waiting for OAuth callback", page_errors)
             print("Timed out waiting for OAuth callback", file=sys.stderr)
             _dump_page_state(page)
-            browser.close()
-            callback.close()
+            _cleanup_start_resources(browser, callback)
             return 1
 
         _log_step(page, "callback")
@@ -960,8 +997,7 @@ def _full_login() -> int:
         except Exception as e:
             _capture_debug(page, "browser", "callback", str(e), page_errors)
             print(f"Token exchange failed: {e}", file=sys.stderr)
-            browser.close()
-            callback.close()
+            _cleanup_start_resources(browser, callback)
             return 1
 
         access = tokens.get("access_token", "")
@@ -970,16 +1006,14 @@ def _full_login() -> int:
         if not access or not refresh:
             _capture_debug(page, "browser", "callback", "token exchange returned no tokens", page_errors)
             print("Token exchange returned no access/refresh token", file=sys.stderr)
-            browser.close()
-            callback.close()
+            _cleanup_start_resources(browser, callback)
             return 1
 
         try:
             auth = build_auth_json(access, refresh, int(time.time() * 1000) + int(expires_in) * 1000)
         except ValueError as e:
             print(str(e), file=sys.stderr)
-            browser.close()
-            callback.close()
+            _cleanup_start_resources(browser, callback)
             return 1
 
         write_auth_file(auth)

@@ -592,6 +592,23 @@ def test_workflow_actor_lookup_failure_does_not_classify_comments_as_human():
     assert result.stdout.strip() == "none"
 
 
+def test_workflow_actor_lookup_failure_does_not_classify_reply_bodies_as_human():
+    root = Path(__file__).parents[1]
+    expression = '[.comments[] | select(($agent_login | length) > 0 and .author.login != $agent_login)] | max_by(.createdAt) | .body // empty'
+    workflow = (root / ".github/workflows/opencode.yml").read_text(encoding="utf-8")
+    assert expression in workflow
+
+    comments = {"comments": [{"author": {"login": "bacluc-agent"}, "createdAt": "2026-01-01T00:00:00Z", "body": "bot"}]}
+    result = subprocess.run(
+        ["jq", "-r", "--arg", "agent_login", "", expression],
+        input=json.dumps(comments),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert result.stdout.strip() == ""
+
+
 def test_primitives_fallback_steps_after_a_blocking_status():
     helper = (Path(__file__).with_name("chatgpt-login-primitives-fallback.sh")).read_text(encoding="utf-8")
     assert "blocking_recovery_attempted" not in helper

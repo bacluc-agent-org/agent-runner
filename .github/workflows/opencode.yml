@@ -764,7 +764,7 @@ jobs:
           if [[ "$new_comment_needed" == "true" ]]; then
             # A human answered after our last update: reply with the quoted comment plus one
             # acknowledgement line. The run report belongs in the progress comment, never here.
-            last_human_body=$(gh issue view "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --json comments 2>/dev/null | jq -r --arg agent_login "$authenticated_actor" '[.comments[] | select(.author.login != $agent_login)] | max_by(.createdAt) | .body // empty' || echo '')
+            last_human_body=$(gh issue view "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --json comments 2>/dev/null | jq -r --arg agent_login "$authenticated_actor" '[.comments[] | select(($agent_login | length) > 0 and .author.login != $agent_login)] | max_by(.createdAt) | .body // empty' || echo '')
             reply_body="Thanks for the feedback — picking it up."
             if [[ -n "$last_human_body" && "$last_human_body" != "null" ]]; then
               reply_body="${reply_body}"$'\n\n'"$(printf '%s\n' "$last_human_body" | sed 's/^/> /')"

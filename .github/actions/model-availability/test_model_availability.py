@@ -1540,6 +1540,9 @@ class TestWorkflowOpenRouterSelection:
         set -Eeuo pipefail
         available_models_file="$1"
         deny_file="$2"
+        RUNNER_TEMP="$(dirname "$available_models_file")"
+        mkdir -p "$RUNNER_TEMP/agent-runner/scripts"
+        cp "$deny_file" "$RUNNER_TEMP/agent-runner/scripts/model-deny-list.txt"
         AVAILABLE_MODELS=$(cat "$available_models_file")
         OPENCODE_GO_API_KEY='test-key'
         OPENCODE_GO_2_API_KEY=''
@@ -1571,7 +1574,9 @@ class TestWorkflowOpenRouterSelection:
             ],
         )
         assert result.returncode == 0, result.stderr
-        assert "DISPATCHED opencode/big-pickle" in result.stdout
+        dispatched = [line for line in result.stdout.splitlines() if line.startswith("DISPATCHED ")]
+        assert dispatched == ["DISPATCHED opencode/big-pickle"]
+        assert not any("north-mini-code:free" in line for line in dispatched)
 
     def test_alias_resolved_to_deny_list_model_without_fallback_does_not_dispatch(self, tmp_path):
         result = self._run_resolved_deny_list_case(
@@ -1580,7 +1585,7 @@ class TestWorkflowOpenRouterSelection:
         )
         assert result.returncode == 1
         assert "no fallback is available; not dispatching" in result.stderr
-        assert "DISPATCHED" not in result.stdout
+        assert not any(line.startswith("DISPATCHED ") for line in result.stdout.splitlines())
 
     def test_last_resort_is_deny_list_filtered_and_fails_closed(self):
         for path in self.WORKFLOWS:

@@ -129,6 +129,22 @@ class CliWrapperTest(unittest.TestCase):
         self.call(["api", "graphql", "-XGET"], False)
         self.call(["api", "repos/BacLuc/r/pulls", "-f", "body=--hostname=evil.com", "--hostname=github.com"])
 
+    def test_label_colon_paths(self):
+        for label in ("agent-running:42750217969", "agent-running:1:2"):
+            for endpoint in (f"repos/BacLuc/r/issues/1/labels/{label}",
+                             f"/repos/BacLuc/r/issues/1/labels/{label}",
+                             f"https://api.github.com/repos/BacLuc/r/issues/1/labels/{label}"):
+                self.call(["api", endpoint])
+                self.call(["api", endpoint, "-X", "DELETE"])
+        for endpoint in ("repos/BacLuc/r/issues/1/labels/agent-running%3A42750217969",
+                         "repos/BacLuc/r/../r/issues/1/labels/agent-running:1",
+                         "repos/BacLuc/r//issues/1/labels/agent-running:1",
+                         "repos:foo/r/issues/1/labels/agent-running:1",
+                         "https://evil.com/repos/BacLuc/r/issues/1/labels/agent-running:1",
+                         "git://github.com/repos/BacLuc/r/issues/1/labels/agent-running:1",
+                         "repos/BacLuc/r/issues/1/labels/agent-running:1?x=1"):
+            self.call(["api", endpoint, "-X", "DELETE"], False)
+
     def test_revert(self):
         for argv in (
             ["pr", "revert", "123", "-R", "ecamp/ecamp3", "--title", "Revert change", "--body", "Revert change"],

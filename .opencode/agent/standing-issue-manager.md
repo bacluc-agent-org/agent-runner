@@ -26,7 +26,7 @@ the second item so useful work can continue without losing the deferred item.
 
 Dispatch only eligible top backlog work, at most `MAX_AGENT_DISPATCHES` items,
 defaulting to 5 when the variable is empty or invalid. Deduplicate before every
-dispatch against the issue's `agent-running` label, open active pull requests,
+dispatch against any issue label starting with `agent-running` (run-scoped claims), open active pull requests,
 and an existing in-progress run for the issue. Dispatch the
 `opencode.yml` workflow with the issue number, a precise implementation prompt,
 and the `coordinator` agent. Do not close issues automatically.

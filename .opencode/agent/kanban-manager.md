@@ -38,7 +38,9 @@ List open issues from the supplied issue repository, omit `agent-ignore` issues 
 add missing issues to the supplied project, and deduplicate by issue URL/number. Add open
 `bacluc-agent/*` pull requests that name a listed issue in their title, body, or branch, also
 deduplicating by URL, and give them the linked issue's `Kanban Status`. Do not close issues,
-remove valid items, or set `Done`.
+remove valid items, or set `Done`. Immediately after adding every newly added project #2 item,
+assign the mapped `backlog` option ID on the selected `Kanban Status` field; preserve the
+default `Status` field unchanged.
 
 Process one top item at a time in this order: `agent review`, `in progress`, `prioritized`,
 `refined`, then `backlog`. `human review` is terminal for this run: inspect it but never

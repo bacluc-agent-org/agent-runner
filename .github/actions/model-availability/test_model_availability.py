@@ -1466,19 +1466,20 @@ class TestOpencodeWhitelist:
 
 
 class TestModelAvailabilityAction:
-    def test_oauth_is_refreshed_outside_opencode_and_routed_through_aisix(self):
+    def test_setup_reuses_stored_oauth_and_routes_through_aisix(self):
         root = Path(__file__).parents[3]
         setup = (root / ".github/actions/setup-opencode/action.yml").read_text()
         assert "umask 077" in setup
-        assert 'python3 "$AGENT_RUNNER_SCRIPTS/refresh-token.py"' in setup
+        assert 'python3 "$AGENT_RUNNER_SCRIPTS/refresh-token.py"' not in setup
         assert "# renovate: datasource=docker depName=ghcr.io/api7/aisix\n        AISIX_VERSION=1.8.0" in setup
         assert 'AISIX_IMAGE="ghcr.io/api7/aisix:$AISIX_VERSION"' in setup
-        assert "CHATGPT_ACCESS_TOKEN" in setup
-        assert "CHATGPT_REFRESH_TOKEN" in setup
         assert "write_auth_content" in setup
         assert 'PYTHONPATH="$AGENT_RUNNER_SCRIPTS"' in setup
         assert "OpenCode auth content is not configured" in setup
-        assert 'if [[ -z "${OPENAI_REFRESH_TOKEN:-}" && -z "${OPENCODE_AUTH_CONTENT:-}" ]]; then' in setup
+        assert 'if [[ ! -s "$HOME/.local/share/opencode/auth.json" ]]; then' in setup
+        assert 'cp "$HOME/.local/share/opencode/auth.json" "$oauth_file"' in setup
+        assert 'gh secret set CHATGPT_ACCESS_TOKEN' not in setup
+        assert 'gh secret set CHATGPT_REFRESH_TOKEN' not in setup
         assert 'trap cleanup EXIT' in setup
         assert 'rm -f "$oauth_file"' in setup
         assert (root / "scripts/aisix_oauth.py").is_file()
@@ -2068,10 +2069,12 @@ class TestWorkflowOpenRouterSelection:
         assert explicit_guard < oauth_dispatch
         assert coordinator_guard < coordinator_dispatch
 
-    def test_setup_passes_openai_refresh_token_as_auth_content(self):
+    def test_setup_does_not_refresh_or_rotate_openai_auth(self):
         content = Path(".github/actions/setup-opencode/action.yml").read_text()
-        assert 'OPENCODE_AUTH_CONTENT="$(jq -cn --arg refresh "$OPENAI_REFRESH_TOKEN"' in content
-        assert 'PYTHONPATH="$AGENT_RUNNER_SCRIPTS" python3 "$AGENT_RUNNER_SCRIPTS/refresh-token.py"' in content
+        assert 'OPENCODE_AUTH_CONTENT="$(jq -cn --arg refresh "$OPENAI_REFRESH_TOKEN"' not in content
+        assert 'PYTHONPATH="$AGENT_RUNNER_SCRIPTS" python3 "$AGENT_RUNNER_SCRIPTS/refresh-token.py"' not in content
+        assert 'gh secret set CHATGPT_ACCESS_TOKEN' not in content
+        assert 'gh secret set CHATGPT_REFRESH_TOKEN' not in content
 
     def test_setup_consumes_the_opencode_auth_schema(self):
         content = Path(".github/actions/setup-opencode/action.yml").read_text()

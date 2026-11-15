@@ -140,16 +140,11 @@ runs:
         else
           printf 'OpenCode auth content is not configured\n'
         fi
-        if [[ -z "${OPENAI_REFRESH_TOKEN:-}" && -z "${OPENCODE_AUTH_CONTENT:-}" ]]; then
+        if [[ ! -s "$HOME/.local/share/opencode/auth.json" ]]; then
           printf 'ChatGPT OAuth credentials are not configured; skipping AISIX startup\n'
           exit 0
         fi
-        if [[ -n "${OPENCODE_AUTH_CONTENT:-}" ]]; then
-          cp "$HOME/.local/share/opencode/auth.json" "$oauth_file"
-        else
-          OPENCODE_AUTH_CONTENT="$(jq -cn --arg refresh "$OPENAI_REFRESH_TOKEN" '{openai:{refresh:$refresh}}')" \
-            PYTHONPATH="$AGENT_RUNNER_SCRIPTS" python3 "$AGENT_RUNNER_SCRIPTS/refresh-token.py" > "$oauth_file"
-        fi
+        cp "$HOME/.local/share/opencode/auth.json" "$oauth_file"
         jq -e '.openai.access != "" and .openai.refresh != "" and (.openai.expires | type == "number")' "$oauth_file" >/dev/null
         OPENAI_ACCESS_TOKEN="$(jq -r '.openai.access' "$oauth_file")"
         OPENAI_REFRESH_TOKEN="$(jq -r '.openai.refresh' "$oauth_file")"
@@ -188,9 +183,6 @@ runs:
           fi
           sleep 1
         done
-        github_token="${BACLUC_AGENT_GITHUB_TOKEN:-$GITHUB_TOKEN}"
-        printf '%s' "$OPENAI_ACCESS_TOKEN" | GH_TOKEN="$github_token" gh secret set CHATGPT_ACCESS_TOKEN --repo "$GITHUB_REPOSITORY"
-        printf '%s' "$OPENAI_REFRESH_TOKEN" | GH_TOKEN="$github_token" gh secret set CHATGPT_REFRESH_TOKEN --repo "$GITHUB_REPOSITORY"
         {
           printf 'OPENAI_ACCESS_TOKEN=\n'
           printf 'OPENAI_REFRESH_TOKEN=\n'

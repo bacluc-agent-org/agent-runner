@@ -300,6 +300,17 @@ def test_refresh_workflow_uses_opencode_oauth_and_validates_before_setting_secre
     assert "CHATGPT_ACCESS_TOKEN" not in workflow
 
 
+def test_refresh_workflow_is_the_only_oauth_secret_writer_and_preserves_failure_guard():
+    root = Path(__file__).parents[1]
+    setup = (root / ".github/actions/setup-opencode/action.yml").read_text(encoding="utf-8")
+    workflow = (root / ".github/workflows/refresh-chatgpt-auth.yml").read_text(encoding="utf-8")
+    assert "refresh-token.py" not in setup
+    assert "gh secret set OPENCODE_AUTH_JSON" not in setup
+    assert "scope=openid+profile+email+offline_access" in (root / "scripts/refresh-token.py").read_text()
+    assert "if: steps.refresh.outputs.refreshed == 'true' && steps.validate.outcome == 'success'" in workflow
+    assert "steps.refresh.outputs.refreshed != 'true' || steps.validate.outcome != 'success'" in workflow
+
+
 def test_force_fallback_input_gates_the_refresh_step():
     workflow = (
         Path(__file__).parents[1] / ".github/workflows/refresh-chatgpt-auth.yml"

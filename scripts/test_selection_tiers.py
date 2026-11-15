@@ -224,17 +224,17 @@ def test_setup_opencode_pins_cli_version_verified_with_chatgpt_oauth():
     assert "npm install --global @opencode/cli@2.2.5" in setup
 
 
-def test_setup_opencode_refreshes_tokens_outside_opencode_and_starts_aisix():
+def test_setup_opencode_reuses_stored_tokens_and_starts_aisix():
     root = Path(__file__).parents[1]
     setup = (root / ".github/actions/setup-opencode/action.yml").read_text()
-    assert 'python3 "$AGENT_RUNNER_SCRIPTS/refresh-token.py"' in setup
+    assert 'python3 "$AGENT_RUNNER_SCRIPTS/refresh-token.py"' not in setup
     assert "# renovate: datasource=docker depName=ghcr.io/api7/aisix\n        AISIX_VERSION=1.8.0" in setup
     assert 'AISIX_IMAGE="ghcr.io/api7/aisix:$AISIX_VERSION"' in setup
-    assert "CHATGPT_ACCESS_TOKEN" in setup
-    assert "CHATGPT_REFRESH_TOKEN" in setup
     assert 'aisix_dir="$RUNNER_TEMP/aisix-oauth"' in setup
     assert '$AISIX_DIR' not in setup
-    assert "Materialize OpenCode auth" not in setup
+    assert 'cp "$HOME/.local/share/opencode/auth.json" "$oauth_file"' in setup
+    assert 'gh secret set CHATGPT_ACCESS_TOKEN' not in setup
+    assert 'gh secret set CHATGPT_REFRESH_TOKEN' not in setup
 
 
 def test_oauth_refresh_workflows_use_scoped_non_canceling_concurrency_groups():

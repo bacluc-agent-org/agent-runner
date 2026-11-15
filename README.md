@@ -134,10 +134,33 @@ The installer saves the real CLI's absolute path before changing PATH.
   `bacluc-agent` or `bacluc-agent-org`; implicit destinations fail closed. The
   REST revert endpoint `repos/OWNER/REPO/pulls/N/reverts` is checked the same
   way.
-- REST PR creation is checked too, including implicit POST via fields or
-  `--input`. Ambiguous options, noncanonical paths and routing overrides fail
-  closed. Ordinary REST reads, issue comments, PATCH, forks and dispatches remain
-  available; accepted calls preserve arguments, stdin, output and exit status.
+- Repository mutations in `issue`, `repo`, `workflow`, `discussion`, `label`,
+  `release`, `secret`, `variable`, `ruleset` and `project` require an explicit
+  owned target: exactly one `-R`/`--repo` (or the command's owned
+  `--org`/`--owner`). A target may follow the subcommand or be consumed before
+  it (`gh issue -R bacluc/r create`); duplicates, missing targets and `@me`
+  fail closed. There is no `GH_REPO`, `GITHUB_REPOSITORY` or current-directory
+  fallback. Read-only subcommands such as `issue list`, `pr view`,
+  `workflow list`, `release download` and `secret list` stay available for
+  outsider repositories.
+- `gh repo fork <upstream> --org <owner>` validates only the destination
+  organization, so `gh repo fork ecamp/ecamp3 --org bacluc-agent` stays
+  allowed. `gh repo create` validates its positional `OWNER/NAME`; a bare name
+  is denied. `gh repo delete/edit/archive` validate their explicit target and
+  `gh repo rename` validates `-R`/`--repo` (the positional is the new name).
+- `gh api` mutations must use a canonical `repos/OWNER/REPO/...` path with an
+  owned owner; `orgs/...`, `user/repos`, `repositories/123`, search endpoints
+  and `{owner}`/`{repo}` placeholders are denied. Reads are unchanged, and
+  direct `gh api graphql` remains denied. Ambiguous options, noncanonical paths
+  and routing overrides fail closed.
+- `gh project` mutations require an owned `--owner`; `copy` validates
+  `--target-owner` and ignores the read-only `--source-owner`. Ownerless
+  `project field-delete` and other ID-only forms fail closed. `link`/`unlink`
+  validate `-R`/`--repo` only when it contains `/`.
+- `gh secret` and `gh variable` mutations need an owned `-R`/`--repo` or
+  `-o`/`--org`; `-u`/`--user` is denied. `gh ruleset` mutations accept an owned
+  `-R`/`--repo` or `--org`.
+- Accepted calls preserve arguments, stdin, output and exit status.
 - Direct `gh api graphql`, configured alias execution, alias management and
   extension commands are denied. Use builtin CLI commands or canonical REST
   endpoints instead. Unknown builtin commands/options on guarded routes require
@@ -149,9 +172,32 @@ the wrapper can bypass it. CLI builtin commands may internally use GraphQL;
 only direct `gh api graphql` is denied.
 
 Regression tests use a fake backend and never create forbidden PRs. Run
-`python3 -m unittest discover -s scripts -p test_gh_cli_wrapper.py` locally. The
+`./scripts/completion-check` locally; pytest discovers both
+`scripts/test_gh_cli_wrapper.py` and `scripts/test_http_guard.py`. The
 dispatchable CI workflow also runs the actual setup composite with a fake backend
-and verifies forwarding and historical denial in a later step outside the checkout.
+and verifies forwarding and denial in a later step outside the checkout.
+
+### Outbound HTTP guard (advisory)
+
+`scripts/http_guard.py` exposes `check_request(method, url)` and a CLI
+(`python scripts/http_guard.py METHOD URL`). `GET`, `HEAD` and `OPTIONS` are
+allowed to any valid http(s) URL. `POST`, `PUT`, `PATCH` and `DELETE` are
+allowed only over https on `github.com`, `api.github.com` or
+`uploads.github.com` when the path names a `bacluc`, `bacluc-agent` or
+`bacluc-agent-org` repository. Unknown methods, malformed URLs, userinfo,
+placeholders, `..`, empty segments, encoded separators and non-443 mutation
+ports are denied. A denied outsider POST appends one JSON line with
+`timestamp`, `method`, `host`, `path` and `reason` to
+`$RUNNER_TEMP/http_guard_denials.jsonl`; a write failure warns and still
+denies.
+
+The CLI prints `ALLOW <METHOD> <URL>` with exit 0 or `DENY: <reason>` with
+exit 1; wrong usage exits 2. The stdlib guard was chosen over `nono` (Rust
+Landlock/seccomp plus a CONNECT proxy, pinned binary/profile, cannot tell owned
+from outsider mutations, and a prior prototype broke legitimate `gh` GraphQL
+POSTs) and over bwrap/firejail/egress proxies (privileges, daemons or TLS
+interception). It is **advisory only**: it has no production caller, is not
+installed, and provides no kernel or socket enforcement.
 
 ## Repository variables
 

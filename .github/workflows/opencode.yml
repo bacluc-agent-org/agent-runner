@@ -519,6 +519,11 @@ jobs:
           printf 'Coordinator statuses: opencode=%s tee=%s\n' "$coordinator_status" "$coordinator_tee_status"
           echo "coordinator_status=${coordinator_status}" >> "$GITHUB_OUTPUT"
           echo "coordinator_tee_status=${coordinator_tee_status}" >> "$GITHUB_OUTPUT"
+          if ((coordinator_status == 0)) && [[ -f "$RUNNER_TEMP/opencode-fatal.json" ]]; then
+            printf '%s\n' 'Coordinator returned success after fatal-error-guard wrote a failure marker.' >&2
+            echo "failure_mode=error" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
           if ((coordinator_status == 124)); then
             echo "failure_mode=timeout" >> "$GITHUB_OUTPUT"
           fi
@@ -556,6 +561,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
         run: |
           set -Eeuo pipefail
+          if [[ "${FATAL_REASON:-}" == infrastructure ]]; then
+            printf '%s\n' 'Skipping model cache update after infrastructure failure.'
+            exit 0
+          fi
           cache_json=$(gh issue view "$CACHE_ISSUE" -R "$ISSUE_REPOSITORY" --json body --jq '.body' 2>/dev/null || echo '{}')
           checked="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           if [[ "$FATAL_REASON" == balance || "$FATAL_REASON" == auth ]]; then

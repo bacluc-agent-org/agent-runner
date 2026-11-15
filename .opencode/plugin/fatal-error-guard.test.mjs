@@ -437,3 +437,46 @@ test("plugin setup failure writes an infrastructure marker and exits", async () 
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("plugin cleanup ignores an iterator rejection after abort", async () => {
+  const tmp =
+    (process.env.RUNNER_TEMP = `/tmp/fatal-guard-test-${Math.random()}`);
+  const markerPath = `${tmp}/opencode-fatal.json`;
+  const origExit = process.exit;
+  let exitCode = null;
+  process.exit = function (code) {
+    exitCode = code;
+    throw new Error("exit");
+  };
+  try {
+    mkdirSync(tmp, { recursive: true });
+    const unsub = plugin.setup({
+      event: {
+        async subscribe({ signal }) {
+          return {
+            [Symbol.asyncIterator]() {
+              return this;
+            },
+            next() {
+              return new Promise((resolve, reject) => {
+                signal.addEventListener(
+                  "abort",
+                  () => reject(new Error("iterator closed")),
+                  { once: true },
+                );
+              });
+            },
+          };
+        },
+      },
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    unsub();
+    await new Promise((r) => setTimeout(r, 10));
+  } finally {
+    process.exit = origExit;
+  }
+  assert.equal(exitCode, null);
+  assert.throws(() => readFileSync(markerPath, "utf8"), /ENOENT/);
+  rmSync(tmp, { recursive: true, force: true });
+});

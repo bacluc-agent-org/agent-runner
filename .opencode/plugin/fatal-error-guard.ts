@@ -96,6 +96,7 @@ const plugin: Plugin = {
           }
         }
       } catch (error) {
+        if (controller.signal.aborted) return;
         if (stopping) return;
         const marker = {
           reason: "infrastructure",

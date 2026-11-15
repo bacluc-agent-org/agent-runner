@@ -21,6 +21,20 @@ CONFIG = {
 
 
 @pytest.fixture(autouse=True)
+def _no_runner_injected_auth(monkeypatch):
+    """The agent runner exports proxy/auth env vars; tests must not inherit them."""
+    for name in (
+        "AISIX_PROXY_URL",
+        "AISIX_CALLER_KEY",
+        "OPENAI_ACCESS_TOKEN",
+        "OPENAI_ACCESS_TOKEN_FILE",
+        "OPENAI_REFRESH_TOKEN",
+        "OPENCODE_AUTH_CONTENT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _provider_api_keys(monkeypatch):
     """Provider discovery tests exercise the real PROVIDERS loop; provide the keys."""
     monkeypatch.setenv("OPENCODE_GO_API_KEY", "test-go-key")

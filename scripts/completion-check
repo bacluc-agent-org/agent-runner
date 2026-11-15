@@ -5,7 +5,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 # The .opencode tests import TypeScript directly and use node --test globs,
 # which need Node >= 22. Prefer a newer Node when the default is too old
-# (e.g. the Blacksmith runners ship Node 20).
+# (e.g. GitHub-hosted ubuntu-latest runners ship Node 20).
 if ! node --version | grep -qE '^v(2[2-9]|[3-9][0-9])\.'; then
   for node_dir in /opt/hostedtoolcache/node/*/x64/bin; do
     if "$node_dir/node" --version | grep -qE '^v(2[2-9]|[3-9][0-9])\.'; then
@@ -23,17 +23,13 @@ ACTIONLINT_VERSION=1.7.12
 mount=(-v "$PWD:/workspace" -w /workspace)
 status=0
 
-# The prettier check must not cover nested git checkouts in the workspace
-# (e.g. cloned target repositories): they have their own formatting rules
-# and toolchain. git lists such checkouts as a single untracked "<dir>/"
-# entry, while regular untracked files of this repository stay checked.
+# Nested git checkouts are expected only in ignored directories, which the
+# merged .gitignore skips. Merging .prettierignore as well also skips
+# gitignored generated files (e.g. .opencode/package-lock.json, uv.lock).
 prettier_ignore=".prettierignore.completion-check"
 trap 'rm -f "$prettier_ignore"' EXIT
 cat .gitignore .prettierignore 2> /dev/null > "$prettier_ignore" || true
 printf '%s\n' "$prettier_ignore" >> "$prettier_ignore"
-while IFS= read -r entry; do
-  if [[ -e "${entry%/}/.git" ]]; then printf '%s\n' "${entry%/}/"; fi
-done < <(git ls-files --others --exclude-standard) >> "$prettier_ignore"
 
 check() {
   local name="$1"

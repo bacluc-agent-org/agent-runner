@@ -110,6 +110,11 @@ FAKE_OPENCODE = r"""#!/usr/bin/env bash
 printf '## Goal\nDo the thing.\n\n## How to implement\nChange the code.\n'
 """
 
+FAKE_OPENCODE_DRAINING_STDIN = r"""#!/usr/bin/env bash
+cat >/dev/null
+printf '## Goal\nDo the thing.\n\n## How to implement\nChange the code.\n'
+"""
+
 
 def extract_block(start_text, end_text):
     lines = WORKFLOW.read_text().splitlines()
@@ -160,7 +165,7 @@ def refine_step_block():
 
 
 class WorkflowRun:
-    def __init__(self, tmp_path):
+    def __init__(self, tmp_path, opencode_script=FAKE_OPENCODE):
         self.tmp_path = tmp_path
         self.fixtures = tmp_path / "fixtures"
         self.fixtures.mkdir()
@@ -172,7 +177,7 @@ class WorkflowRun:
         gh.write_text(FAKE_GH)
         gh.chmod(0o755)
         opencode = bin_dir / "opencode"
-        opencode.write_text(FAKE_OPENCODE)
+        opencode.write_text(opencode_script)
         opencode.chmod(0o755)
         self.env = {
             **os.environ,
@@ -521,6 +526,28 @@ def test_label_create_failure_does_not_abort_the_refine_step(tmp_path):
     assert "could not ensure the agent-refined label exists" in result.stdout
     assert "could not ensure the ready-for-implementation label exists" in result.stdout
     assert "Refinement complete: 1 refined, 0 failed." in result.stdout
+
+
+def test_every_candidate_is_refined_when_opencode_drains_stdin(tmp_path):
+    run = WorkflowRun(tmp_path, opencode_script=FAKE_OPENCODE_DRAINING_STDIN)
+    run.searches(unrefined=[1, 2])
+    run.comments(1, [])
+    run.comments(2, [])
+    for number in (1, 2):
+        run.write_json(
+            f"issue-{number}.json",
+            {
+                "title": f"Issue {number}",
+                "body": "Make it better",
+                "updatedAt": "2026-11-08T10:00:00Z",
+            },
+        )
+
+    result = run.run(refine_step_block())
+    assert result.returncode == 0, result.stderr
+    assert "=== Refining issue #1 ===" in result.stdout
+    assert "=== Refining issue #2 ===" in result.stdout
+    assert "Refinement complete: 2 refined, 0 failed." in result.stdout
 
 
 def test_marker_timestamp_is_snapshotted_before_collection():

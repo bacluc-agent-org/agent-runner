@@ -272,7 +272,7 @@ jobs:
               : "${stop_token:?stop-commands fence token generation failed}"
               printf '::stop-commands::%s\n' "$stop_token"
               timeout 8m opencode run --agent issue-refiner --model "$selection_model" --title "issue-refiner" \
-                "$(< "$prompt")" | tee "$out"
+                "$(< "$prompt")" </dev/null | tee "$out"
               statuses=("${PIPESTATUS[@]}")
               printf '::%s::\n' "$stop_token"
               opencode_status=${statuses[0]}

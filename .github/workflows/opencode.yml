@@ -605,6 +605,9 @@ jobs:
           while IFS= read -r gitdir; do
             repo_dir="$(dirname "$gitdir")"
             cd "$repo_dir"
+            # Deterministic identity for this repo only; never write runner-global config.
+            git config user.name "agent-runner"
+            git config user.email "agent-runner@users.noreply.github.com"
 
             # Remember where the coordinator left its work, so the run-result
             # comment can point at it even when there is nothing left to push.
@@ -622,14 +625,38 @@ jobs:
 
             git checkout -B "$BRANCH_NAME" 2>/dev/null || git checkout "$BRANCH_NAME"
             git add -A
-            git commit -m "agent-run: automated commit for issue #${ISSUE_NUMBER} (run ${GITHUB_RUN_ID})" || true
+            commit_status=0
+            git commit -m "agent-run: automated commit for issue #${ISSUE_NUMBER} (run ${GITHUB_RUN_ID})" || commit_status=$?
+            if ((commit_status != 0)); then
+              # Plain text on purpose: this runs inside a ::stop-commands:: fence.
+              printf 'Failed to commit changes in %s (status %s); not pushing this repo.\n' "$repo_dir" "$commit_status" >&2
+              cd - >/dev/null
+              continue
+            fi
             remote_url=$(git remote get-url origin 2>/dev/null || true)
-            git push -u origin "$BRANCH_NAME" 2>/dev/null || {
+            push_status=0
+            if git push -u origin "$BRANCH_NAME" 2>/dev/null; then
+              push_status=0
+            else
+              push_status=$?
               # If origin push fails, try with token
               token_url="${remote_url/https:\/\//https:\/\/x-access-token:${GITHUB_TOKEN}@}"
-              git remote set-url origin "$token_url"
-              git push -u origin "$BRANCH_NAME"
-            }
+              if git remote set-url origin "$token_url"; then
+                if git push -u origin "$BRANCH_NAME"; then
+                  push_status=0
+                else
+                  push_status=$?
+                fi
+              else
+                push_status=$?
+              fi
+            fi
+            if ((push_status != 0)); then
+              # Plain text on purpose: this runs inside a ::stop-commands:: fence.
+              printf 'Failed to push changes in %s (status %s); not reporting this repo as pushed.\n' "$repo_dir" "$push_status" >&2
+              cd - >/dev/null
+              continue
+            fi
             PUSHED_REPOS="${PUSHED_REPOS}${repo_dir} (${BRANCH_NAME})\n"
             # owner/repo slug of the pushed remote, for the org-wide PR lookup
             PUSHED_SLUGS="${PUSHED_SLUGS}$(printf '%s' "$remote_url" | sed -E 's#^.*github\.com[:/]+##; s#\.git$##')\n"

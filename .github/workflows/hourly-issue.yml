@@ -239,11 +239,12 @@ jobs:
             done
             # Newest non-bot feedback on the issue or on the matched PR. Formal reviews carry
             # submitted_at and also mirror inline review comments, so one call covers both.
+            authenticated_actor="$(gh api user --jq '.login' 2>/dev/null || echo '')"
             pr_human_ts="none"
             if [[ -n "$pr_number" ]]; then
-              pr_human_ts="$(gh pr view "$pr_number" -R "$pr_repo" --json comments,reviews --jq '[[.comments[] | select(.author.login != "bacluc-agent") | .createdAt], [.reviews[] | select(.author.login != "bacluc-agent") | .submittedAt]] | add | max // "none"' 2>/dev/null || echo "none")"
+              pr_human_ts="$(gh pr view "$pr_number" -R "$pr_repo" --json comments,reviews 2>/dev/null | jq -r --arg agent_login "$authenticated_actor" '[[.comments[] | select(.author.login != $agent_login) | .createdAt], [.reviews[] | select(.author.login != $agent_login) | .submittedAt]] | add | max // "none"' || echo "none")"
             fi
-            issue_human_ts="$(gh issue view "$num" -R "$ISSUE_REPOSITORY" --json comments --jq '[.comments[] | select(.author.login != "bacluc-agent")] | max_by(.createdAt) | .createdAt // "none"' 2>/dev/null || echo "none")"
+            issue_human_ts="$(gh issue view "$num" -R "$ISSUE_REPOSITORY" --json comments 2>/dev/null | jq -r --arg agent_login "$authenticated_actor" '[.comments[] | select(.author.login != $agent_login)] | max_by(.createdAt) | .createdAt // "none"' || echo "none")"
             jq -nc --arg num "$num" --arg pr "$pr_info" --arg a "$issue_human_ts" --arg b "$pr_human_ts" '{number:($num|tonumber),pr_info:$pr,last_human_comment_at:([$a,$b]|map(select(test("^[0-9]")))|max // null)}' >> "$RUNNER_TEMP/enrichment.jsonl"
           done < <(shuf "$candidates")
           jq -n --slurpfile issues "$enriched" --slurpfile enrichment "$RUNNER_TEMP/enrichment.jsonl" '$issues[0] | map(. as $issue | ($enrichment | map(select(.number == $issue.number)) | .[0]) as $e | if $e then . + {last_human_comment_at:$e.last_human_comment_at, pr_state:($e.pr_info|split(" ")[0]), pr_number:(if $e.pr_info == "none" then null else ($e.pr_info|split("#")[1]|split(" ")[0]|tonumber) end), pr_last_commit_at:(if $e.pr_info == "none" then null else ($e.pr_info|split("last-commit:")[1]) end)} else . end)' > "$RUNNER_TEMP/candidates.final.json"

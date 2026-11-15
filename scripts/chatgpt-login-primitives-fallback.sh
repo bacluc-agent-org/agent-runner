@@ -63,6 +63,7 @@ recover_blocking_login() {
   local handoff_file="$RUNNER_TEMP/chatgpt-login-recovery.handoff"
   local command_file="$RUNNER_TEMP/chatgpt-login-recovery.commands"
   local snapshot_tmp=''
+  local status_tmp=''
   local handoff_tmp=''
   local command_tmp=''
   local batch_file=''
@@ -92,6 +93,7 @@ recover_blocking_login() {
   capture_snapshot() {
     run_with_deadline "$command_timeout" playwright-cli "-s=$session" snapshot > "$snapshot_tmp" 2> /dev/null || return 1
     redact_snapshot "$snapshot_tmp" || return 1
+    [[ -s "$snapshot_tmp" ]] || return 1
     mv -f -- "$snapshot_tmp" "$snapshot_file" || return 1
     snapshot_tmp=$(mktemp "$snapshot_file.XXXXXX")
     chmod 600 "$snapshot_tmp"
@@ -102,14 +104,15 @@ recover_blocking_login() {
       run_with_deadline "$handoff_timeout" playwright-cli "-s=$session" detach > /dev/null 2>&1 || true
       attached=false
     fi
-    rm -f -- "$snapshot_tmp" "$handoff_tmp" "$command_tmp" "$batch_file" "$snapshot_file" "$handoff_file" "$command_file"
+    rm -f -- "$snapshot_tmp" "$status_tmp" "$handoff_tmp" "$command_tmp" "$batch_file" "$snapshot_file" "$handoff_file" "$command_file"
   }
   trap cleanup_recovery RETURN
   rm -f -- "$snapshot_file" "$handoff_file" "$command_file"
   snapshot_tmp=$(mktemp "$snapshot_file.XXXXXX")
+  status_tmp=$(mktemp "$handoff_file.status.XXXXXX")
   handoff_tmp=$(mktemp "$handoff_file.XXXXXX")
   command_tmp=$(mktemp "$command_file.XXXXXX")
-  chmod 600 "$snapshot_tmp" "$handoff_tmp" "$command_tmp"
+  chmod 600 "$snapshot_tmp" "$status_tmp" "$handoff_tmp" "$command_tmp"
   mv -f -- "$command_tmp" "$command_file"
   command_tmp=''
 
@@ -132,16 +135,8 @@ operations=snapshot|click|hover|check|uncheck|fill|type|fill_secret|type_secret|
 timeout_seconds=$handoff_timeout
 command_timeout_seconds=$command_timeout
 EOF
-  local recovery_prompt
-  recovery_prompt=$(
-    cat << EOF
-Drive the blocked ChatGPT login through the attached Playwright session.
-Read only the snapshot at $snapshot_file. Write only newline-delimited commands to $command_file, then exit.
-Allowed commands are exactly: snapshot, click eN, hover eN, check eN, uncheck eN, fill eN TEXT, type eN TEXT, fill_secret eN email|password, type_secret eN email|password, otp eN, select eN VALUE, goto https://auth.openai.com/PATH, goto https://chatgpt.com/PATH, press KEY, reload, go-back, go-forward, status.
-Use symbolic secret commands for credentials and otp for TOTP; never read, print, or write credential values. Use only refs from the snapshot. URLs must use https on auth.openai.com, chatgpt.com, www.chatgpt.com, or chat.openai.com, with optional path, query, and fragment. TEXT and VALUE may contain up to 200 printable characters. Keep the batch at most 32 commands. Do not call playwright-cli directly, modify any other file, or report secrets.
-EOF
-  )
   local handoff_ready=false
+  local agent_attempt=0
   while ((SECONDS < deadline)); do
     run_agent_with_deadline() {
       local max_timeout="$1"
@@ -156,12 +151,39 @@ EOF
       printf 'Playwright CLI could not capture the login page\n' >&2
       return 1
     fi
+    status_json=''
+    if ! status_json=$(run_with_deadline "$command_timeout" uv run scripts/chatgpt-login.py status); then
+      status_json='{"step":"unknown","url":"","title":"","blocking":"status unavailable","code_ready":false}'
+      printf 'Playwright recovery status unavailable; retaining the browser session\n' >&2
+    fi
+    printf '%s\n' "$status_json" > "$status_tmp"
+    redact_snapshot "$status_tmp" || return 1
+    sanitized_status=$(jq -ce '{step:((.step // "unknown") | tostring | .[0:100]),url:((.url // "") | tostring | .[0:500]),title:((.title // "") | tostring | .[0:500]),blocking:((.blocking // null) | if . == null then null else tostring | .[0:200] end),code_ready:(.code_ready // false)}' "$status_tmp") || return 1
+    snapshot_content=$(< "$snapshot_file")
+    [[ -n "$snapshot_content" ]] || return 1
+    snapshot_content=${snapshot_content:0:12000}
+    remaining=$((deadline - SECONDS))
+    recovery_prompt=$(
+      cat << EOF
+Drive the blocked ChatGPT login through the attached Playwright session.
+Current sanitized status (do not infer secrets):
+$sanitized_status
+Current redacted Playwright snapshot:
+$snapshot_content
+Write only newline-delimited commands to $command_file, then exit.
+Allowed commands are exactly: snapshot, click eN, hover eN, check eN, uncheck eN, fill eN TEXT, type eN TEXT, fill_secret eN email|password, type_secret eN email|password, otp eN, select eN VALUE, goto https://auth.openai.com/PATH, goto https://chatgpt.com/PATH, press KEY, reload, go-back, go-forward, status.
+Use symbolic secret commands for credentials and otp for TOTP; never read, print, or write credential values. Use only refs from the snapshot. URLs must use https on auth.openai.com, chatgpt.com, www.chatgpt.com, or chat.openai.com, with optional path, query, and fragment. TEXT and VALUE may contain up to 200 printable characters. Keep the batch at most 32 commands. The global recovery deadline has $remaining seconds remaining. Do not call playwright-cli directly, modify any other file, or report secrets.
+EOF
+    )
+    printf 'Playwright recovery status: %s\n' "$sanitized_status" >&2
     : > "$command_file"
-    local remaining=$((deadline - SECONDS))
+    remaining=$((deadline - SECONDS))
     ((remaining > 0)) || break
     local run_timeout="$agent_timeout"
     ((run_timeout > remaining)) && run_timeout=$remaining
+    ((agent_attempt += 1))
     if ! run_agent_with_deadline "$run_timeout" opencode run --auto --model "$agent_model" --title chatgpt-auth-recovery "$recovery_prompt" > /dev/null 2>&1; then
+      printf 'Playwright recovery agent attempt %s failed; retrying within the global deadline\n' "$agent_attempt" >&2
       ((SECONDS < deadline)) && sleep 1
       continue
     fi

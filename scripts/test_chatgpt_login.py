@@ -569,6 +569,15 @@ def test_primitives_fallback_observes_retries_and_validates_login_output():
     assert "opencode run --auto --model" in helper
 
 
+def test_workflow_human_comment_filters_use_authenticated_actor():
+    root = Path(__file__).parents[1]
+    for name in (".github/workflows/opencode.yml", ".github/workflows/hourly-issue.yml"):
+        workflow = (root / name).read_text(encoding="utf-8")
+        assert "authenticated_actor=\"$(gh api user --jq '.login'" in workflow
+        assert "--arg agent_login \"$authenticated_actor\"" in workflow
+        assert 'author.login != "bacluc-agent"' not in workflow
+
+
 def test_primitives_fallback_steps_after_a_blocking_status():
     helper = (Path(__file__).with_name("chatgpt-login-primitives-fallback.sh")).read_text(encoding="utf-8")
     assert "blocking_recovery_attempted" not in helper
@@ -1041,6 +1050,7 @@ exec /bin/mv "$@"
     assert (tmp_path / "playwright-cli-calls").read_text().splitlines() == [
         "-s=chatgpt-auth-recovery|attach|--cdp=http://127.0.0.1:9222",
         "-s=chatgpt-auth-recovery|snapshot",
+        "-s=chatgpt-auth-recovery|detach",
     ]
 
     (tmp_path / "stopped").unlink()
@@ -1149,7 +1159,7 @@ exec /bin/mv "$@"
         timeout=10,
     )
     assert changing.returncode == 0
-    assert (tmp_path / "agent-snapshots").read_text().splitlines() == ["snapshot-1", "snapshot-3"]
+    assert (tmp_path / "agent-snapshots").read_text().splitlines() == ["snapshot-1"]
     assert int((tmp_path / "status-count").read_text()) >= 3
 
     for path in tmp_path.iterdir():

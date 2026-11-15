@@ -138,15 +138,16 @@ The installer saves the real CLI's absolute path before changing PATH.
   `--input`. Ambiguous options, noncanonical paths and routing overrides fail
   closed. Ordinary REST reads, issue comments, PATCH, forks and dispatches remain
   available; accepted calls preserve arguments, stdin, output and exit status.
-- Direct `gh api graphql`, configured alias execution, alias management and
-  extension commands are denied. Use builtin CLI commands or canonical REST
-  endpoints instead. Unknown builtin commands/options on guarded routes require
-  review before adding support; this is not a complete CLI parser.
+- Direct non-project-v2 `gh api graphql`, configured alias execution, alias management and
+  extension commands are denied. Project-v2 GraphQL queries and mutations are limited to the
+  supported project fields and operations; use builtin CLI commands or canonical REST endpoints
+  for everything else. Unknown builtin commands/options on guarded routes require review before
+  adding support; this is not a complete CLI parser.
 
 This is an accidental-misrouting guardrail, **not a sandbox or universal PR
 prevention**. An absolute executable path, direct HTTP, changing PATH or changing
 the wrapper can bypass it. CLI builtin commands may internally use GraphQL;
-only direct `gh api graphql` is denied.
+only supported project-v2 GraphQL operations are allowed directly.
 
 Regression tests use a fake backend and never create forbidden PRs. Run
 `python3 -m unittest discover -s scripts -p test_gh_cli_wrapper.py` locally. The

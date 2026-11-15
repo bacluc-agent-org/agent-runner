@@ -575,7 +575,21 @@ def test_workflow_human_comment_filters_use_authenticated_actor():
         workflow = (root / name).read_text(encoding="utf-8")
         assert "authenticated_actor=\"$(gh api user --jq '.login'" in workflow
         assert "--arg agent_login \"$authenticated_actor\"" in workflow
+        assert workflow.count("($agent_login | length) > 0 and .author.login != $agent_login") >= 1
         assert 'author.login != "bacluc-agent"' not in workflow
+
+
+def test_workflow_actor_lookup_failure_does_not_classify_comments_as_human():
+    comments = {"comments": [{"author": {"login": "bacluc-agent"}, "createdAt": "2026-01-01T00:00:00Z"}]}
+    expression = '[.comments[] | select(($agent_login | length) > 0 and .author.login != $agent_login)] | max_by(.createdAt) | .createdAt // "none"'
+    result = subprocess.run(
+        ["jq", "-r", "--arg", "agent_login", "", expression],
+        input=json.dumps(comments),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert result.stdout.strip() == "none"
 
 
 def test_primitives_fallback_steps_after_a_blocking_status():

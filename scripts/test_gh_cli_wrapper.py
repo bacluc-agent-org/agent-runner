@@ -56,6 +56,24 @@ def verify_installed():
             assert result.returncode != 0, denied
             assert "gh cli wrapper:" in result.stderr, denied
             assert not log.exists(), denied
+        for argv in (["issue", "create", "-R", "bacluc/r", "--title", "x"],
+                     ["repo", "fork", "ecamp/ecamp3", "--org", "bacluc-agent"],
+                     ["workflow", "run", "ci.yml", "-R", "bacluc-agent-org/r"],
+                     ["api", "repos/BacLuc/r/issues", "-XPOST"]):
+            result = subprocess.run(["bash", "-c", 'exec gh "$@"', "test", *argv], cwd=directory,
+                                    env=env, input="payload\n", capture_output=True, text=True)
+            assert result.returncode == 23, result.stderr
+            assert json.loads(result.stdout) == {"argv": argv, "stdin": "payload\n"}
+            log.unlink()
+        for argv in (["issue", "create", "-R", "ecamp/ecamp3", "--title", "x"],
+                     ["repo", "fork", "ecamp/ecamp3", "--org", "outsider"],
+                     ["workflow", "run", "ci.yml", "-R", "outsider/r"],
+                     ["api", "repos/outsider/r/issues", "-XPOST"]):
+            result = subprocess.run(["bash", "-c", 'exec gh "$@"', "test", *argv], cwd=directory,
+                                    env=env, capture_output=True, text=True)
+            assert result.returncode != 0, argv
+            assert "gh cli wrapper:" in result.stderr, argv
+            assert not log.exists(), argv
     print("Installed composite wrapper: forwarding and historical denial passed")
 
 
@@ -154,22 +172,229 @@ class CliWrapperTest(unittest.TestCase):
             self.call(argv)
 
     def test_other_calls_and_aliases(self):
-        for argv in (["issue", "comment", "234", "-R", "outsider/r", "--body", "pr create"],
-                     ["pr", "view", "10800", "-R", "ecamp/ecamp3"], ["search", "issues", "test"],
+        for argv in (["pr", "view", "10800", "-R", "ecamp/ecamp3"], ["search", "issues", "test"],
                      ["repo", "fork", "ecamp/ecamp3", "--org", "bacluc-agent"],
-                     ["workflow", "run", "ci.yml", "--ref", "issue-234"],
+                     ["workflow", "run", "ci.yml", "--ref", "issue-234", "-R", "BacLuc/r"],
+                     ["api", "search/issues", "-XGET", "-fq=repo:ecamp/ecamp3"],
+                     ["api", "repos/ecamp/ecamp3/issues"]):
+            self.call(argv, TEST_STATUS="17")
+        for argv in (["issue", "comment", "234", "-R", "outsider/r", "--body", "pr create"],
                      ["api", "repos/ecamp/ecamp3/issues/1/comments", "-fbody=test"],
                      ["api", "repos/{owner}/{repo}/issues/comments/1", "-XPATCH", "-fbody=test"],
                      ["api", "repos/ecamp/ecamp3/forks", "-XPOST"],
-                     ["api", "search/issues", "-XGET", "-fq=repo:ecamp/ecamp3"],
                      ["api", "repos/ecamp/ecamp3/actions/workflows/ci.yml/dispatches", "-fref=main"]):
-            self.call(argv, TEST_STATUS="17")
+            self.call(argv, False)
         for argv in (["alias", "set", "p", "pr create"], ["extension", "exec", "p"], ["extensions", "exec", "p"],
                      ["custom"], ["--repo=BacLuc/r", "pr", "create"]):
             self.call(argv, False)
         self.call(["pr", "view"], False, TEST_ALIASES="pr: !echo bypass\n")
         self.call(["pr", "view"], False, TEST_ALIAS_STATUS="1")
         self.call(["pr", "view"], TEST_ALIASES="co: pr checkout\n")
+
+    def test_issue_targets(self):
+        for owner in ("bacluc", "bacluc-agent", "bacluc-agent-org"):
+            for argv in (
+                ["issue", "create", "-R", f"{owner}/r", "--title", "x"],
+                ["issue", "comment", "1", "-R", f"{owner}/r", "--body", "x"],
+                ["issue", "edit", "1", "-R", f"{owner}/r", "--title", "x"],
+                ["issue", "close", "1", "-R", f"{owner}/r"],
+                ["issue", "reopen", "1", "-R", f"{owner}/r"],
+                ["issue", "lock", "1", "-R", f"{owner}/r"],
+                ["issue", "unlock", "1", "-R", f"{owner}/r"],
+                ["issue", "transfer", "1", f"{owner}/dest", "-R", f"{owner}/r"],
+                ["issue", "-R", f"{owner}/r", "create", "--title", "x"],
+            ):
+                self.call(argv)
+        for argv in (["issue", "list", "-R", "ecamp/ecamp3"],
+                     ["issue", "view", "1", "-R", "ecamp/ecamp3"], ["issue", "--help"]):
+            self.call(argv)
+        for argv in (
+            ["issue", "create", "--title", "x"],
+            ["issue", "create", "-R", "ecamp/ecamp3", "--title", "x"],
+            ["issue", "comment", "1", "-R", "outsider/r", "--body", "x"],
+            ["issue", "edit", "1", "-R", "outsider/r", "--title", "x"],
+            ["issue", "close", "1", "-R", "outsider/r"],
+            ["issue", "reopen", "1", "-R", "outsider/r"],
+            ["issue", "lock", "1", "-R", "outsider/r"],
+            ["issue", "unlock", "1", "-R", "outsider/r"],
+            ["issue", "transfer", "1", "ecamp/ecamp3", "-R", "BacLuc/r"],
+            ["issue", "create", "-R", "BacLuc/r", "-R", "BacLuc/r", "--title", "x"],
+            ["issue", "-R", "outsider/r", "create", "--title", "x"],
+            ["issue", "--title", "x", "create"],
+        ):
+            self.call(argv, False)
+
+    def test_repo_targets(self):
+        for owner in ("bacluc", "bacluc-agent", "bacluc-agent-org"):
+            for argv in (
+                ["repo", "fork", "ecamp/ecamp3", "--org", owner],
+                ["repo", "create", f"{owner}/r"],
+                ["repo", "delete", f"{owner}/r"],
+                ["repo", "edit", f"{owner}/r", "--description", "x"],
+                ["repo", "archive", f"{owner}/r"],
+                ["repo", "rename", "new-name", "-R", f"{owner}/r"],
+                ["repo", "delete", "-R", f"{owner}/r"],
+            ):
+                self.call(argv)
+        self.call(["repo", "view", "ecamp/ecamp3"])
+        for argv in (
+            ["repo", "fork", "ecamp/ecamp3", "--org", "outsider"],
+            ["repo", "fork", "ecamp/ecamp3"],
+            ["repo", "fork", "ecamp/ecamp3", "--org", "bacluc-agent", "--org", "bacluc"],
+            ["repo", "create", "r"],
+            ["repo", "create", "ecamp/r"],
+            ["repo", "delete", "ecamp/r"],
+            ["repo", "edit", "ecamp/r", "--description", "x"],
+            ["repo", "archive", "ecamp/r"],
+            ["repo", "rename", "new-name", "-R", "outsider/r"],
+            ["repo", "rename", "new-name"],
+            ["repo", "delete", "BacLuc/r", "-R", "BacLuc/r"],
+            ["repo", "-R", "outsider/r", "delete"],
+        ):
+            self.call(argv, False)
+
+    def test_workflow_targets(self):
+        for owner in ("bacluc", "bacluc-agent", "bacluc-agent-org"):
+            for argv in (
+                ["workflow", "run", "ci.yml", "-R", f"{owner}/r"],
+                ["workflow", "dispatch", "ci.yml", "-R", f"{owner}/r"],
+                ["workflow", "enable", "ci.yml", "-R", f"{owner}/r"],
+                ["workflow", "disable", "ci.yml", "-R", f"{owner}/r"],
+                ["workflow", "-R", f"{owner}/r", "run", "ci.yml"],
+            ):
+                self.call(argv)
+        for argv in (["workflow", "list", "-R", "ecamp/ecamp3"],
+                     ["workflow", "view", "ci.yml", "-R", "ecamp/ecamp3"]):
+            self.call(argv)
+        for argv in (
+            ["workflow", "run", "ci.yml"],
+            ["workflow", "run", "ci.yml", "-R", "outsider/r"],
+            ["workflow", "dispatch", "ci.yml", "-R", "outsider/r"],
+            ["workflow", "enable", "ci.yml", "-R", "outsider/r"],
+            ["workflow", "disable", "ci.yml", "-R", "outsider/r"],
+            ["workflow", "-R", "outsider/r", "run", "ci.yml"],
+            ["workflow", "run", "ci.yml", "-R", "BacLuc/r", "-R", "BacLuc/r"],
+        ):
+            self.call(argv, False)
+
+    def test_discussion_label_release(self):
+        for owner in ("bacluc", "bacluc-agent", "bacluc-agent-org"):
+            for argv in (
+                ["discussion", "create", "-R", f"{owner}/r", "--title", "x"],
+                ["discussion", "comment", "1", "-R", f"{owner}/r", "--body", "x"],
+                ["discussion", "edit", "1", "-R", f"{owner}/r", "--title", "x"],
+                ["label", "create", "bug", "-R", f"{owner}/r", "--color", "fff"],
+                ["label", "edit", "bug", "-R", f"{owner}/r", "--name", "x"],
+                ["label", "delete", "bug", "-R", f"{owner}/r"],
+                ["label", "clone", "ecamp/ecamp3", "-R", f"{owner}/r"],
+                ["release", "create", "v1", "-R", f"{owner}/r"],
+                ["release", "new", "v1", "-R", f"{owner}/r"],
+                ["release", "edit", "v1", "-R", f"{owner}/r"],
+                ["release", "delete", "v1", "-R", f"{owner}/r"],
+                ["release", "upload", "v1", "file", "-R", f"{owner}/r"],
+                ["release", "delete-asset", "v1", "file", "-R", f"{owner}/r"],
+            ):
+                self.call(argv)
+        for argv in (["discussion", "list", "-R", "ecamp/ecamp3"],
+                     ["label", "list", "-R", "ecamp/ecamp3"],
+                     ["release", "list", "-R", "ecamp/ecamp3"],
+                     ["release", "view", "v1", "-R", "ecamp/ecamp3"],
+                     ["release", "download", "v1", "-R", "ecamp/ecamp3"],
+                     ["release", "verify", "v1", "-R", "ecamp/ecamp3"]):
+            self.call(argv)
+        for argv in (
+            ["discussion", "create", "-R", "outsider/r", "--title", "x"],
+            ["discussion", "comment", "1", "-R", "outsider/r", "--body", "x"],
+            ["discussion", "edit", "1", "-R", "outsider/r", "--title", "x"],
+            ["label", "create", "bug", "-R", "outsider/r"],
+            ["label", "edit", "bug", "-R", "outsider/r"],
+            ["label", "delete", "bug", "-R", "outsider/r"],
+            ["label", "clone", "ecamp/ecamp3", "-R", "outsider/r"],
+            ["release", "create", "v1", "-R", "outsider/r"],
+            ["release", "new", "v1", "-R", "outsider/r"],
+            ["release", "edit", "v1", "-R", "outsider/r"],
+            ["release", "delete", "v1", "-R", "outsider/r"],
+            ["release", "upload", "v1", "file", "-R", "outsider/r"],
+            ["release", "delete-asset", "v1", "file", "-R", "outsider/r"],
+        ):
+            self.call(argv, False)
+
+    def test_secret_variable_ruleset_project(self):
+        for owner in ("bacluc", "bacluc-agent", "bacluc-agent-org"):
+            for argv in (
+                ["secret", "set", "TOKEN", "-R", f"{owner}/r"],
+                ["secret", "set", "TOKEN", "-o", owner],
+                ["secret", "delete", "TOKEN", "-R", f"{owner}/r"],
+                ["secret", "remove", "TOKEN", "-o", owner],
+                ["variable", "set", "NAME", "-R", f"{owner}/r"],
+                ["variable", "set", "NAME", "-o", owner],
+                ["variable", "delete", "NAME", "-R", f"{owner}/r"],
+                ["variable", "remove", "NAME", "-o", owner],
+                ["ruleset", "create", "-R", f"{owner}/r"],
+                ["ruleset", "update", "-R", f"{owner}/r"],
+                ["ruleset", "delete", "-o", owner],
+                ["project", "create", "--owner", owner, "--title", "x"],
+                ["project", "copy", "1", "--target-owner", owner, "--title", "x"],
+                ["project", "field-create", "1", "--owner", owner, "--name", "f"],
+                ["project", "link", "1", "--owner", owner, "-R", f"{owner}/r"],
+                ["project", "link", "1", "--owner", owner, "-R", "bare-name"],
+                ["secret", "-o", owner, "set", "TOKEN"],
+                ["project", "--owner", owner, "create", "--title", "x"],
+            ):
+                self.call(argv)
+        for argv in (["secret", "list", "-R", "ecamp/ecamp3"],
+                     ["secret", "list", "-o", "ecamp"],
+                     ["variable", "list", "-R", "ecamp/ecamp3"],
+                     ["variable", "get", "NAME", "-o", "ecamp"],
+                     ["ruleset", "list", "-R", "ecamp/ecamp3"],
+                     ["project", "view", "1", "--owner", "ecamp"],
+                     ["project", "list", "--owner", "ecamp"]):
+            self.call(argv)
+        for argv in (
+            ["secret", "set", "TOKEN"],
+            ["secret", "set", "TOKEN", "-R", "outsider/r"],
+            ["secret", "set", "TOKEN", "-o", "outsider"],
+            ["secret", "set", "TOKEN", "-u"],
+            ["secret", "delete", "TOKEN", "-R", "ecamp/ecamp3"],
+            ["variable", "set", "NAME", "-R", "outsider/r"],
+            ["variable", "delete", "NAME", "-o", "outsider"],
+            ["ruleset", "create", "-R", "outsider/r"],
+            ["ruleset", "update", "--org", "outsider"],
+            ["ruleset", "delete"],
+            ["project", "create", "--title", "x"],
+            ["project", "create", "--owner", "outsider", "--title", "x"],
+            ["project", "create", "--owner", "@me", "--title", "x"],
+            ["project", "copy", "1", "--target-owner", "outsider", "--title", "x"],
+            ["project", "copy", "1", "--source-owner", "bacluc", "--title", "x"],
+            ["project", "field-delete", "1"],
+            ["project", "field-delete", "1", "--id", "x"],
+            ["project", "item-delete", "1", "--id", "x"],
+            ["project", "link", "1", "--owner", "bacluc", "-R", "outsider/r"],
+            ["project", "--owner", "outsider", "create", "--title", "x"],
+            ["secret", "-o", "outsider", "set", "TOKEN"],
+        ):
+            self.call(argv, False)
+
+    def test_api_mutation_repo_targets(self):
+        for owner in ("bacluc", "bacluc-agent", "bacluc-agent-org"):
+            for method in ("POST", "PATCH", "PUT", "DELETE"):
+                self.call(["api", f"repos/{owner}/r/issues", "-X", method])
+        for argv in (["api", "repos/ecamp/ecamp3/issues"],
+                     ["api", "search/issues", "-XGET", "-fq=repo:ecamp/ecamp3"],
+                     ["api", "orgs/ecamp"]):
+            self.call(argv)
+        for argv in (
+            ["api", "repos/ecamp/ecamp3/issues", "-XPOST"],
+            ["api", "repos/ecamp/ecamp3/issues", "-XPATCH"],
+            ["api", "repos/ecamp/ecamp3/issues", "-XDELETE"],
+            ["api", "search/issues", "-XPOST"],
+            ["api", "orgs/bacluc/repos", "-XPOST"],
+            ["api", "user/repos", "-XPOST"],
+            ["api", "repositories/123", "-XPOST"],
+            ["api", "repos/{owner}/{repo}/issues", "-XPOST"],
+            ["api", "repos/BacLuc/r/pulls/../issues", "-XPOST"],
+        ):
+            self.call(argv, False)
 
     def test_subsequent_step_probe(self):
         result = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--verify-installed"],

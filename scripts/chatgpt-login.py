@@ -18,8 +18,9 @@ Subcommands (agent-usable primitives):
 
 Fallback protocol (when automation is stuck):
   start & -> status -> step -> repeat
-  STUCK -> playwright-cli attach --cdp=http://localhost:9222
+  STUCK -> playwright-cli attach --cdp=http://localhost:${OPENAI_CDP_PORT:-9222}
            -> snapshot/fill/click -> detach -> step
+  The CDP port defaults to 9222; override it with OPENAI_CDP_PORT.
   or steer manually until the callback fires -> start exchanges and exits 0.
   Sessions are sequential: only one start may run at a time.
   Abort = scripts/chatgpt-login.py stop.

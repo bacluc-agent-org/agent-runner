@@ -459,11 +459,9 @@ test("plugin cleanup ignores an iterator rejection after abort", async () => {
             },
             next() {
               return new Promise((resolve, reject) => {
-                signal.addEventListener(
-                  "abort",
-                  () => reject(new Error("iterator closed")),
-                  { once: true },
-                );
+                signal.addEventListener("abort", () => reject(signal.reason), {
+                  once: true,
+                });
               });
             },
           };
@@ -478,5 +476,49 @@ test("plugin cleanup ignores an iterator rejection after abort", async () => {
   }
   assert.equal(exitCode, null);
   assert.throws(() => readFileSync(markerPath, "utf8"), /ENOENT/);
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+test("plugin cleanup fails closed on a genuine stream rejection after abort", async () => {
+  const tmp =
+    (process.env.RUNNER_TEMP = `/tmp/fatal-guard-test-${Math.random()}`);
+  const markerPath = `${tmp}/opencode-fatal.json`;
+  const origExit = process.exit;
+  let exitCode = null;
+  let rejectNext;
+  process.exit = function (code) {
+    exitCode = code;
+    throw new Error("exit");
+  };
+  try {
+    mkdirSync(tmp, { recursive: true });
+    const unsub = plugin.setup({
+      event: {
+        async subscribe() {
+          return {
+            [Symbol.asyncIterator]() {
+              return this;
+            },
+            next() {
+              return new Promise((resolve, reject) => {
+                rejectNext = reject;
+              });
+            },
+          };
+        },
+      },
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    unsub();
+    rejectNext(new Error("stream failed after abort"));
+    await new Promise((r) => setTimeout(r, 10));
+  } finally {
+    process.exit = origExit;
+  }
+  assert.equal(exitCode, 1);
+  const marker = JSON.parse(readFileSync(markerPath, "utf8"));
+  assert.equal(marker.reason, "infrastructure");
+  assert.equal(marker.kind, "infrastructure_failure");
+  assert.equal(marker.message, "stream failed after abort");
   rmSync(tmp, { recursive: true, force: true });
 });

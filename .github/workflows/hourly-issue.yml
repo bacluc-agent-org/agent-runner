@@ -22,6 +22,10 @@ on:
       - ".opencode/**"
       - "scripts/**"
 
+concurrency:
+  group: hourly-issue-runner
+  cancel-in-progress: false
+
 permissions:
   contents: write
   issues: write
@@ -29,10 +33,6 @@ permissions:
 
 jobs:
   select:
-    # ponytail: the release step does not run if the job is killed at timeout-minutes, so the
-    # claim leaks and the issue stays out of selection until a human unlabels it. Upgrade path:
-    # timeout-based claims — encode the run id in the claim (agent-running:<run_id>) and treat a
-    # claim whose run is no longer in-progress as expired at selection time.
     runs-on: ubuntu-latest
     timeout-minutes: 120
     outputs:
@@ -90,14 +90,74 @@ jobs:
           printf '::add-mask::%s\n' "$OPENCODE_GO_2_API_KEY"
           printf '::add-mask::%s\n' "$OPENCODE_AUTH_CONTENT"
 
-          if ! gh label create agent-running -R "$ISSUE_REPOSITORY" \
-            --color 0E8A16 --description 'Selected by the hourly issue runner' --force; then
-            printf '::warning::could not ensure the agent-running label exists; the claim may not apply\n'
+          claim_label="agent-running:${GITHUB_RUN_ID}"
+          if ! gh label create "$claim_label" -R "$ISSUE_REPOSITORY" \
+            --color 0E8A16 --description "Claimed by hourly issue run ${GITHUB_RUN_ID}" --force; then
+            printf '::warning::could not ensure the claim label %s exists; the claim may not apply\n' "$claim_label"
           fi
           if ! gh label create agent-attempted -R "$ISSUE_REPOSITORY" \
             --color 1D76DB --description 'Already attempted by the hourly issue runner' --force; then
             printf '::warning::could not ensure the agent-attempted label exists; attempt history may not apply\n'
           fi
+
+          # Sweep expired run-scoped claims. A run that is still queued or in_progress is
+          # provably live and keeps its claim. An empty or non-numeric run id, a run GitHub
+          # reports as missing (HTTP 404), and any explicit terminal status all expire the
+          # claim and remove it. Any other lookup failure, or a successful lookup with an
+          # empty status, keeps the claim and logs a warning, so a transient API error can
+          # never free a live claim.
+          printf 'Sweeping expired run-scoped claims...\n'
+          sweep_file="$RUNNER_TEMP/claimed-issues.tsv"
+          if ! gh api --paginate "repos/${ISSUE_REPOSITORY}/issues?state=open&per_page=100" --jq '
+            .[] | select(.pull_request == null)
+            | [.number, ([.labels[]?.name
+                | select(ascii_downcase | . == "agent-running" or startswith("agent-running:"))]
+                | join(","))]
+            | select(.[1] != "")
+            | @tsv' > "$sweep_file"; then
+            printf '::error::refusing to select: could not list issues carrying agent-running claims\n'
+            exit 1
+          fi
+          while IFS=$'\t' read -r num claims; do
+            IFS=',' read -r -a claim_labels <<< "$claims"
+            for claim in "${claim_labels[@]}"; do
+              claim_key="${claim,,}"
+              if [[ "$claim_key" == "agent-running" ]]; then
+                if gh api -X DELETE "repos/${ISSUE_REPOSITORY}/issues/${num}/labels/${claim}" >/dev/null; then
+                  printf 'Swept legacy claim %s from #%s\n' "$claim" "$num"
+                else
+                  printf '::warning::could not remove legacy claim %s from #%s\n' "$claim" "$num"
+                fi
+                continue
+              fi
+              run_id="${claim_key#agent-running:}"
+              status_err="$RUNNER_TEMP/run-status-${num}.err"
+              if [[ ! "$run_id" =~ ^[0-9]+$ ]]; then
+                status='not-found'
+              elif status="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq .status 2>"$status_err")"; then
+                status="${status:-lookup-failed}"
+              elif grep -q 'HTTP 404' "$status_err"; then
+                status='not-found'
+              else
+                status='lookup-failed'
+              fi
+              case "$status" in
+                queued|in_progress)
+                  printf 'Keeping claim %s on #%s (run status: %s)\n' "$claim" "$num" "$status"
+                  ;;
+                lookup-failed)
+                  printf '::warning::could not look up run %s for claim %s on #%s; keeping the claim\n' "$run_id" "$claim" "$num"
+                  ;;
+                *)
+                  if gh api -X DELETE "repos/${ISSUE_REPOSITORY}/issues/${num}/labels/${claim}" >/dev/null; then
+                    printf 'Swept expired claim %s from #%s (run status: %s)\n' "$claim" "$num" "$status"
+                  else
+                    printf '::warning::could not remove expired claim %s from #%s\n' "$claim" "$num"
+                  fi
+                  ;;
+              esac
+            done
+          done < "$sweep_file"
 
           printf '\n\n\n\n\n\n'
           printf 'Fetching github issues...\n'
@@ -108,6 +168,11 @@ jobs:
           search_json="$RUNNER_TEMP/candidates.json"
           gh api "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:ready-for-implementation+-label:agent-running+sort:created-asc&per_page=50" \
             --jq '.items' > "$search_json"
+          # GitHub label search is exact-match only, so run-scoped claims
+          # (agent-running:<run_id>) still pass the -label:agent-running filter;
+          # drop them and any bare claim client-side.
+          jq '[.[] | select(([.labels[]?.name | ascii_downcase] | any(. == "agent-running" or startswith("agent-running:"))) | not)]' \
+            "$search_json" > "$search_json.unclaimed" && mv "$search_json.unclaimed" "$search_json"
 
           candidates="$RUNNER_TEMP/candidate-numbers.txt"
           jq -r '.[].number | tostring' "$search_json" > "$candidates"
@@ -293,8 +358,10 @@ jobs:
             exit 1
           fi
           printf 'issue_number=%s\n' "$issue_number" >> "$GITHUB_OUTPUT"
-          if ! gh issue edit "$issue_number" -R "$ISSUE_REPOSITORY" --add-label agent-running,agent-attempted; then
-            printf '::warning::could not claim issue %s; dispatching unclaimed\n' "$issue_number"
+          if ! gh api -X POST "repos/${ISSUE_REPOSITORY}/issues/${issue_number}/labels" -f "labels[]=${claim_label}" -f "labels[]=agent-attempted" >/dev/null; then
+            printf '::error::could not claim issue %s; not dispatching\n' "$issue_number"
+            printf 'claim_failed=true\n' >> "$GITHUB_OUTPUT"
+            exit 1
           fi
           {
             printf 'prompt<<%s\n' "$eof"
@@ -310,7 +377,7 @@ jobs:
           printf '::%s::\n' "$stop_token"
 
       - name: Update cache on selection failure
-        if: failure() && steps.pick.outputs.selection_model != '' && steps.model-availability.outputs.cache-issue != ''
+        if: failure() && steps.pick.outputs.selection_model != '' && steps.model-availability.outputs.cache-issue != '' && steps.pick.outputs.claim_failed != 'true'
         shell: bash
         env:
           MODEL: ${{ steps.pick.outputs.selection_model }}
@@ -362,7 +429,7 @@ jobs:
 
   release:
     needs: [select, run]
-    if: always() && needs.select.outputs.issue_number != ''
+    if: always()
     permissions:
       issues: write
     runs-on: ubuntu-latest
@@ -372,11 +439,34 @@ jobs:
     steps:
       - name: Release the issue claim
         shell: bash
-        env:
-          ISSUE_NUMBER: ${{ needs.select.outputs.issue_number }}
         run: |
           set -Eeuo pipefail
           printf '::add-mask::%s\n' "$GITHUB_TOKEN"
-          if ! gh issue edit "$ISSUE_NUMBER" -R "$ISSUE_REPOSITORY" --remove-label agent-running; then
-            printf '::warning::could not remove agent-running from #%s; it stays claimed until unlabelled by hand\n' "$ISSUE_NUMBER"
+          claim_label="agent-running:${GITHUB_RUN_ID}"
+          if ! claimed="$(gh api --paginate "repos/${ISSUE_REPOSITORY}/issues?state=all&labels=${claim_label}&per_page=100" --jq '.[] | select(.pull_request == null) | .number')"; then
+            printf '::warning::could not scan for issues carrying %s; the claim stays until the next sweep\n' "$claim_label"
+            exit 0
+          fi
+          if [[ -z "$claimed" ]]; then
+            printf 'No issue carries claim %s; nothing to release.\n' "$claim_label"
+            exit 0
+          fi
+          mapfile -t claimed_issues <<< "$claimed"
+          for num in "${claimed_issues[@]}"; do
+            if gh api -X DELETE "repos/${ISSUE_REPOSITORY}/issues/${num}/labels/${claim_label}" >/dev/null; then
+              printf 'Released claim %s from #%s\n' "$claim_label" "$num"
+            else
+              printf '::warning::could not remove %s from #%s; it stays claimed until the next sweep\n' "$claim_label" "$num"
+            fi
+          done
+
+      - name: Delete the run-scoped claim label
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          printf '::add-mask::%s\n' "$GITHUB_TOKEN"
+          claim_label="agent-running:${GITHUB_RUN_ID}"
+          if ! gh label delete "$claim_label" -R "$ISSUE_REPOSITORY" --yes; then
+            printf '::warning::could not delete claim label %s; it may remain in the repository\n' "$claim_label"
           fi

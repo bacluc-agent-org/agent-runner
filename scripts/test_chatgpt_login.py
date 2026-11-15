@@ -36,6 +36,7 @@ def test_status_payload_describes_email_verification_and_unknown_routes():
         ),
         blocking="email verification required",
         code_ready=False,
+        cdp_port=9222,
     )
     assert verification == {
         "step": "email-verification",
@@ -49,9 +50,10 @@ def test_status_payload_describes_email_verification_and_unknown_routes():
         types.SimpleNamespace(url="https://auth.openai.com/unexpected", title=lambda: "Unexpected"),
         blocking=None,
         code_ready=False,
+        cdp_port=9333,
     )
     assert unknown["step"] == "unknown"
-    assert unknown["blocking"] == "unknown authentication route; use playwright-cli attach --cdp=http://localhost:9222"
+    assert unknown["blocking"] == "unknown authentication route; use playwright-cli attach --cdp=http://localhost:9333"
 
 
 def test_start_failure_cleanup_closes_resources_and_removes_state(tmp_path, monkeypatch):

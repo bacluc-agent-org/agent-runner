@@ -248,13 +248,13 @@ def _step_for_path(path: str) -> str:
     )
 
 
-def _status_payload(page, blocking: str | None, code_ready: bool) -> dict:
+def _status_payload(page, blocking: str | None, code_ready: bool, cdp_port: int) -> dict:
     path = _page_path(page)
     step = _step_for_path(path) or "unknown"
     if step == "email-verification" and blocking is None:
         blocking = "email verification required; use an allowed recovery command or stop the session"
     elif step == "unknown" and blocking is None:
-        blocking = "unknown authentication route; use playwright-cli attach --cdp=http://localhost:9222"
+        blocking = f"unknown authentication route; use playwright-cli attach --cdp=http://localhost:{cdp_port}"
     try:
         url = page.url.split("?", 1)[0].split("#", 1)[0]
         title = _redact_debug_text(page.title())
@@ -763,7 +763,7 @@ def cmd_status() -> int:
             return 1
         try:
             blocking = _has_blocking_screen(page)
-            payload = _status_payload(page, blocking, state.get("code") is not None)
+            payload = _status_payload(page, blocking, state.get("code") is not None, state["cdp_port"])
             if payload["blocking"]:
                 _capture_debug(page, "primitives", payload["step"], payload["blocking"])
             json.dump(payload, sys.stdout)
@@ -815,7 +815,7 @@ def cmd_step() -> int:
             _capture_debug(page, "primitives", _step_for_path(_page_path(page)), blocking, page_errors)
             print(f"Login blocked: {blocking}", file=sys.stderr)
             try:
-                json.dump(_status_payload(page, blocking, state.get("code") is not None), sys.stdout)
+                json.dump(_status_payload(page, blocking, state.get("code") is not None, state["cdp_port"]), sys.stdout)
             except Exception:
                 json.dump({"error": "status failed while blocked", "blocking": blocking}, sys.stdout)
             return 2
@@ -830,7 +830,7 @@ def cmd_step() -> int:
             )
         try:
             blocking = _has_blocking_screen(page)
-            json.dump(_status_payload(page, blocking, state.get("code") is not None), sys.stdout)
+            json.dump(_status_payload(page, blocking, state.get("code") is not None, state["cdp_port"]), sys.stdout)
         except Exception as e:
             json.dump({"error": str(e)}, sys.stdout)
             return 1

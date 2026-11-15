@@ -28,6 +28,7 @@ def test_callee_declares_opt_in_boolean_input():
 
 def test_callee_tolerates_failure_only_when_input_is_true():
     assert OPENCODE.count(JOB_LEVEL) == 1
+    assert len(re.findall(r"^    continue-on-error:", OPENCODE, re.M)) == 1
     assert JOB_LEVEL in OPENCODE[OPENCODE.index("\n  run:\n") :]
     assert not re.search(
         r"continue-on-error:\s*\$\{\{\s*inputs\.continue_on_error\s*\}\}", OPENCODE

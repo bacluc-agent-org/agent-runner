@@ -30,7 +30,7 @@ def owned_repo(repo):
 
 
 def options(args, values, switches):
-    positional, parsed = [], {}
+    positional, parsed, seen = [], {}, set()
     index = 0
     while index < len(args):
         arg = args[index]
@@ -49,10 +49,10 @@ def options(args, values, switches):
                 index += 1
             parsed.setdefault(values[key], []).append(value)
         elif key in switches and (not separator or value in {"true", "false"}):
-            continue
+            seen.add(key)
         else:
             deny(f"unsupported or ambiguous option {key}")
-    return positional, parsed
+    return positional, parsed, seen
 
 
 def _target_flag(arg, target_flags):
@@ -114,6 +114,12 @@ ISSUE_COMMANDS = {
     "lock": ({**REPO_FLAGS, **flags("-r", "--reason")}, set()),
     "unlock": (REPO_FLAGS, set()),
     "transfer": (REPO_FLAGS, set()),
+    "delete": (REPO_FLAGS, {"--yes"}),
+    "pin": (REPO_FLAGS, set()),
+    "unpin": (REPO_FLAGS, set()),
+    "develop": ({**REPO_FLAGS, "--branch-repo": "branch-repo", **flags(
+        "-b", "--base", "-n", "--name", "--worktree",
+    )}, {"-c", "--checkout", "-l", "--list"}),
 }
 
 REPO_COMMANDS = {
@@ -136,6 +142,8 @@ REPO_COMMANDS = {
          "--template"}),
     "archive": (REPO_FLAGS, {"-y", "--yes"}),
     "rename": (REPO_FLAGS, {"-y", "--yes"}),
+    "sync": ({**REPO_FLAGS, "-b": "-b", "--branch": "--branch",
+              "-s": "--source", "--source": "--source"}, {"--force"}),
 }
 
 WORKFLOW_COMMANDS = {
@@ -237,12 +245,14 @@ PROJECT_COMMANDS = {
 def parse_command(args, commands, target_flags=TARGET_FLAGS):
     prefix, command, rest = split_target(args, target_flags)
     if command is None:
-        return None, None, None
+        return None, None, None, None
     if command not in commands:
-        return command, None, None
+        return command, None, None, None
     values, switches = commands[command]
-    positional, parsed = options(prefix + rest, values, switches | {"--help"})
-    return command, positional, parsed
+    positional, parsed, seen = options(prefix + rest, values, switches | {"--help", "-h"})
+    if seen & {"--help", "-h"}:
+        return None, None, None, None
+    return command, positional, parsed, seen
 
 
 def require_owned_repo(parsed, command):
@@ -252,19 +262,38 @@ def require_owned_repo(parsed, command):
     owned_repo(repos[0])
 
 
+GITHUB_SELECTOR = re.compile(
+    r"^(?:https?://)?github\.com/([A-Za-z0-9-]+/[A-Za-z0-9_.-]+)(?:[/#?].*)?$",
+    flags=re.IGNORECASE,
+)
+
+
+def validate_url_selectors(positional):
+    for selector in positional:
+        match = GITHUB_SELECTOR.fullmatch(selector)
+        if match:
+            owned_repo(match.group(1))
+
+
 def validate_issue(args):
-    command, positional, parsed = parse_command(args, ISSUE_COMMANDS)
+    command, positional, parsed, switches = parse_command(args, ISSUE_COMMANDS)
     if parsed is None:
         return
+    if command == "develop" and switches & {"-l", "--list"}:
+        return
     require_owned_repo(parsed, f"issue {command}")
+    validate_url_selectors(positional)
     if command == "transfer":
         if len(positional) != 2:
             deny("issue transfer requires an issue and an owned destination repository")
         owned_repo(positional[1])
+    if command == "develop":
+        for repo in parsed.get("branch-repo", []):
+            owned_repo(repo)
 
 
 def validate_repo(args):
-    command, positional, parsed = parse_command(args, REPO_COMMANDS)
+    command, positional, parsed, _switches = parse_command(args, REPO_COMMANDS)
     if parsed is None:
         return
     if command == "fork":
@@ -281,6 +310,12 @@ def validate_repo(args):
     if command == "rename":
         require_owned_repo(parsed, "repo rename")
         return
+    if command == "sync":
+        targets = parsed.get("repo", []) + positional
+        if len(targets) != 1:
+            deny("repo sync requires exactly one explicit owned destination repository")
+        owned_repo(targets[0])
+        return
     targets = parsed.get("repo", []) + positional
     if len(targets) != 1:
         deny(f"repo {command} requires exactly one explicit owned repository")
@@ -288,28 +323,29 @@ def validate_repo(args):
 
 
 def validate_workflow(args):
-    command, _positional, parsed = parse_command(args, WORKFLOW_COMMANDS)
+    command, _positional, parsed, _switches = parse_command(args, WORKFLOW_COMMANDS)
     if parsed is None:
         return
     require_owned_repo(parsed, f"workflow {command}")
 
 
 def validate_discussion(args):
-    command, _positional, parsed = parse_command(args, DISCUSSION_COMMANDS)
+    command, positional, parsed, _switches = parse_command(args, DISCUSSION_COMMANDS)
     if parsed is None:
         return
     require_owned_repo(parsed, f"discussion {command}")
+    validate_url_selectors(positional)
 
 
 def validate_label(args):
-    command, _positional, parsed = parse_command(args, LABEL_COMMANDS)
+    command, _positional, parsed, _switches = parse_command(args, LABEL_COMMANDS)
     if parsed is None:
         return
     require_owned_repo(parsed, f"label {command}")
 
 
 def validate_release(args):
-    command, _positional, parsed = parse_command(args, RELEASE_COMMANDS)
+    command, _positional, parsed, _switches = parse_command(args, RELEASE_COMMANDS)
     if parsed is None:
         return
     require_owned_repo(parsed, f"release {command}")
@@ -326,29 +362,43 @@ def _validate_owned_targets(command, parsed, flag):
         owned_owner(org)
 
 
+def _validate_selected_repos(parsed):
+    for value in parsed.get("repos", []):
+        for repo in value.split(","):
+            repo = repo.strip()
+            if "/" in repo:
+                owned_repo(repo)
+
+
 def validate_secret(args):
-    command, _positional, parsed = parse_command(args, SECRET_COMMANDS, {"-R", "--repo", "-o", "--org"})
+    command, _positional, parsed, _switches = parse_command(
+        args, SECRET_COMMANDS, {"-R", "--repo", "-o", "--org"})
     if parsed is None:
         return
     _validate_owned_targets(f"secret {command}", parsed, "-R/--repo or -o/--org")
+    _validate_selected_repos(parsed)
 
 
 def validate_variable(args):
-    command, _positional, parsed = parse_command(args, VARIABLE_COMMANDS, {"-R", "--repo", "-o", "--org"})
+    command, _positional, parsed, _switches = parse_command(
+        args, VARIABLE_COMMANDS, {"-R", "--repo", "-o", "--org"})
     if parsed is None:
         return
     _validate_owned_targets(f"variable {command}", parsed, "-R/--repo or -o/--org")
+    _validate_selected_repos(parsed)
 
 
 def validate_ruleset(args):
-    command, _positional, parsed = parse_command(args, RULESET_COMMANDS, {"-R", "--repo", "-o", "--org"})
+    command, _positional, parsed, _switches = parse_command(
+        args, RULESET_COMMANDS, {"-R", "--repo", "-o", "--org"})
     if parsed is None:
         return
     _validate_owned_targets(f"ruleset {command}", parsed, "-R/--repo or --org")
 
 
 def validate_project(args):
-    command, _positional, parsed = parse_command(args, PROJECT_COMMANDS, {"--owner", "--target-owner"})
+    command, _positional, parsed, _switches = parse_command(
+        args, PROJECT_COMMANDS, {"--owner", "--target-owner"})
     if parsed is None:
         return
     if command == "copy":
@@ -377,7 +427,11 @@ def validate_pr(args):
                 deny("missing repository")
             value, *args = args
             prefix.append(value)
-    if not args or args[0].startswith("-"):
+    if not args:
+        deny("use gh pr SUBCOMMAND followed by options")
+    if args[0] in {"-h", "--help"}:
+        return
+    if args[0].startswith("-"):
         deny("use gh pr SUBCOMMAND followed by options")
     if args[0] == "revert":
         validate_revert(prefix, args)
@@ -390,10 +444,12 @@ def validate_pr(args):
         "-H", "--head", "-l", "--label", "-m", "--milestone", "-p", "--project", "--recover",
         "-r", "--reviewer", "-T", "--template", "-t", "--title",
     )})
-    positional, parsed = options(prefix + args[1:], values, {
+    positional, parsed, seen = options(prefix + args[1:], values, {
         "-d", "--draft", "--dry-run", "-e", "--editor", "-f", "--fill", "--fill-first",
-        "--fill-verbose", "--no-maintainer-edit", "-w", "--web", "--help",
+        "--fill-verbose", "--no-maintainer-edit", "-w", "--web", "--help", "-h",
     })
+    if seen & {"--help", "-h"}:
+        return
     if positional or len(parsed.get("repo", [])) != 1:
         deny("PR creation requires exactly one explicit -R/--repo destination")
     owned_repo(parsed["repo"][0])
@@ -402,7 +458,9 @@ def validate_pr(args):
 def validate_revert(prefix, args):
     values = {key: "repo" for key in ("-R", "--repo")}
     values.update({key: key for key in ("-b", "--body", "-F", "--body-file", "-t", "--title")})
-    positional, parsed = options(prefix + args[1:], values, {"-d", "--draft", "--help"})
+    positional, parsed, seen = options(prefix + args[1:], values, {"-d", "--draft", "--help", "-h"})
+    if seen & {"--help", "-h"}:
+        return
     if len(positional) != 1:
         deny("PR revert requires exactly one PR number or github.com PR URL")
     repos = parsed.get("repo", [])
@@ -427,10 +485,12 @@ def validate_api(args):
         "header": ("-H", "--header"),
     }.items():
         values.update(dict.fromkeys(flags, name))
-    positional, parsed = options(args, values, {
+    positional, parsed, seen = options(args, values, {
         "-i", "--include", "--paginate", "--silent", "--slurp", "--verbose",
-        "--help", "--allow-escape-sequences",
+        "--help", "-h", "--allow-escape-sequences",
     })
+    if seen & {"--help", "-h"}:
+        return
     if len(positional) != 1 or len(parsed.get("method", [])) > 1 or len(parsed.get("host", [])) > 1:
         deny("API calls require one unambiguous endpoint, method and host")
     if parsed.get("host", ["github.com"])[0].lower() != "github.com":

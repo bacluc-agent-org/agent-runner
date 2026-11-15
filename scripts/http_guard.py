@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import sys
 import tempfile
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 
 OWNED_OWNERS = {"bacluc", "bacluc-agent", "bacluc-agent-org"}
@@ -50,6 +50,11 @@ def _parse(url):
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in url):
         raise PermissionError("URL must not contain control characters")
     path = parts.path or "/"
+    if "%" in path and any(
+        ord(character) < 0x20 or 0x7F <= ord(character) <= 0x9F
+        for character in unquote(path, errors="replace")
+    ):
+        raise PermissionError("URL path must not contain encoded control characters")
     if not path.startswith("/"):
         raise PermissionError("URL path must be absolute")
     lowered = path.lower()
@@ -82,7 +87,9 @@ def _is_owned_target(host, segments):
     return False
 
 
-def _mutation_reason(scheme, host, port, segments, query):
+def _mutation_reason(scheme, host, port, segments, query, path):
+    if "%" in path:
+        return "mutation paths must not contain percent-encoding"
     if query:
         return "mutation parameters must not be in the query string"
     if scheme != "https":
@@ -142,7 +149,7 @@ def check_request(method, url):
         raise
     if method in READ_METHODS:
         return None
-    reason = _mutation_reason(scheme, host, port, segments, query)
+    reason = _mutation_reason(scheme, host, port, segments, query, path)
     if reason:
         if method == "POST" and not _is_owned_target(host, segments):
             _log_denial(method, host, path, reason)

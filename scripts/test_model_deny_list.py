@@ -62,3 +62,19 @@ def test_keeps_gpt_5_6_luna():
         "opencode-go-openai/gpt-5.6-luna",
     ]:
         assert not is_denied(model), f"{model} must be kept"
+
+
+def test_denies_recursive_flint_v1_0_and_keeps_neighboring_models():
+    for model in [
+        "openrouter/recursive/flint-v1.0:free",
+        "openrouter/recursive/flint-v1.0",
+    ]:
+        assert is_denied(model), f"{model} must be deny-listed"
+
+    for model in [
+        "openrouter/recursive/flint-v1.01:free",
+        "openrouter/recursive/flint-v1.0-preview:free",
+        "openrouter/recursive/flint-v1.1:free",
+        "openrouter/other/flint-v1.0:free",
+    ]:
+        assert not is_denied(model), f"{model} must be kept"

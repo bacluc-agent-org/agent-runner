@@ -1626,3 +1626,62 @@ class TestWorkflowOpenRouterSelection:
             text=True,
         )
         assert kept.returncode == 0, "opencode/big-pickle must be kept"
+
+
+class TestHourlyAvailabilityHandoff:
+    ROOT = Path(__file__).parents[3]
+    HOURLY = ROOT / ".github/workflows/hourly-issue.yml"
+    OPENCODE = ROOT / ".github/workflows/opencode.yml"
+
+    @staticmethod
+    def _probe_decision(available_models, cache_issue):
+        result = subprocess.run(
+            [
+                "bash",
+                "-Eeuo",
+                "pipefail",
+                "-c",
+                'if [[ -z "$AVAILABLE_MODELS" || -z "$CACHE_ISSUE" ]]; then printf probe; else printf skip; fi',
+            ],
+            env={
+                **os.environ,
+                "AVAILABLE_MODELS": available_models,
+                "CACHE_ISSUE": cache_issue,
+            },
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        return result.stdout
+
+    def test_hourly_wires_both_outputs_to_reusable_workflow(self):
+        content = self.HOURLY.read_text()
+        assert "available_models: ${{ steps.model-availability.outputs.available-models }}" in content
+        assert "cache_issue: ${{ steps.model-availability.outputs.cache-issue }}" in content
+        assert "available_models:" in content
+        assert "cache_issue:" in content
+
+    def test_reusable_declares_optional_handoff_inputs(self):
+        content = self.OPENCODE.read_text()
+        assert "available_models:" in content
+        assert "cache_issue:" in content
+        assert 'available_models:\n        description:' in content
+        assert 'cache_issue:\n        description:' in content
+        assert content.count('default: ""') >= 4
+
+    def test_complete_handoff_skips_probe(self):
+        assert "if: inputs.available_models == '' || inputs.cache_issue == ''" in self.OPENCODE.read_text()
+        assert self._probe_decision("opencode/big-pickle", "429") == "skip"
+
+    @pytest.mark.parametrize(
+        ("available_models", "cache_issue"),
+        [("", "429"), ("opencode/big-pickle", ""), ("", "")],
+    )
+    def test_missing_or_empty_handoff_probes(self, available_models, cache_issue):
+        assert self._probe_decision(available_models, cache_issue) == "probe"
+
+    def test_incomplete_handoff_uses_action_output_fallbacks(self):
+        content = self.OPENCODE.read_text()
+        assert "inputs.available_models || steps.model-availability.outputs.available-models" in content
+        assert "inputs.cache_issue || steps.model-availability.outputs.cache-issue" in content
+        assert "(inputs.cache_issue || steps.model-availability.outputs.cache-issue) != ''" in content

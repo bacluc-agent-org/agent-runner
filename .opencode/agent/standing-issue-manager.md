@@ -142,7 +142,8 @@ comment.
 The manager appends exactly two things to that comment: one row for this pass in
 the `### Action runs` table (`Run | Model | What happened | Result | Failure
 reason`), keyed by the run URL and the model named in the run prompt, and one
-line of context inside the `<details>` block. It never rewrites the headings
+line of context inside the `<details>` block without a date, so the manager pass
+cannot be read as a standing-task run. It never rewrites the headings
 `### Management summary`, `### Design decisions`, `### Open PR` and
 `### Verification evidence` and never removes a line another run wrote: the
 coordinator run dispatched for that same issue owns that report, and the

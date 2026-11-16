@@ -30,7 +30,8 @@ def request(method, path, body=None):
     request.add_header("Content-Type", "application/json")
     try:
         with urllib.request.urlopen(request) as response:
-            return response.status, json.load(response)
+            payload = response.read()
+            return response.status, None if not payload else json.loads(payload)
     except urllib.error.HTTPError as error:
         return error.code, None
 
@@ -77,7 +78,7 @@ def acquire():
             created = commit["author"]["date"]
             age = time.time() - timegm(time.strptime(created, "%Y-%m-%dT%H:%M:%SZ"))
             if age > LEASE_SECONDS:
-                request("DELETE", f"{repository_path()}/git/refs/heads/.locks/chatgpt-oauth-refresh")
+                request("DELETE", f"{repository_path()}/git/refs/heads/oauth-refresh-lock")
         time.sleep(POLL_SECONDS)
 
 

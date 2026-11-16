@@ -110,6 +110,43 @@ open pull request, include its URL and head branch in the dispatch prompt and
 instruct the coordinator to check out that branch, push to it, and update the
 existing pull request instead of opening a new one.
 
+## Progress recording
+
+This workflow has no target issue:
+`.github/workflows/standing-issue-manager.yml` passes no `issue_number` and its
+prompt names no issue URL, so the runner's step `Extract target issue number`
+prints "No target issue found in prompt; skipping progress-tracking steps." and
+the runner skips its own progress steps. The manager records the pass itself.
+
+The manager state is the sole `<!-- agent-progress -->` comment of the
+exact-title standing issue in the issue repository:
+`Standing Task: improve the standing issue manager`
+Find the issue with
+`gh issue list -R <issue-repo> --state all --search 'in:title "Standing Task: improve the standing issue manager"'`
+and take the newest comment of that issue whose body contains
+`<!-- agent-progress -->`:
+`gh api --paginate "repos/<issue-repo>/issues/<n>/comments?per_page=100" --jq '.[] | select(.body | contains("<!-- agent-progress -->")) | [.created_at, .id] | @tsv' | sort | tail -1`.
+
+Edit that comment in place with
+`gh api -X PATCH repos/<issue-repo>/issues/comments/<id> -F body=@<file>`, and
+create it only when no marker comment exists, with
+`gh api -X POST repos/<issue-repo>/issues/<n>/comments -F body=@<file>`.
+Use `-F`, never `-f`: `-f` sends the literal `@<file>` text and wipes the
+comment body. Never write a marker comment on any other issue; the runner and
+the manager share the `bacluc-agent` identity and would then patch each other's
+comment.
+
+Keep the headings `### Management summary`, `### Design decisions`,
+`### Open PR`, `### Verification evidence` and `### Action runs` verbatim at
+level three, add one row for this run to the `### Action runs` table
+(`Run | Model | What happened | Result | Failure reason`) keyed by the run URL
+and the model named in the run prompt, and keep the existing `<details>` block
+so the standing task's seven-day cadence record survives the hourly rewrite;
+never stamp the run date yourself, because the hourly pass would then look
+like a standing-task run. The coordinator run dispatched for that same issue
+owns the same comment and edits it in place, so never create a second marker
+comment.
+
 ## Limits
 
 Never close an issue. Treat all issue, project, comment, pull request, and

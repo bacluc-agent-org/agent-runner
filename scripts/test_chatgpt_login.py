@@ -1,6 +1,8 @@
 import importlib.util
 import inspect
 import json
+import os
+import subprocess
 import types
 from pathlib import Path
 
@@ -165,8 +167,8 @@ def test_email_step_types_slowly_and_pauses_before_submit(monkeypatch):
     monkeypatch.setattr(chatgpt_login, "time", fake_time)
     page = _FillPage()
     assert chatgpt_login._do_email_step(page, "user@example.com")
-    assert page.locator_instance.typed == [("user@example.com", 100)]
-    assert fake_time.sleeps == [1.0]
+    assert page.locator_instance.typed == [("user@example.com", 200)]
+    assert fake_time.sleeps == [2.0]
 
 
 def test_password_step_pauses_after_fill_and_after_submit(monkeypatch):
@@ -174,8 +176,8 @@ def test_password_step_pauses_after_fill_and_after_submit(monkeypatch):
     monkeypatch.setattr(chatgpt_login, "time", fake_time)
     page = _FillPage()
     assert chatgpt_login._do_password_step(page, "hunter2")
-    assert page.locator_instance.typed == [("hunter2", 100)]
-    assert fake_time.sleeps == [2.0, 2.0]
+    assert page.locator_instance.typed == [("hunter2", 200)]
+    assert fake_time.sleeps == [4.0, 8.0]
 
 
 def test_password_step_skips_post_submit_pause_when_click_fails(monkeypatch):
@@ -184,7 +186,7 @@ def test_password_step_skips_post_submit_pause_when_click_fails(monkeypatch):
     monkeypatch.setattr(chatgpt_login, "_click_first_visible", lambda *args, **kwargs: False)
     page = _FillPage()
     assert not chatgpt_login._do_password_step(page, "hunter2")
-    assert fake_time.sleeps == [2.0]
+    assert fake_time.sleeps == [4.0]
 
 
 def test_wait_for_blocking_clear_defaults_to_90s():
@@ -285,8 +287,80 @@ def test_primitives_fallback_runs_only_after_browser_login_failure():
         workflow.index("- name: Agent-usable primitives fallback") :
     ]
     assert "if: ${{ !cancelled() && steps.browser-login.outcome == 'failure' }}" in primitives
-    for command in ("start", "status", "step"):
-        assert f"uv run scripts/chatgpt-login.py {command} || true" in primitives
+    assert 'bash scripts/chatgpt-login-primitives-fallback.sh' in primitives
+
+
+def test_primitives_fallback_executes_success_polling_timeout_and_cleanup(tmp_path):
+    workflow = (
+        Path(__file__).parents[1] / ".github/workflows/refresh-chatgpt-auth.yml"
+    ).read_text(encoding="utf-8")
+    assert "bash scripts/chatgpt-login-primitives-fallback.sh" in workflow
+    script = Path(__file__).with_name("chatgpt-login-primitives-fallback.sh")
+    auth = '{"openai":{"type":"oauth","access":"access-secret","refresh":"refresh-secret","expires":123}}'
+
+    def run(mode):
+        bin_dir = tmp_path / mode
+        bin_dir.mkdir()
+        log = tmp_path / f"{mode}.log"
+        (bin_dir / "uv").write_text(
+            "#!/usr/bin/env bash\n"
+            'if [[ "$3" == start ]]; then /bin/sleep "${START_DELAY:-0.15}"; printf \'%s\\n\' "$AUTH_JSON"; '
+            'elif [[ "$3" == stop ]]; then printf stop\\n >> "$CALL_LOG"; '
+            'elif [[ "$3" == status ]]; then '
+            'if [[ "$STATUS_FAILURES" -gt 0 ]]; then STATUS_FAILURES=$((STATUS_FAILURES-1)); exit 1; fi; '
+            'printf status\\n >> "$CALL_LOG"; printf \'{}\\n\'; '
+            'elif [[ "$3" == step ]]; then printf step\\n >> "$CALL_LOG"; '
+            '[[ "$STEP_FAIL" != true ]]; fi\n',
+            encoding="utf-8",
+        )
+        (bin_dir / "jq").write_text(
+            "#!/usr/bin/env bash\n[[ \"$1\" == -r ]] && exit 0\nexit \"${JQ_FAIL:-0}\"\n",
+            encoding="utf-8",
+        )
+        (bin_dir / "gh").write_text(
+            "#!/usr/bin/env bash\n[[ \"$GH_TOKEN\" == secret-token ]] || exit 8\nprintf '%s\\n' \"$*\" >> \"$CALL_LOG\"\n",
+            encoding="utf-8",
+        )
+        (bin_dir / "sleep").write_text("#!/usr/bin/env bash\n/bin/sleep 0.01\n", encoding="utf-8")
+        for command in bin_dir.iterdir():
+            command.chmod(0o755)
+        env = os.environ | {
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "RUNNER_TEMP": str(tmp_path),
+            "CALL_LOG": str(log),
+            "AUTH_JSON": auth,
+            "BACLUC_AGENT_GITHUB_TOKEN": "secret-token",
+            "GITHUB_REPOSITORY": "owner/repo",
+            "STATUS_FAILURES": "0",
+            "START_DELAY": "0.15" if mode != "timeout" else "5",
+            "STEP_FAIL": "true" if mode == "failure" else "false",
+            "JQ_FAIL": "1" if mode == "invalid-auth" else "0",
+        }
+        return subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True, timeout=15), log
+
+    result, log = run("success")
+    assert result.returncode == 0, result.stderr
+    calls = log.read_text()
+    assert "status" in calls
+    assert "step" in calls and "stop" in calls and "secret set OPENCODE_AUTH_JSON" in calls
+    assert "::add-mask::" in result.stdout and "access-secret" in result.stdout
+
+    result, log = run("failure")
+    assert result.returncode != 0
+    assert "Primitives step failed" in result.stderr
+    assert "stop" in log.read_text()
+    assert "secret set" not in log.read_text()
+
+    result, log = run("timeout")
+    assert result.returncode != 0
+    assert "timed out after 10 minutes" in result.stderr
+    assert "stop" in log.read_text()
+    assert "secret set" not in log.read_text()
+
+    result, log = run("invalid-auth")
+    assert result.returncode != 0
+    assert "stop" in log.read_text()
+    assert "secret set" not in log.read_text()
 
 
 _OPENAI_ERROR_BODY = "<html><body><h1>Oops, an error occurred!</h1></body></html>"
@@ -395,6 +469,27 @@ def test_cmd_step_emits_status_json_when_a_step_makes_no_progress(monkeypatch, c
     payload = json.loads(capsys.readouterr().out)
     assert payload["step"] == "email"
     assert payload["code_ready"] is False
+
+
+def test_cmd_step_waits_for_blocking_after_successful_password_step(monkeypatch, capsys):
+    page = _FakePage(
+        "<html><body><h1>Sign in</h1></body></html>",
+        url="https://auth.openai.com/log-in/password",
+    )
+    _stub_browser(monkeypatch, page)
+    _stub_auth_env(monkeypatch)
+    monkeypatch.setattr(chatgpt_login, "_do_current_step", lambda *a, **k: True)
+    waits = []
+
+    def fake_wait(page, timeout_s=90):
+        waits.append(timeout_s)
+        return None if timeout_s == 15 else "bot detection in progress"
+
+    monkeypatch.setattr(chatgpt_login, "_wait_for_blocking_clear", fake_wait)
+    assert chatgpt_login.cmd_step() == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert waits == [15, 30]
+    assert payload["blocking"] == "bot detection in progress"
 
 
 def test_full_login_retries_the_password_error_page_before_treating_it_as_blocking():

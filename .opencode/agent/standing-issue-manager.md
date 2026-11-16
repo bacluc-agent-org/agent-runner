@@ -126,26 +126,27 @@ Find the issue with
 and take the newest comment of that issue whose body contains
 `<!-- agent-progress -->`:
 `gh api --paginate "repos/<issue-repo>/issues/<n>/comments?per_page=100" --jq '.[] | select(.body | contains("<!-- agent-progress -->")) | [.created_at, .id] | @tsv' | sort | tail -1`.
+When that search returns zero or more than one issue, print
+`skip progress recording: <reason>` and write no marker comment.
 
 Edit that comment in place with
 `gh api -X PATCH repos/<issue-repo>/issues/comments/<id> -F body=@<file>`, and
-create it only when no marker comment exists, with
+create it only when no marker comment exists, from
+`scripts/progress-comment-template.md`, with
 `gh api -X POST repos/<issue-repo>/issues/<n>/comments -F body=@<file>`.
 Use `-F`, never `-f`: `-f` sends the literal `@<file>` text and wipes the
 comment body. Never write a marker comment on any other issue; the runner and
 the manager share the `bacluc-agent` identity and would then patch each other's
 comment.
 
-Keep the headings `### Management summary`, `### Design decisions`,
-`### Open PR`, `### Verification evidence` and `### Action runs` verbatim at
-level three, add one row for this run to the `### Action runs` table
-(`Run | Model | What happened | Result | Failure reason`) keyed by the run URL
-and the model named in the run prompt, and keep the existing `<details>` block
-so the standing task's seven-day cadence record survives the hourly rewrite;
-never stamp the run date yourself, because the hourly pass would then look
-like a standing-task run. The coordinator run dispatched for that same issue
-owns the same comment and edits it in place, so never create a second marker
-comment.
+The manager appends exactly two things to that comment: one row for this pass in
+the `### Action runs` table (`Run | Model | What happened | Result | Failure
+reason`), keyed by the run URL and the model named in the run prompt, and one
+line of context inside the `<details>` block. It never rewrites the headings
+`### Management summary`, `### Design decisions`, `### Open PR` and
+`### Verification evidence` and never removes a line another run wrote: the
+coordinator run dispatched for that same issue owns that report, and the
+standing task's last-run date lives there.
 
 ## Limits
 

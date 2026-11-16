@@ -51,6 +51,7 @@ from opencode_auth import (
     USER_AGENT,
     build_auth_json,
     write_auth_file,
+    write_auth_content,
 )
 
 CALLBACK_PORT = 1455

@@ -101,7 +101,7 @@ jobs:
             [[ -n "$number" ]] || continue
             comments_file="$RUNNER_TEMP/comments-${number}.txt"
             if gh api --paginate --slurp "repos/${ISSUE_REPOSITORY}/issues/${number}/comments?per_page=100" > "$RUNNER_TEMP/raw-${number}.json" 2>/dev/null; then
-              jq -r 'add // [] | map(select((.user.type // "") != "Bot") | select(((.body // "") | contains("<!-- agent-progress -->")) | not)) | .[] | "Author: \(.user.login // "unknown")\nCreated at: \(.created_at // "")\nBody:\n\(.body // "")\n"' \
+              jq -r 'add // [] | map(select((.user.type // "") != "Bot") | select((.user.login // "") != "bacluc-agent") | select(((.body // "") | contains("<!-- agent-progress -->")) | not)) | .[] | "Author: \(.user.login // "unknown")\nCreated at: \(.created_at // "")\nBody:\n\(.body // "")\n"' \
                 "$RUNNER_TEMP/raw-${number}.json" > "$comments_file" 2>/dev/null || : > "$comments_file"
             else
               printf '::warning::comment fetch failed for #%s; treating it as having no comments\n' "$number" >&2
@@ -120,7 +120,7 @@ jobs:
               printf '::warning::comment fetch failed for #%s; skipping\n' "$number" >&2
               continue
             fi
-            jq 'add // [] | map(select((.user.type // "") != "Bot") | select(((.body // "") | contains("<!-- agent-progress -->")) | not))' \
+            jq 'add // [] | map(select((.user.type // "") != "Bot") | select((.user.login // "") != "bacluc-agent") | select(((.body // "") | contains("<!-- agent-progress -->")) | not))' \
               "$RUNNER_TEMP/raw-${number}.json" > "$filtered_json" 2>/dev/null || printf '[]\n' > "$filtered_json"
             refined_at="$(gh issue view "$number" -R "$ISSUE_REPOSITORY" --json body \
               --jq '[(.body // "") | match("<!-- agent-refined: (?<timestamp>[^ ]+) -->"; "g")] | last | .captures[0].string // empty' 2>/dev/null || true)"

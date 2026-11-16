@@ -370,6 +370,7 @@ def test_bot_and_progress_comments_never_qualify(tmp_path):
     bot_comments = [
         comment("some-bot", "2026-11-08T11:00:00Z", "bot feedback", user_type="Bot"),
         comment("bacluc-agent", "2026-11-08T12:00:00Z", "<!-- agent-progress -->\nstatus"),
+        comment("bacluc-agent", "2026-11-08T12:30:00Z", "branch pushed"),
         comment("BacLuc", "2026-11-08T09:00:00Z", "old human feedback"),
     ]
     run.comments(2, bot_comments)
@@ -390,6 +391,7 @@ def test_bot_and_progress_comments_never_qualify(tmp_path):
     assert "new human feedback" in kept
     assert "bot feedback" not in kept
     assert "status" not in kept
+    assert "branch pushed" not in kept
 
 
 def test_searches_merge_and_deduplicate_candidates(tmp_path):

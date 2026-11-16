@@ -6,6 +6,9 @@ import sys
 from datetime import datetime, timezone
 
 
+KNOWN_FAILURE_MODES = {"success", "max-steps", "error", "timeout", "unknown"}
+
+
 def compute_metrics(
     steps: int,
     progress_delta: float,
@@ -32,11 +35,14 @@ def load_artifact(path: str = "loop-metrics.json") -> dict | None:
     try:
         with open(path) as f:
             raw = json.load(f)
+        failure_mode = raw["failureMode"]
+        if not isinstance(failure_mode, str) or failure_mode not in KNOWN_FAILURE_MODES:
+            failure_mode = "unknown"
         return {
             "step_count": raw["steps"],
             "token_cost_per_step": raw["tokenCostPerStep"],
             "convergence_rate": raw["convergenceRate"],
-            "failure_mode": raw["failureMode"],
+            "failure_mode": failure_mode,
             "terminated_at": raw["terminatedAt"],
         }
     except (FileNotFoundError, json.JSONDecodeError, KeyError):

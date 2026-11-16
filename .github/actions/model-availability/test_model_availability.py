@@ -1427,7 +1427,7 @@ class TestRefineIssuesExitCode:
     @staticmethod
     def _run(tail, refined, failed):
         return subprocess.run(
-            ["bash", "-c", f"refined={refined}\nfailed={failed}\n{tail}"],
+            ["bash", "-Eeuo", "pipefail", "-c", f"refined={refined}\nfailed={failed}\n{tail}"],
             capture_output=True,
             text=True,
         )
@@ -1436,9 +1436,12 @@ class TestRefineIssuesExitCode:
         result = self._run(self._completion_tail(), 0, 3)
         assert result.returncode == 1
         assert "0 refined, 3 failed" in result.stdout
+        assert "::error::no issue was refined (3 failed)" in result.stdout
 
     def test_partial_success_still_succeeds(self):
-        assert self._run(self._completion_tail(), 1, 2).returncode == 0
+        result = self._run(self._completion_tail(), 1, 2)
+        assert result.returncode == 0
+        assert "::error::" not in result.stdout
 
 
 class TestRefineIssuesNoCandidates:
@@ -1480,7 +1483,7 @@ class TestRefineIssuesNoCandidates:
     def test_no_candidates_exit_precedes_the_guard(self):
         content = self.WORKFLOW.read_text()
         assert content.index("No unrefined open issues; nothing to do.") < content.index(
-            "(( refined > 0 )) || exit 1"
+            "(( refined > 0 )) || { printf '::error::no issue was refined"
         )
 
 

@@ -19,6 +19,8 @@ fi
 PRETTIER_VERSION=3.9.4
 # renovate: datasource=docker depName=rhysd/actionlint
 ACTIONLINT_VERSION=1.7.12
+# renovate: datasource=docker depName=renovate/renovate
+RENOVATE_VERSION=44.240.0
 
 mount=(-v "$PWD:/workspace" -w /workspace)
 status=0
@@ -43,8 +45,19 @@ check() {
   fi
 }
 
+renovate_check() {
+  local output
+  if ! output="$(docker run --rm "${mount[@]}" "renovate/renovate:${RENOVATE_VERSION}" --platform=local --dry-run=lookup --require-config=ignored --onboarding=false 2>&1)"; then
+    printf '%s\n' "$output"
+    return 1
+  fi
+  printf '%s\n' "$output"
+  grep -Fq '"regex": {"fileCount": 2, "depCount": 4}' <<< "$output"
+}
+
 check 'formatting (prettier --check .)' docker run --rm "${mount[@]}" "ghcr.io/bacluc/prettier-image/prettier-image:${PRETTIER_VERSION}" --ignore-path "$prettier_ignore" --check .
 check 'actionlint (workflows + used actions)' docker run --rm "${mount[@]}" "rhysd/actionlint:${ACTIONLINT_VERSION}" -color
+check 'renovate custom manager (regex extraction)' renovate_check
 if [[ ! -d .opencode/node_modules/@opencode-ai/plugin ]]; then
   check 'opencode node dependencies (npm install)' npm install --prefix .opencode
 fi

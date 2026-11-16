@@ -41,10 +41,12 @@ An item is ineligible when any of the following holds:
 - an `opencode.yml` run for that issue is in progress or queued (detect by
   listing `gh run list -R bacluc-agent-org/agent-runner --workflow opencode.yml`
   and grepping each non-completed run's log for the issue URL or `Target issue: #<n>`);
-- an open pull request already tracks the same work for that issue (see PR reuse below);
 - the issue body or its latest comments state an unelapsed cadence or deferral
   (`weekly`, `next eligible`, `wait until`, `deferred`, `blocked`); or
 - the issue explicitly waits for human approval or selection.
+
+An open pull request does not make an item ineligible; reuse it per the
+PR reuse section below.
 
 For every skipped candidate print `skip #<n>: <reason>` with a short reason.
 

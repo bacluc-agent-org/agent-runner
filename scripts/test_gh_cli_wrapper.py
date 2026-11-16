@@ -129,7 +129,7 @@ class CliWrapperTest(unittest.TestCase):
         self.call(["api", "graphql", "-XGET"], False)
         self.call(["api", "graphql", "-f", "query=query { organization(login: owner) { projectV2(number: number) { id } } }"])
         self.call(["api", "graphql", "-f", "query=mutation { updateProjectV2ItemPosition(input: {projectId: id, itemId: id, afterId: null}) { projectV2Item { id } } }"])
-        self.call(["api", "graphql", "-f", "query=mutation { updateProjectV2ItemFieldValue(input: {projectId: id, itemId: id, fieldId: id, value: {singleSelectOptionId: id}}) { projectV2Item { id } } }"] , False)
+        self.call(["api", "graphql", "-f", "query=mutation { updateProjectV2ItemFieldValue(input: {projectId: id, itemId: id, fieldId: id, value: {singleSelectOptionId: id}}) { projectV2Item { id } } }"])
         self.call(["api", "graphql", "-f", "query=query { repository(owner: owner, name: name) { id } }"] , False)
         self.call(["api", "repos/BacLuc/r/pulls", "-f", "body=--hostname=evil.com", "--hostname=github.com"])
 

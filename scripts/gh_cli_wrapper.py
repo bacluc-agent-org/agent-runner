@@ -154,7 +154,8 @@ def validate_graphql(parsed):
     queries = [field.partition("=")[2] for field in fields if field.startswith("query=")]
     if len(queries) != 1 or any(
         not field.partition("=")[0] in {
-            "query", "owner", "login", "number", "projectId", "itemId", "afterId",
+            "query", "owner", "login", "number", "projectId", "itemId", "fieldId",
+            "afterId", "singleSelectOptionId",
         }
         for field in fields
     ):
@@ -163,10 +164,10 @@ def validate_graphql(parsed):
     allowed = {
         "ProjectV2", "ProjectV2FieldConfiguration", "ProjectV2Item",
         "ProjectV2SingleSelectField", "organization", "projectV2", "projectV2Items",
-        "updateProjectV2ItemPosition", "query", "mutation",
+        "updateProjectV2ItemFieldValue", "updateProjectV2ItemPosition", "query", "mutation",
         "node", "id", "number", "after", "afterId", "first", "last", "field", "fields", "input",
         "items", "nodes", "pageInfo", "hasNextPage", "endCursor", "position", "fieldId",
-        "projectId", "itemId", "organizationId", "owner", "login",
+        "singleSelectOptionId", "projectId", "itemId", "organizationId", "owner", "login",
         "cursor", "value", "clientMutationId", "projectV2Item", "null", "true", "false",
         "Int", "String", "ID",
     }

@@ -152,11 +152,17 @@ def validate_api(args):
 def validate_graphql(parsed):
     fields = parsed.get("body", [])
     queries = [field.partition("=")[2] for field in fields if field.startswith("query=")]
+    if len(queries) != 1:
+        deny("GraphQL requires a project-v2 query")
+    field_variables = {"fieldId", "singleSelectOptionId"}
+    form_fields = {field.partition("=")[0] for field in fields}
+    if form_fields & field_variables and "updateProjectV2ItemFieldValue" not in queries[0]:
+        deny("project field variables require updateProjectV2ItemFieldValue")
+    allowed_form_fields = {
+        "query", "owner", "login", "number", "projectId", "itemId", "afterId",
+    } | (field_variables if "updateProjectV2ItemFieldValue" in queries[0] else set())
     if len(queries) != 1 or any(
-        not field.partition("=")[0] in {
-            "query", "owner", "login", "number", "projectId", "itemId", "fieldId",
-            "afterId", "singleSelectOptionId",
-        }
+        field.partition("=")[0] not in allowed_form_fields
         for field in fields
     ):
         deny("GraphQL requires a project-v2 query")

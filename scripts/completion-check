@@ -28,6 +28,7 @@ status=0
 # and toolchain. git lists such checkouts as a single untracked "<dir>/"
 # entry, while regular untracked files of this repository stay checked.
 prettier_ignore=".prettierignore.completion-check"
+export prettier_ignore
 trap 'rm -f "$prettier_ignore"' EXIT
 cat .gitignore .prettierignore 2> /dev/null > "$prettier_ignore" || true
 printf '%s\n' "$prettier_ignore" >> "$prettier_ignore"

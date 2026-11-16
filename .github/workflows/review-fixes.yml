@@ -172,4 +172,5 @@ jobs:
     with:
       prompt: ${{ fromJson(needs.find-prs.outputs.pr_metadata)[matrix.pr].prompt }}
       model: ${{ inputs.model }}
+      continue_on_error: true
     secrets: inherit

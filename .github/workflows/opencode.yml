@@ -94,6 +94,11 @@ on:
         required: false
         type: number
         default: 120
+      continue_on_error:
+        description: Tolerate a failed agent run instead of failing the calling run
+        required: false
+        type: boolean
+        default: false
       agent:
         description: OpenCode agent to run
         required: false
@@ -108,6 +113,9 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
+    # ponytail: a tolerated leg stays red in the job list but the run turns green;
+    # add a gate job if leg failures must ever block a merge again
+    continue-on-error: ${{ inputs.continue_on_error == true }}
     timeout-minutes: 130
     env:
       GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}

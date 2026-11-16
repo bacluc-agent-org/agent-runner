@@ -313,7 +313,9 @@ def test_refresh_workflow_uses_opencode_v1_auth_and_validates_before_storing():
     ]
     assert "OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON }}" in refresh
     assert "scripts/refresh-token.py" in refresh
-    assert "npm install --global opencode-ai@1.18.32" in validate
+    # The exact opencode-ai version is managed by renovate, so only assert
+    # that the validate step installs opencode before validating the token.
+    assert "npm install --global opencode-ai@" in validate
     assert "--model openai/gpt-5.6-luna" in validate
     assert "steps.validate.outcome == 'success'" in store
     assert "!cancelled() && (steps.refresh.outputs.refreshed != 'true' || steps.validate.outcome != 'success')" in workflow

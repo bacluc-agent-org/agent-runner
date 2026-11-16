@@ -73,7 +73,7 @@ jobs:
         if: steps.refresh.outputs.refreshed == 'true'
         run: |
           set -Eeuo pipefail
-          npm install --global opencode-ai@1.18.32
+          npm install --global opencode-ai@1.19.5
           mkdir -p ~/.local/share/opencode
           cp "$RUNNER_TEMP/auth.json" ~/.local/share/opencode/auth.json
           set +e

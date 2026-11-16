@@ -9,7 +9,7 @@ WORKFLOW = Path(__file__).parents[1] / ".github/workflows/refine-issues.yml"
 CANDIDATE_START = 'candidates="$RUNNER_TEMP/candidate-numbers.txt"'
 CANDIDATE_END = 'mv "$RUNNER_TEMP/dedup-candidates.txt" "$candidates"'
 SEARCH_START = 'if ! gh api "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+-label:agent-refined'
-REFINED_SEARCH_START = 'if ! gh api "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:agent-refined'
+REFINED_SEARCH_START = 'if ! gh api --paginate --slurp "search/issues?q=repo:${ISSUE_REPOSITORY}+is:open+is:issue+label:agent-refined'
 REFINE_STEP_START = "set -Eeuo pipefail"
 REFINE_STEP_END = "(( refined > 0 )) || exit 1"
 
@@ -40,8 +40,26 @@ if [[ "${1:-}" == "api" ]]; then
   if [[ "$url" == *"search/issues"* ]]; then
     if [[ "$url" == *"sort:created-asc"* ]]; then
       fixture="$GH_FIXTURES/unrefined-search.json"
+      if [[ -n "$jq_filter" ]]; then
+        jq -r "$jq_filter" "$fixture"
+      else
+        cat "$fixture"
+      fi
+      exit 0
     else
+      if [[ -n "${GH_REFINED_PAGES_JSON:-}" ]]; then
+        printf '%s\n' "$GH_REFINED_PAGES_JSON"
+        exit 0
+      fi
       fixture="$GH_FIXTURES/refined-search.json"
+      if [[ " $* " == *" --slurp "* || "$url" == *"per_page=100"* ]]; then
+        jq -s '.' "$fixture"
+      elif [[ -n "$jq_filter" ]]; then
+        jq -r "$jq_filter" "$fixture"
+      else
+        cat "$fixture"
+      fi
+      exit 0
     fi
   elif [[ "$url" =~ /issues/([0-9]+)/comments ]]; then
     if [[ ",${GH_FAIL_COMMENTS:-}," == *",${BASH_REMATCH[1]},"* ]]; then
@@ -548,6 +566,23 @@ def test_every_candidate_is_refined_when_opencode_drains_stdin(tmp_path):
     assert "=== Refining issue #1 ===" in result.stdout
     assert "=== Refining issue #2 ===" in result.stdout
     assert "Refinement complete: 2 refined, 0 failed." in result.stdout
+
+
+def test_refined_discovery_is_not_limited_to_first_window(tmp_path):
+    run = WorkflowRun(tmp_path)
+    run.searches(unrefined=[])
+    # Simulate two pages: qualifying issue appears only on second page.
+    pages = [
+        {"items": [{"number": n} for n in range(1, 11)]},
+        {"items": [{"number": 42}]},
+    ]
+    run.env["GH_REFINED_PAGES_JSON"] = json.dumps(pages)
+    run.issue(42, body="## Goal\nOld\n\n<!-- agent-refined: 2026-11-08T10:00:00Z -->")
+    run.comments(42, [comment("BacLuc", "2026-11-08T11:00:00Z", "new feedback")])
+
+    result = run.run(candidate_block())
+    assert result.returncode == 0, result.stderr
+    assert "42" in run.candidates()
 
 
 def test_marker_timestamp_is_snapshotted_before_collection():

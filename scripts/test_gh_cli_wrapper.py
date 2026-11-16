@@ -33,21 +33,23 @@ def prepare_backend(directory):
 def verify_installed():
     with tempfile.TemporaryDirectory() as directory:
         env = dict(os.environ, TEST_LOG=str(Path(directory) / "log"), TEST_STATUS="23")
-        argv = ["pr", "create", "-R", "BaClUc-AgEnT/ecamp3", "--body-file", "-"]
-        result = subprocess.run(["bash", "-c", 'exec gh "$@"', "test", *argv],
-                                cwd=directory, env=env, input="body from stdin",
-                                capture_output=True, text=True)
-        assert result.returncode == 23, result.stderr
-        assert json.loads(result.stdout) == {"argv": argv, "stdin": "body from stdin"}
-        assert result.stderr == "backend stderr\n"
         log = Path(env["TEST_LOG"])
-        log.unlink()
+        for repo in ("BaClUc-AgEnT/ecamp3", "bacluc-agent-org/r"):
+            argv = ["pr", "create", "-R", repo, "--body-file", "-"]
+            result = subprocess.run(["bash", "-c", 'exec gh "$@"', "test", *argv],
+                                    cwd=directory, env=env, input="body from stdin",
+                                    capture_output=True, text=True)
+            assert result.returncode == 23, result.stderr
+            assert json.loads(result.stdout) == {"argv": argv, "stdin": "body from stdin"}
+            assert result.stderr == "backend stderr\n"
+            log.unlink()
         result = subprocess.run(["bash", "-c", 'gh pr create -R ecamp/ecamp3 --base devel --head bacluc-agent:issue-221-move-doctrine-validate-to-required-ci'],
                                 cwd=directory, env=env, capture_output=True, text=True)
         assert result.returncode != 0
         assert "gh cli wrapper:" in result.stderr
         assert not log.exists()
         for denied in ("gh pr create -R ecamp/ecamp3 --repo ecamp/ecamp3",
+                       "gh pr create -R bacluc-agent-orgevil/r",
                        "gh pr create --repo ecamp/ecamp3 --base devel --head bacluc-agent:issue-221-move-doctrine-validate-to-required-ci"):
             result = subprocess.run(["bash", "-c", denied], cwd=directory, env=env,
                                     capture_output=True, text=True)
@@ -91,6 +93,7 @@ class CliWrapperTest(unittest.TestCase):
     def test_creation(self):
         self.call(["pr", "create", "-R", "ecamp/ecamp3", "--base", "devel", "--head",
                    "bacluc-agent:issue-221-move-doctrine-validate-to-required-ci"], False)
+        self.call(["pr", "create", "-R", "bacluc-agent-org/r"])
         for command in ("create", "new"):
             for repo in ("BacLuc/r", "BaClUc-AgEnT/r", "github.com/BacLuc/r", "https://github.com/BacLuc/r"):
                 for flags in (["-R", repo], ["-R" + repo], ["-R=" + repo], ["--repo", repo], ["--repo=" + repo]):
@@ -124,6 +127,9 @@ class CliWrapperTest(unittest.TestCase):
         self.call(["api", "repos/BacLuc/r/pulls/", "-X", "POST", "-f", "title=test"])
         self.call(["api", "repos/BacLuc/r/contents/", "--jq", ".[].name"])
         self.call(["api", "graphql", "-XGET"], False)
+        self.call(["api", "graphql", "-f", "query=query { organization(login: owner) { projectV2(number: number) { id } } }"])
+        self.call(["api", "graphql", "-f", "query=mutation { updateProjectV2ItemPosition(input: {projectId: id, itemId: id, afterId: null}) { projectV2Item { id } } }"])
+        self.call(["api", "graphql", "-f", "query=query { repository(owner: owner, name: name) { id } }"] , False)
         self.call(["api", "repos/BacLuc/r/pulls", "-f", "body=--hostname=evil.com", "--hostname=github.com"])
 
     def test_revert(self):

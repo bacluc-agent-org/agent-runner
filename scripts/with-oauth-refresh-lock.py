@@ -10,7 +10,7 @@ import uuid
 from calendar import timegm
 
 
-LOCK_REF = "refs/heads/.locks/chatgpt-oauth-refresh"
+LOCK_REF = "refs/heads/oauth-refresh-lock"
 LEASE_SECONDS = 900
 POLL_SECONDS = 5
 lock_sha = None
@@ -68,7 +68,7 @@ def acquire():
             return
         if status != 422:
             raise RuntimeError(f"could not acquire OAuth refresh lock: HTTP {status}")
-        status, lock = request("GET", f"{repository_path()}/git/ref/heads/.locks/chatgpt-oauth-refresh")
+        status, lock = request("GET", f"{repository_path()}/git/ref/heads/oauth-refresh-lock")
         if status != 200:
             time.sleep(POLL_SECONDS)
             continue
@@ -91,9 +91,9 @@ def release():
             return
     if not owned_sha:
         return
-    status, lock = request("GET", f"{repository_path()}/git/ref/heads/.locks/chatgpt-oauth-refresh")
+    status, lock = request("GET", f"{repository_path()}/git/ref/heads/oauth-refresh-lock")
     if status == 200 and lock["object"]["sha"] == owned_sha:
-        request("DELETE", f"{repository_path()}/git/refs/heads/.locks/chatgpt-oauth-refresh")
+        request("DELETE", f"{repository_path()}/git/refs/heads/oauth-refresh-lock")
     try:
         os.remove(lock_file())
     except FileNotFoundError:

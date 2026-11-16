@@ -156,11 +156,7 @@ def validate_graphql(parsed):
         deny("GraphQL requires a project-v2 query")
     field_variables = {"fieldId", "singleSelectOptionId"}
     form_fields = {field.partition("=")[0] for field in fields}
-    operation_tokens = set(re.findall(
-        r"[A-Za-z_][A-Za-z0-9_]*",
-        re.sub(r'#[^\n\r]*|"(?:\\.|[^"\\])*"', "", queries[0]),
-    ))
-    has_field_mutation = {"mutation", "updateProjectV2ItemFieldValue"} <= operation_tokens
+    has_field_mutation = has_update_field_mutation(queries[0])
     if form_fields & field_variables and not has_field_mutation:
         deny("project field variables require updateProjectV2ItemFieldValue")
     allowed_form_fields = {
@@ -171,7 +167,10 @@ def validate_graphql(parsed):
         for field in fields
     ):
         deny("GraphQL requires a project-v2 query")
-    tokens = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", queries[0]))
+    tokens = {
+        token for token in graphql_tokens(queries[0])
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", token)
+    }
     allowed = {
         "ProjectV2", "ProjectV2FieldConfiguration", "ProjectV2Item",
         "ProjectV2SingleSelectField", "organization", "projectV2", "projectV2Items",
@@ -184,6 +183,66 @@ def validate_graphql(parsed):
     }
     if not tokens or not tokens <= allowed:
         deny("only project-v2 GraphQL operations are supported")
+
+
+def graphql_tokens(query):
+    token_pattern = re.compile(
+        r'#[^\n\r]*|"""(?:[^\"]|"(?!"")|""(?!"))*"""|"(?:\\.|[^"\\])*"|'
+        r"[A-Za-z_][A-Za-z0-9_]*|[!$():=@\[\]{|}&,]"
+    )
+    return [match.group() for match in token_pattern.finditer(query)
+            if not match.group().startswith(("#", '"'))]
+
+
+def has_update_field_mutation(query):
+    tokens = graphql_tokens(query)
+    brace_depth = 0
+    for index, token in enumerate(tokens):
+        if token == "mutation" and brace_depth == 0:
+            selection_start = next((position for position in range(index + 1, len(tokens))
+                                    if tokens[position] == "{"), None)
+            if selection_start is None:
+                continue
+            depth = 1
+            position = selection_start + 1
+            while position < len(tokens) and depth:
+                if tokens[position] == "}":
+                    break
+                if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", tokens[position]):
+                    position += 1
+                    continue
+                field_name = tokens[position]
+                position += 1
+                if tokens[position:position + 1] == [":"]:
+                    position += 2
+                if field_name == "updateProjectV2ItemFieldValue":
+                    return True
+                for opener, closer in (("(", ")"), ("{", "}")):
+                    if tokens[position:position + 1] == [opener]:
+                        nested_depth = 1
+                        position += 1
+                        while position < len(tokens) and nested_depth:
+                            if tokens[position] == opener:
+                                nested_depth += 1
+                            elif tokens[position] == closer:
+                                nested_depth -= 1
+                            position += 1
+                while tokens[position:position + 1] == ["@"]:
+                    position += 2
+                    if tokens[position:position + 1] == ["("]:
+                        nested_depth = 1
+                        position += 1
+                        while position < len(tokens) and nested_depth:
+                            if tokens[position] == "(":
+                                nested_depth += 1
+                            elif tokens[position] == ")":
+                                nested_depth -= 1
+                            position += 1
+        elif token == "{":
+            brace_depth += 1
+        elif token == "}":
+            brace_depth -= 1
+    return False
 
 
 def main():

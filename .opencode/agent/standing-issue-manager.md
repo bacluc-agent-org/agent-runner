@@ -36,6 +36,7 @@ items except through the rotation rules below.
 ## Eligibility
 
 An item is ineligible when any of the following holds:
+
 - the issue is closed;
 - the issue has the `agent-running` label;
 - an `opencode.yml` run for that issue is in progress or queued (detect by

@@ -12,12 +12,8 @@ on:
       - "scripts/**"
 
 permissions:
-  contents: read
+  contents: write
   issues: write
-
-concurrency:
-  group: chatgpt-oauth-refresh
-  cancel-in-progress: false
 
 jobs:
   refine:

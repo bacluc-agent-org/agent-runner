@@ -105,10 +105,6 @@ permissions:
   issues: write
   pull-requests: write
 
-concurrency:
-  group: chatgpt-oauth-refresh
-  cancel-in-progress: false
-
 jobs:
   run:
     runs-on: ubuntu-latest

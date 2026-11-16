@@ -156,11 +156,16 @@ def validate_graphql(parsed):
         deny("GraphQL requires a project-v2 query")
     field_variables = {"fieldId", "singleSelectOptionId"}
     form_fields = {field.partition("=")[0] for field in fields}
-    if form_fields & field_variables and "updateProjectV2ItemFieldValue" not in queries[0]:
+    operation_tokens = set(re.findall(
+        r"[A-Za-z_][A-Za-z0-9_]*",
+        re.sub(r'#[^\n\r]*|"(?:\\.|[^"\\])*"', "", queries[0]),
+    ))
+    has_field_mutation = {"mutation", "updateProjectV2ItemFieldValue"} <= operation_tokens
+    if form_fields & field_variables and not has_field_mutation:
         deny("project field variables require updateProjectV2ItemFieldValue")
     allowed_form_fields = {
         "query", "owner", "login", "number", "projectId", "itemId", "afterId",
-    } | (field_variables if "updateProjectV2ItemFieldValue" in queries[0] else set())
+    } | (field_variables if has_field_mutation else set())
     if len(queries) != 1 or any(
         field.partition("=")[0] not in allowed_form_fields
         for field in fields

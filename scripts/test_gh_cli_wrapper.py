@@ -132,6 +132,7 @@ class CliWrapperTest(unittest.TestCase):
         self.call(["api", "graphql", "-f", "query=mutation { updateProjectV2ItemFieldValue(input: {projectId: id, itemId: id, fieldId: id, value: {singleSelectOptionId: id}}) { projectV2Item { id } } }"])
         mutation = "query=mutation { updateProjectV2ItemFieldValue(input: {projectId: projectId, itemId: itemId, fieldId: fieldId, value: {singleSelectOptionId: singleSelectOptionId}}) { projectV2Item { id } } }"
         self.call(["api", "graphql", "-f", mutation, "-f", "fieldId=field-id", "-f", "singleSelectOptionId=option-id"])
+        self.call(["api", "graphql", "-f", "query=query { organization(login: owner) { projectV2(number: number) { id } } } # updateProjectV2ItemFieldValue", "-f", "fieldId=field-id"], False)
         self.call(["api", "graphql", "-f", mutation, "-f", "unsupported=value"], False)
         position = "query=mutation { updateProjectV2ItemPosition(input: {projectId: projectId, itemId: itemId, afterId: afterId}) { projectV2Item { id } } }"
         self.call(["api", "graphql", "-f", position, "-f", "fieldId=field-id"], False)

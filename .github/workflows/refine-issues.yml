@@ -15,6 +15,10 @@ permissions:
   contents: read
   issues: write
 
+concurrency:
+  group: chatgpt-oauth-refresh
+  cancel-in-progress: false
+
 jobs:
   refine:
     runs-on: ubuntu-latest

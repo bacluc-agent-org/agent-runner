@@ -3,6 +3,13 @@ set -Eeuo pipefail
 
 auth_file="$RUNNER_TEMP/auth.json"
 stderr_file="$RUNNER_TEMP/primitives-login.stderr"
+login_timeout="${PLAYWRIGHT_LOGIN_TIMEOUT_SECONDS:-600}"
+if [[ ! "$login_timeout" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'Invalid Playwright login timeout\n' >&2
+  exit 1
+fi
+login_deadline=$((SECONDS + login_timeout))
+agent_log="$RUNNER_TEMP/chatgpt-login-recovery.agent.log"
 if [[ -z "${OPENAI_USERNAME:-}" && -z "${CHATGPT_EMAIL:-}" ]] || [[ -z "${OPENAI_PASSWORD:-}" && -z "${CHATGPT_PASSWORD:-}" ]]; then
   printf 'Primitive login credentials are not configured; set an email and password secret\n' >&2
   exit 1
@@ -71,7 +78,7 @@ recover_blocking_login() {
   local handoff_timeout="${PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS:-300}"
   local command_timeout="${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}"
   local agent_timeout="${PLAYWRIGHT_AGENT_TIMEOUT_SECONDS:-120}"
-  local agent_model="${PLAYWRIGHT_AGENT_MODEL:-opencode-go-openai/gpt-5.6-luna}"
+  local agent_model="${PLAYWRIGHT_AGENT_MODEL:-opencode/big-pickle}"
 
   if [[ ! "$handoff_timeout" =~ ^[1-9][0-9]*$ || "$handoff_timeout" -gt 300 || ! "$command_timeout" =~ ^[1-9][0-9]*$ || "$command_timeout" -gt 30 || ! "$agent_timeout" =~ ^[1-9][0-9]*$ || "$agent_timeout" -gt 300 ]]; then
     printf 'Invalid Playwright handoff timeout\n' >&2
@@ -79,6 +86,9 @@ recover_blocking_login() {
   fi
 
   local deadline=$((SECONDS + handoff_timeout))
+  if ((deadline > login_deadline)); then
+    deadline=$login_deadline
+  fi
 
   run_with_deadline() {
     local max_timeout="$1"
@@ -104,7 +114,7 @@ recover_blocking_login() {
       run_with_deadline "$handoff_timeout" playwright-cli "-s=$session" detach > /dev/null 2>&1 || true
       attached=false
     fi
-    rm -f -- "$snapshot_tmp" "$status_tmp" "$handoff_tmp" "$command_tmp" "$batch_file" "$snapshot_file" "$handoff_file" "$command_file"
+    rm -f -- "$snapshot_tmp" "$status_tmp" "$handoff_tmp" "$command_tmp" "$batch_file" "$snapshot_file" "$handoff_file" "$command_file" "$agent_log"
   }
   trap cleanup_recovery RETURN
   rm -f -- "$snapshot_file" "$handoff_file" "$command_file"
@@ -150,7 +160,7 @@ EOF
         TMPDIR="${TMPDIR:-}" RUNNER_TEMP="${RUNNER_TEMP:-}" FAKE_MODE="${FAKE_MODE:-}" FAKE_COMMAND="${FAKE_COMMAND:-}" \
         OPENCODE_GO_API_KEY="${OPENCODE_GO_API_KEY:-}" \
         OPENCODE_GO_2_API_KEY="${OPENCODE_GO_2_API_KEY:-}" \
-        timeout "$operation_timeout" "$@"
+        timeout "$operation_timeout" "$@" 2> "$agent_log"
     }
     if ! capture_snapshot; then
       printf 'Playwright CLI could not capture the login page\n' >&2
@@ -187,8 +197,27 @@ EOF
     local run_timeout="$agent_timeout"
     ((run_timeout > remaining)) && run_timeout=$remaining
     ((agent_attempt += 1))
-    if ! run_agent_with_deadline "$run_timeout" opencode run --auto --model "$agent_model" --title chatgpt-auth-recovery "$recovery_prompt" > /dev/null 2>&1; then
-      printf 'Playwright recovery agent attempt %s failed; retrying within the global deadline\n' "$agent_attempt" >&2
+    : > "$agent_log"
+    chmod 600 "$agent_log"
+    if ! run_agent_with_deadline "$run_timeout" opencode --pure run --auto --print-logs --log-level ERROR --model "$agent_model" --title chatgpt-auth-recovery "$recovery_prompt" > /dev/null; then
+      local reason=''
+      if [[ -s "$agent_log" ]] && redact_snapshot "$agent_log"; then
+        reason=$(tail -c 2000 "$agent_log" || true)
+      fi
+      if [[ -n "$reason" ]]; then
+        stop_token="$(openssl rand -hex 32)"
+        : "${stop_token:?stop-commands fence token generation failed}"
+        printf '::stop-commands::%s\n' "$stop_token"
+        printf 'Playwright recovery agent attempt %s failed; safe diagnostics:\n%s\n' "$agent_attempt" "$reason" >&2
+        printf '::%s::\n' "$stop_token"
+      else
+        printf 'Playwright recovery agent attempt %s failed; retrying within the global deadline\n' "$agent_attempt" >&2
+      fi
+      local fatal_reason="${reason,,}"
+      if [[ "$fatal_reason" =~ ai_apicallerror|ai_retryerror|usage\ limit|api\ key\ has\ expired|authentication|unauthorized|401 ]]; then
+        printf 'Playwright recovery agent stopped on a fatal provider error\n' >&2
+        return 1
+      fi
       ((SECONDS < deadline)) && sleep 1
       continue
     fi
@@ -301,7 +330,9 @@ EOF
   handoff_tmp=''
 }
 
-for attempt in $(seq 1 120); do
+attempt=0
+while ((SECONDS < login_deadline)); do
+  ((attempt += 1))
   if ! kill -0 "$start_pid" 2> /dev/null; then
     if ! wait "$start_pid"; then
       printf 'Primitive login startup failed; safe diagnostics:\n' >&2

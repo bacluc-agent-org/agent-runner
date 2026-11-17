@@ -253,7 +253,7 @@ def _status_payload(page, blocking: str | None, code_ready: bool, cdp_port: int)
     path = _page_path(page)
     step = _step_for_path(path) or "unknown"
     if step == "email-verification" and blocking is None:
-        blocking = "email verification required; use an allowed recovery command or stop the session"
+        blocking = "email verification required; no inbox/OTP source is configured, so use an allowed auth route or stop the session"
     elif step == "unknown" and blocking is None:
         blocking = f"unknown authentication route; use playwright-cli attach --cdp=http://localhost:{cdp_port}"
     try:

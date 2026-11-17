@@ -46,6 +46,20 @@ def test_status_payload_describes_email_verification_and_unknown_routes():
         "code_ready": False,
     }
 
+    verification_default = chatgpt_login._status_payload(
+        types.SimpleNamespace(
+            url="https://auth.openai.com/email-verification",
+            title=lambda: "Verify your email",
+        ),
+        blocking=None,
+        code_ready=False,
+        cdp_port=9222,
+    )
+    assert verification_default["blocking"] == (
+        "email verification required; no inbox/OTP source is configured, "
+        "so use an allowed auth route or stop the session"
+    )
+
     unknown = chatgpt_login._status_payload(
         types.SimpleNamespace(url="https://auth.openai.com/unexpected", title=lambda: "Unexpected"),
         blocking=None,
@@ -591,7 +605,8 @@ def test_primitives_fallback_observes_retries_and_validates_login_output():
     assert "Primitive login startup failed; safe diagnostics:" in helper
     assert 'cat "$stderr_file" >&2' in helper
     assert "Primitive login step failed with status" in helper
-    assert "for attempt in $(seq 1 120)" in helper
+    assert "while ((SECONDS < login_deadline))" in helper
+    assert "login_deadline=$((SECONDS + login_timeout))" in helper
     assert "if ! status_json=$(uv run scripts/chatgpt-login.py status); then" in helper
     assert "scripts/chatgpt-login.py step) || step_status=$?" in helper
     assert "Primitive login timed out" in helper
@@ -620,7 +635,11 @@ def test_primitives_fallback_observes_retries_and_validates_login_output():
     assert 'RUNNER_TEMP="${RUNNER_TEMP:-}"' in helper
     assert 'command_timeout="${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}"' in helper
     assert 'agent_timeout="${PLAYWRIGHT_AGENT_TIMEOUT_SECONDS:-120}"' in helper
-    assert "opencode run --auto --model" in helper
+    assert 'agent_model="${PLAYWRIGHT_AGENT_MODEL:-opencode/big-pickle}"' in helper
+    assert "PLAYWRIGHT_AGENT_MODEL: opencode/big-pickle" in primitives
+    assert "opencode --pure run --auto --print-logs --log-level ERROR --model" in helper
+    assert "chatgpt-login-recovery.agent.log" in helper
+    assert "ai_apicallerror|ai_retryerror|usage\\ limit" in helper
 
 
 def test_workflow_human_comment_filters_use_authenticated_actor():
@@ -891,6 +910,10 @@ fi
 if [[ "$FAKE_MODE" == deadline ]]; then
   sleep 2
 fi
+if [[ "$FAKE_MODE" == provider-error ]]; then
+  printf '%s\\n' 'AI_APICallError: OpenCode Go usage limit reached for test@example.invalid test-password test-totp-key 123456' >&2
+  exit 1
+fi
 if [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == handoff-write-failure ]]; then
   snapshot=$(<"$RUNNER_TEMP/chatgpt-login-recovery.snapshot")
   [[ "$snapshot" == 'inspectable snapshot' ]] || exit 1
@@ -947,7 +970,7 @@ if [[ "$FAKE_MODE" == snapshot-failure && "${2:-}" == snapshot ]]; then
   printf '%s\\n' 'secret-password snapshot failure' >&2
   exit 1
 fi
-if [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == detach-hang || "$FAKE_MODE" == handoff-write-failure || "$FAKE_MODE" == agent-timeout-retry ]] && [[ "${2:-}" == snapshot ]]; then
+if [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == detach-hang || "$FAKE_MODE" == handoff-write-failure || "$FAKE_MODE" == agent-timeout-retry || "$FAKE_MODE" == provider-error || "$FAKE_MODE" == global-deadline ]] && [[ "${2:-}" == snapshot ]]; then
   touch "$RUNNER_TEMP/recovered"
   printf '%s\\n' 'inspectable snapshot'
 fi
@@ -1307,3 +1330,51 @@ exec /bin/mv "$@"
     assert slow_command.returncode != 0
     assert not (tmp_path / "chatgpt-login-recovery.snapshot").exists()
     assert not (tmp_path / "chatgpt-login-recovery.handoff").exists()
+
+    for path in tmp_path.iterdir():
+        if path.is_file():
+            path.unlink()
+    started = time.monotonic()
+    provider_error = subprocess.run(
+        ["bash", str(helper)],
+        env={
+            **env,
+            "FAKE_MODE": "provider-error",
+            "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "30",
+            "PLAYWRIGHT_LOGIN_TIMEOUT_SECONDS": "60",
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert provider_error.returncode != 0
+    assert time.monotonic() - started < 5
+    assert "AI_APICallError" in provider_error.stderr
+    assert "safe diagnostics" in provider_error.stderr
+    assert "test@example.invalid" not in provider_error.stderr
+    assert "test-password" not in provider_error.stderr
+    assert "test-totp-key" not in provider_error.stderr
+    assert "123456" not in provider_error.stderr
+    assert not (tmp_path / "gh-call").exists()
+
+    for path in tmp_path.iterdir():
+        if path.is_file():
+            path.unlink()
+    started = time.monotonic()
+    global_deadline = subprocess.run(
+        ["bash", str(helper)],
+        env={
+            **env,
+            "FAKE_MODE": "global-deadline",
+            "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "30",
+            "PLAYWRIGHT_AGENT_TIMEOUT_SECONDS": "10",
+            "PLAYWRIGHT_LOGIN_TIMEOUT_SECONDS": "2",
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert global_deadline.returncode != 0
+    assert time.monotonic() - started < 6
+    assert "Playwright handoff timed out" in global_deadline.stderr
+    assert not (tmp_path / "gh-call").exists()

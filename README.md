@@ -31,10 +31,10 @@ anything.
 
 1. **An idea becomes an issue.** Anyone writes an idea as an issue in
    `agent-todo`. It does not need a special format.
-2. **The issue is refined** (hourly, at minute 7). The _issue-refiner_ agent
+2. **The issue is refined** (every 4 hours at :07). The _issue-refiner_ agent
    rewrites the issue body into two clear sections — `## Goal` and
    `## How to implement` — and labels it `ready-for-implementation`.
-3. **An issue is selected** (hourly, at minute 24). The _issue-selector_
+3. **An issue is selected** (hourly at :37). The _issue-selector_
    agent picks one ready issue, claims it with `agent-running` for the run, and
    writes the implementation prompt for the next step. The claim is removed
    when the run ends.
@@ -55,8 +55,8 @@ anything.
 
 ```text
 idea (issue in agent-todo)
-  → refine (hourly :07)
-  → select (hourly :24)
+  → refine (every 4 hours at :07)
+  → select (hourly at :37)
   → implement (coordinator agent)
   → pull request (opened by the agent, when code changed)
   → review comments → fixes (every 4 h)
@@ -70,8 +70,8 @@ idea (issue in agent-todo)
 | Workflow                       | When it runs                                | What it does                                                                                                                                                                                            |
 | ------------------------------ | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ci.yml`                       | every push to `main` and every pull request | Quality gate: runs the completion check (formatting, workflow lint, tests). Nothing merges if this fails.                                                                                               |
-| `refine-issues.yml`            | hourly at minute 7                          | Rewrites vague issues into `## Goal` + `## How to implement` and labels them `ready-for-implementation`.                                                                                                |
-| `hourly-issue.yml`             | hourly at minute 24                         | Picks one ready issue, claims it with `agent-running` for the run, and starts the implementation.                                                                                                       |
+| `refine-issues.yml`            | every 4 hours at :07                        | Rewrites vague issues into `## Goal` + `## How to implement` and labels them `ready-for-implementation`.                                                                                                |
+| `hourly-issue.yml`             | hourly at :37                               | Picks one ready issue, claims it with `agent-running` for the run, and starts the implementation.                                                                                                       |
 | `opencode.yml`                 | called by the other workflows               | The core runner: checks model availability, selects a model, runs the coordinator agent, pushes the work, keeps one structured progress comment on the issue, and only short replies to human comments. |
 | `review-fixes.yml`             | every 4 hours at minute 32                  | Finds open pull requests with review comments and re-dispatches the agent to apply them.                                                                                                                |
 | `refresh-chatgpt-auth.yml`     | 1st and 15th of each month                  | Keeps the OpenAI login working by refreshing the OAuth token (browser login as fallback).                                                                                                               |
@@ -138,15 +138,16 @@ The installer saves the real CLI's absolute path before changing PATH.
   `--input`. Ambiguous options, noncanonical paths and routing overrides fail
   closed. Ordinary REST reads, issue comments, PATCH, forks and dispatches remain
   available; accepted calls preserve arguments, stdin, output and exit status.
-- Direct `gh api graphql`, configured alias execution, alias management and
-  extension commands are denied. Use builtin CLI commands or canonical REST
-  endpoints instead. Unknown builtin commands/options on guarded routes require
-  review before adding support; this is not a complete CLI parser.
+- Direct non-project-v2 `gh api graphql`, configured alias execution, alias management and
+  extension commands are denied. Project-v2 GraphQL queries and mutations are limited to the
+  supported project fields and operations; use builtin CLI commands or canonical REST endpoints
+  for everything else. Unknown builtin commands/options on guarded routes require review before
+  adding support; this is not a complete CLI parser.
 
 This is an accidental-misrouting guardrail, **not a sandbox or universal PR
 prevention**. An absolute executable path, direct HTTP, changing PATH or changing
 the wrapper can bypass it. CLI builtin commands may internally use GraphQL;
-only direct `gh api graphql` is denied.
+only supported project-v2 GraphQL operations are allowed directly.
 
 Regression tests use a fake backend and never create forbidden PRs. Run
 `python3 -m unittest discover -s scripts -p test_gh_cli_wrapper.py` locally. The

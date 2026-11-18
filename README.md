@@ -33,7 +33,10 @@ anything.
    `agent-todo`. It does not need a special format.
 2. **The issue is refined** (every 4 hours at :07). The _issue-refiner_ agent
    rewrites the issue body into two clear sections — `## Goal` and
-   `## How to implement` — and labels it `ready-for-implementation`.
+   `## How to implement` — and labels it `ready-for-implementation`. If a
+   reviewer comments on an already-refined issue and removes its
+   `agent-refined` label, the next refine run re-refines it and folds the
+   feedback into the body.
 3. **An issue is selected** (hourly at :37). The _issue-selector_
    agent picks one ready issue, claims it with `agent-running` for the run, and
    writes the implementation prompt for the next step. The claim is removed
@@ -56,6 +59,7 @@ anything.
 ```text
 idea (issue in agent-todo)
   → refine (every 4 hours at :07)
+  ↳ reviewer comment + remove agent-refined label → refine again with feedback
   → select (hourly at :37)
   → implement (coordinator agent)
   → pull request (opened by the agent, when code changed)
@@ -70,7 +74,7 @@ idea (issue in agent-todo)
 | Workflow                       | When it runs                                | What it does                                                                                                                                                                                            |
 | ------------------------------ | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ci.yml`                       | every push to `main` and every pull request | Quality gate: runs the completion check (formatting, workflow lint, tests). Nothing merges if this fails.                                                                                               |
-| `refine-issues.yml`            | every 4 hours at :07                        | Rewrites vague issues into `## Goal` + `## How to implement` and labels them `ready-for-implementation`.                                                                                                |
+| `refine-issues.yml`            | every 4 hours at :07                        | Rewrites issues into `## Goal` + `## How to implement`, labels `ready-for-implementation`; re-refines after a reviewer comment + manual `agent-refined` label removal, folding feedback into the body.  |
 | `hourly-issue.yml`             | hourly at :37                               | Picks one ready issue, claims it with `agent-running` for the run, and starts the implementation.                                                                                                       |
 | `opencode.yml`                 | called by the other workflows               | The core runner: checks model availability, selects a model, runs the coordinator agent, pushes the work, keeps one structured progress comment on the issue, and only short replies to human comments. |
 | `review-fixes.yml`             | every 4 hours at minute 32                  | Finds open pull requests with review comments and re-dispatches the agent to apply them.                                                                                                                |

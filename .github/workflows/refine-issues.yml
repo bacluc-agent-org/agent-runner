@@ -151,6 +151,13 @@ jobs:
 
             title="$(gh issue view "$number" -R "$ISSUE_REPOSITORY" --json title --jq '.title')" || { echo "::warning::skip $number: view title failed" >&2; ((failed++)) || true; continue; }
             body="$(gh issue view "$number" -R "$ISSUE_REPOSITORY" --json body --jq '.body')" || { echo "::warning::skip $number: view body failed" >&2; ((failed++)) || true; continue; }
+            comments_file="$RUNNER_TEMP/comments-${number}.txt"
+            if ! gh api --paginate "repos/${ISSUE_REPOSITORY}/issues/${number}/comments?per_page=100" \
+              --jq '.[] | select((.user.type // "") != "Bot") | select((.user.login // "") != "bacluc-agent") | select(((.body // "") | contains("<!-- agent-progress -->")) | not) | "Author: \(.user.login // "unknown")\nCreated at: \(.created_at // "")\nBody:\n\(.body // "")\n"' \
+              > "$comments_file"; then
+              printf '::warning::issue #%s: comment fetch failed; refining without feedback\n' "$number" >&2
+              : > "$comments_file"
+            fi
 
             prompt="$RUNNER_TEMP/refine-prompt.txt"
             {
@@ -160,6 +167,10 @@ jobs:
               printf '%s\n' ''
               printf '%s\n' 'Current body:'
               printf '%s\n' "$body"
+              if [[ -s "$comments_file" ]]; then
+                printf '\n%s\n' 'Reviewer comments (feedback to fold into the Goal and steps; do not quote them wholesale):'
+                tail -c 32768 "$comments_file"
+              fi
               printf '%s\n' ''
               printf '%s\n' 'Your task: rewrite the issue body so that a coding agent can implement it'
               printf '%s\n' 'without ambiguity. The refined body MUST contain exactly two sections:'

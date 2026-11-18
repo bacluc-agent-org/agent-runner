@@ -49,6 +49,7 @@ jobs:
         shell: bash
         env:
           AVAILABLE_MODELS: ${{ steps.model-availability.outputs.available-models }}
+          GH_CLI_WRAPPER_MAX_SLEEP_SECONDS: "300"
         run: |
           set -Eeuo pipefail
 
@@ -149,8 +150,9 @@ jobs:
             fi
             printf '\n\n\n\n\n\n'
 
-            title="$(gh issue view "$number" -R "$ISSUE_REPOSITORY" --json title --jq '.title')" || { echo "::warning::skip $number: view title failed" >&2; ((failed++)) || true; continue; }
-            body="$(gh issue view "$number" -R "$ISSUE_REPOSITORY" --json body --jq '.body')" || { echo "::warning::skip $number: view body failed" >&2; ((failed++)) || true; continue; }
+            issue_json="$(gh issue view "$number" -R "$ISSUE_REPOSITORY" --json title,body)" || { echo "::warning::skip $number: view failed" >&2; ((failed++)) || true; continue; }
+            title="$(jq -r '.title // ""' <<< "$issue_json")"
+            body="$(jq -r '.body // ""' <<< "$issue_json")"
 
             prompt="$RUNNER_TEMP/refine-prompt.txt"
             {

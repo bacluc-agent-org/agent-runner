@@ -616,7 +616,7 @@ def test_primitives_fallback_observes_retries_and_validates_login_output():
     assert 'gh secret set OPENCODE_AUTH_JSON' in helper
     assert "scripts/chatgpt-login.py status || true" not in helper
     assert "scripts/chatgpt-login.py step || true" not in helper
-    assert "operations=snapshot|click|hover|check|uncheck|fill|type|fill_secret|type_secret|otp|select|goto|press|reload|go-back|go-forward|status" in helper
+    assert "operations=snapshot|click|hover|check|uncheck|fill|type|fill_secret|type_secret|otp|select|goto|press|reload|go-back|go-forward|status|step" in helper
     assert "redact_snapshot()" in helper
     assert "type\\ (e[0-9]+)" in helper
     assert "\\ (email|password)$" in helper

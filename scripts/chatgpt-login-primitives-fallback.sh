@@ -141,7 +141,7 @@ status=uv run scripts/chatgpt-login.py status
 step=uv run scripts/chatgpt-login.py step
 detach=playwright-cli -s=$session detach
 commands=$command_file
-operations=snapshot|click|hover|check|uncheck|fill|type|fill_secret|type_secret|otp|select|goto|press|reload|go-back|go-forward|status
+operations=snapshot|click|hover|check|uncheck|fill|type|fill_secret|type_secret|otp|select|goto|press|reload|go-back|go-forward|status|step
 timeout_seconds=$handoff_timeout
 command_timeout_seconds=$command_timeout
 EOF
@@ -186,7 +186,8 @@ $sanitized_status
 Current redacted Playwright snapshot:
 $snapshot_content
 Write only newline-delimited commands to $command_file, then exit.
-Allowed commands are exactly: snapshot, click eN, hover eN, check eN, uncheck eN, fill eN TEXT, type eN TEXT, fill_secret eN email|password, type_secret eN email|password, otp eN, select eN VALUE, goto https://auth.openai.com/PATH, goto https://chatgpt.com/PATH, press KEY, reload, go-back, go-forward, status.
+Allowed commands are exactly: snapshot, click eN, hover eN, check eN, uncheck eN, fill eN TEXT, type eN TEXT, fill_secret eN email|password, type_secret eN email|password, otp eN, select eN VALUE, goto https://auth.openai.com/PATH, goto https://chatgpt.com/PATH, press KEY, reload, go-back, go-forward, status, step.
+OpenAI may change the login flow; adapt the path using the primitives and snapshot instead of assuming a fixed sequence. Use step to invoke the built-in automation primitive when it can make progress.
 Use symbolic secret commands for credentials and otp for TOTP; never read, print, or write credential values. Use only refs from the snapshot. URLs must use https on auth.openai.com, chatgpt.com, www.chatgpt.com, or chat.openai.com, with optional path, query, and fragment. TEXT and VALUE may contain up to 200 printable characters. Keep the batch at most 32 commands. The global recovery deadline has $remaining seconds remaining. Do not call playwright-cli directly, modify any other file, or report secrets.
 EOF
     )
@@ -291,6 +292,8 @@ EOF
         elif [[ "$command" =~ ^goto\ (https://(auth\.openai\.com|chatgpt\.com|www\.chatgpt\.com|chat\.openai\.com)([/?#][^[:space:]\\]*)?)$ ]]; then
           url="${BASH_REMATCH[1]}"
           run_with_deadline "$command_timeout" playwright-cli "-s=$session" goto "$url" > /dev/null 2>&1 || return 1
+        elif [[ "$command" == step ]]; then
+          run_with_deadline "$command_timeout" uv run scripts/chatgpt-login.py step > /dev/null 2>&1 || true
         elif [[ "$command" =~ ^(reload|go-back|go-forward|status)$ ]]; then
           operation="${BASH_REMATCH[1]}"
           if [[ "$operation" != status ]]; then

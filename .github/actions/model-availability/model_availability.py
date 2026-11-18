@@ -427,6 +427,10 @@ def is_cache_fresh(entry, now: datetime) -> bool:
     return (now - checked).total_seconds() < ttl_hours * 3600
 
 
+def cache_marks_available(entry) -> bool:
+    return isinstance(entry, dict) and entry.get("ok") is True
+
+
 def candidate_priority(candidate: str) -> int:
     """Lower = probed first. Workflow-critical models beat everything else."""
     provider, _, model = candidate.partition("/")
@@ -538,12 +542,12 @@ def available_models(
     env = os.environ if env is None else env
     available = []
     for model in whitelisted_models:
-        if provider_has_credentials(model, provider_options, env) and cache.get(model, {}).get("ok"):
+        if provider_has_credentials(model, provider_options, env) and cache_marks_available(cache.get(model)):
             available.append(model)
     for provider, models in provider_models.items():
         for model in models:
             candidate = f"{provider}/{model}"
-            if provider_has_credentials(candidate, provider_options, env) and cache.get(candidate, {}).get("ok"):
+            if provider_has_credentials(candidate, provider_options, env) and cache_marks_available(cache.get(candidate)):
                 available.append(candidate)
     return list(dict.fromkeys(available))
 
@@ -586,14 +590,7 @@ def main() -> int:
         candidates = []
     else:
         if DISCOVERY_TIMED_OUT:
-            available = [
-                model
-                for model, entry in cache.items()
-                if isinstance(entry, dict)
-                and entry.get("ok") is True
-                and provider_options is not None
-                and provider_has_credentials(model, provider_options, os.environ)
-            ]
+            available = available_models(cache, list(cache), {}, provider_options, os.environ)
             write_outputs(cache_issue, cache, available)
             print("Available models:")
             print("\n".join(available) if available else "(none)")

@@ -6,12 +6,13 @@ description: >-
   auto-detected by searching for an issue titled "model-discovery cache" in
   the repository set via ISSUE_REPOSITORY. Available models cache for 24
   hours, failed models for 1 hour. Model discovery has an internal 120-second
-  timeout: when it expires the action exits 0 with the previously cached
-  available models that still pass the credential check (possibly none),
-  while other discovery errors fail the step. Probes at most 30 stale
-  candidates per run, highest priority first. Provider credentials are
-  resolved from raw OpenCode config files plus the job environment;
-  configured providers whose {env:...} refs do not resolve are skipped.
+  timeout: when it expires or discovery raises a handled error the action
+  exits 0 with the previously cached models that still pass the credential
+  check (possibly none). Probes at most 30 stale candidates per run, highest
+  priority first. Provider credentials are resolved from the config files
+  reported by `opencode debug config` (or its config document on v1) plus the
+  job environment; configured providers whose {env:...} refs do not resolve
+  are skipped.
 outputs:
   cache-issue:
     description: Resolved model-availability cache issue number (empty when none)
@@ -22,9 +23,10 @@ outputs:
   available-models:
     description: >-
       Newline-separated model IDs with ok=true in the merged cache that are
-      credential-eligible: credentials are resolved from raw OpenCode config
-      files plus the job environment, and configured providers whose {env:...}
-      refs do not resolve are skipped. Listed in discovery order.
+      credential-eligible: credentials are resolved from the config files
+      reported by `opencode debug config` (or its config document on v1) plus
+      the job environment, and configured providers whose {env:...} refs do not
+      resolve are skipped. Listed in discovery order.
     value: ${{ steps.check.outputs.available-models }}
 runs:
   using: composite

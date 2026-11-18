@@ -36,6 +36,12 @@ def _reset_discovery_timeout():
     model_availability.DISCOVERY_TIMED_OUT = False
 
 
+@pytest.fixture(autouse=True)
+def _isolated_home(monkeypatch, tmp_path):
+    """Keep the real OpenCode auth store out of every test."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+
 def fake_run(args, *a, **kw):
     if args == ["opencode", "models"]:
         return types.SimpleNamespace(stdout="opencode/a-free\n")
@@ -1043,6 +1049,22 @@ class TestAvailableModels:
             "opencode-go-openai/glm-5.2",
             "opencode-go-openai-2/glm-5.2",
         ]
+
+    def test_malformed_and_non_boolean_cache_entries_are_not_available(self):
+        cache = {
+            "opencode/a-free": "not-a-dict",
+            "opencode/b-free": ["not-a-dict"],
+            "opencode/c-free": {"ok": "false", "checked": "x"},
+            "opencode-go-openai/glm-5.2": "not-a-dict",
+            "opencode-go-openai/glm-6": {"ok": True, "checked": "x"},
+        }
+        assert model_availability.available_models(
+            cache,
+            ["opencode/a-free", "opencode/b-free", "opencode/c-free"],
+            {"opencode-go-openai": ["glm-5.2", "glm-6"]},
+            {"opencode-go-openai": {"apiKey": "literal"}},
+            {},
+        ) == ["opencode-go-openai/glm-6"]
 
     def test_cached_custom_provider_requires_runtime_credentials_without_mutating_cache(self, tmp_path, monkeypatch):
         provider = "vshn-us-ai"

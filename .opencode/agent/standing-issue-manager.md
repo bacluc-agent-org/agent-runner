@@ -60,10 +60,12 @@ the top is eligible or no eligible item remains. If only one item remains and it
 is ineligible, stop.
 
 Rotation uses the repository's approved guarded GraphQL path:
-`gh api graphql -f query='mutation { updateProjectV2ItemPosition(input: {projectId: "<project-id>", itemId: "<item-id>", afterId: "<second-item-id>"}) { projectV2Item { id } } }'`
-where `<project-id>` is `gh project view <n> --owner bacluc-agent-org --format json`
-(`.id`), and the item ids come from `gh project item-list`. This is the only
-permitted GraphQL use; all other GraphQL is forbidden. If positioning cannot be
+`gh api graphql -f query='mutation { updateProjectV2ItemPosition(input: {projectId: "<project-id>", itemId: "<item-id>", afterId: "<second-item-id>"}) { clientMutationId } }'`
+where `<project-id>` is `gh project view <project> --owner bacluc-agent-org --format json`
+(`.id`), and the item ids come from `gh project item-list`. The
+`{ clientMutationId }` selection is the supported payload;
+`projectV2Item` is not a field on `UpdateProjectV2ItemPositionPayload`. This is
+the only permitted GraphQL use; all other GraphQL is forbidden. If positioning cannot be
 performed, print `rotate failed #<n>` and stop, without deleting or re-adding
 the item.
 

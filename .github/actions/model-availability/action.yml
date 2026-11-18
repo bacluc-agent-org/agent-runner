@@ -5,10 +5,13 @@ description: >-
   number is taken from the MODEL_AVAILABILITY_CACHE_ISSUE env var, or
   auto-detected by searching for an issue titled "model-discovery cache" in
   the repository set via ISSUE_REPOSITORY. Available models cache for 24
-  hours, failed models for 1 hour. Probes at most 30 stale candidates per
-  run, highest priority first. Provider credentials are resolved from raw
-  OpenCode config files plus the job environment; configured providers whose
-  {env:...} refs do not resolve are skipped.
+  hours, failed models for 1 hour. Model discovery has an internal 120-second
+  timeout: when it expires the action exits 0 with the previously cached
+  available models that still pass the credential check (possibly none),
+  while other discovery errors fail the step. Probes at most 30 stale
+  candidates per run, highest priority first. Provider credentials are
+  resolved from raw OpenCode config files plus the job environment;
+  configured providers whose {env:...} refs do not resolve are skipped.
 outputs:
   cache-issue:
     description: Resolved model-availability cache issue number (empty when none)

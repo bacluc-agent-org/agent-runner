@@ -166,6 +166,11 @@ jobs:
         run: |
           mv "$GITHUB_WORKSPACE/$DIAGNOSTICS_CHECKOUT" "$RUNNER_TEMP/agent-runner"
 
+      - name: Configure repository git identity
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
       - name: Set up OpenCode
         uses: ./.github/actions/setup-opencode
 
@@ -174,6 +179,7 @@ jobs:
 
       - name: Check model availability
         id: model-availability
+        timeout-minutes: 10
         uses: ./.github/actions/model-availability
 
       - name: Dump model probe debug output

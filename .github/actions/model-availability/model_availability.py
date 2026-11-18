@@ -40,6 +40,7 @@ FETCH_TIMEOUT_SECONDS = 5
 PROBE_PROMPT = "Respond with exactly OK."
 CACHE_ISSUE_TITLE = "model-discovery cache"
 DISCOVERY_TIMEOUT_SECONDS = 120
+DISCOVERY_TIMED_OUT = False
 GITHUB_ISSUE_BODY_LIMIT = 65536
 
 
@@ -343,11 +344,21 @@ def discover_models(provider_options: dict[str, dict] | None) -> tuple[list[str]
     """whitelisted_models from `opencode models`; provider_models: {provider: model_ids} per provider.
 
     provider_options comes from load_provider_options(); None fails closed."""
+    global DISCOVERY_TIMED_OUT
+    DISCOVERY_TIMED_OUT = False
     if provider_options is None:
         raise RuntimeError("cannot determine provider eligibility because OpenCode config could not be read")
-    result = subprocess.run(
-        ["opencode", "models"], check=True, capture_output=True, text=True, timeout=DISCOVERY_TIMEOUT_SECONDS
-    )
+    try:
+        result = subprocess.run(
+            ["opencode", "models"], check=True, capture_output=True, text=True, timeout=DISCOVERY_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired:
+        DISCOVERY_TIMED_OUT = True
+        print(
+            f"warning: opencode models timed out after {DISCOVERY_TIMEOUT_SECONDS}s; model discovery unavailable",
+            file=sys.stderr,
+        )
+        return [], {}
     log_dir = os.path.join(
         os.environ.get("RUNNER_TEMP") or tempfile.gettempdir(), "model-probes"
     )
@@ -574,6 +585,19 @@ def main() -> int:
         whitelisted_models, provider_models = list(cache), {}
         candidates = []
     else:
+        if DISCOVERY_TIMED_OUT:
+            available = [
+                model
+                for model, entry in cache.items()
+                if isinstance(entry, dict)
+                and entry.get("ok") is True
+                and provider_options is not None
+                and provider_has_credentials(model, provider_options, os.environ)
+            ]
+            write_outputs(cache_issue, cache, available)
+            print("Available models:")
+            print("\n".join(available) if available else "(none)")
+            return 0
         candidates = build_candidates(whitelisted_models, provider_models, os.environ)
     now = datetime.now(timezone.utc)
     pending, skipped = select_pending(candidates, cache, now)

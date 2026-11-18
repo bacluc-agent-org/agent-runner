@@ -15,7 +15,7 @@ def owned_repo(repo):
     if not re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9_.-]+", repo):
         deny("use an explicit github.com OWNER/REPO")
     owner, name = repo.split("/")
-    if owner.lower() not in {"bacluc", "bacluc-agent"} or name in {".", ".."}:
+    if owner.lower() not in {"bacluc", "bacluc-agent", "bacluc-agent-org"} or name in {".", ".."}:
         deny("create the PR in the bacluc-agent fork, not the upstream repository")
 
 
@@ -129,7 +129,8 @@ def validate_api(args):
     path, query, _ = endpoint.partition("?")
     path = path.rstrip("/")
     if path.lower() == "graphql":
-        deny("direct GraphQL is disabled; use guarded gh pr create -R or REST instead")
+        validate_graphql(parsed)
+        return
     if not re.fullmatch(r"[A-Za-z0-9_{}.-]+(?:/[A-Za-z0-9_{}.-]+)*", path) or any(
         part in {".", ".."} for part in path.split("/")
     ):
@@ -146,6 +147,32 @@ def validate_api(args):
             if len(parts) != 6 or parts[0] != "repos" or parts[3].lower() != "pulls":
                 deny("PR revert requires the canonical repos/OWNER/REPO/pulls/N/reverts endpoint")
             owned_repo("/".join(parts[1:3]))
+
+
+def validate_graphql(parsed):
+    fields = parsed.get("body", [])
+    queries = [field.partition("=")[2] for field in fields if field.startswith("query=")]
+    if len(queries) != 1 or any(
+        not field.partition("=")[0] in {
+            "query", "owner", "login", "number", "projectId", "itemId", "fieldId",
+            "afterId", "singleSelectOptionId",
+        }
+        for field in fields
+    ):
+        deny("GraphQL requires a project-v2 query")
+    tokens = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", queries[0]))
+    allowed = {
+        "ProjectV2", "ProjectV2FieldConfiguration", "ProjectV2Item",
+        "ProjectV2SingleSelectField", "organization", "projectV2", "projectV2Items",
+        "updateProjectV2ItemFieldValue", "updateProjectV2ItemPosition", "query", "mutation",
+        "node", "id", "number", "after", "afterId", "first", "last", "field", "fields", "input",
+        "items", "nodes", "pageInfo", "hasNextPage", "endCursor", "position", "fieldId",
+        "singleSelectOptionId", "projectId", "itemId", "organizationId", "owner", "login",
+        "cursor", "value", "clientMutationId", "projectV2Item", "null", "true", "false",
+        "Int", "String", "ID",
+    }
+    if not tokens or not tokens <= allowed:
+        deny("only project-v2 GraphQL operations are supported")
 
 
 def main():

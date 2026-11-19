@@ -684,7 +684,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
           COMMENT_ID: ${{ steps.run-start-comment.outputs.comment_id }}
           MODEL: ${{ steps.select-model.outputs.model }}
-          COORDINATOR_OUTCOME: ${{ steps.coordinator.outcome }}
+          COORDINATOR_STATUS: ${{ steps.coordinator.outputs.coordinator_status }}
+          COORDINATOR_TEE_STATUS: ${{ steps.coordinator.outputs.coordinator_tee_status }}
           FATAL_REASON: ${{ steps.fatal-guard.outputs.fatal-reason }}
           BRANCH: ${{ steps.push-work.outputs.branch_name }}
           PUSHED_REPOS: ${{ steps.push-work.outputs.pushed_repos }}
@@ -696,12 +697,17 @@ jobs:
           RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
           # Determine status
-          if [[ "${COORDINATOR_OUTCOME:-}" == "success" ]]; then
+          if [[ "${COORDINATOR_STATUS:-}" == "0" ]]; then
             STATUS="✅ completed"
+            if [[ "${COORDINATOR_TEE_STATUS:-0}" != "0" ]]; then
+              STATUS="✅ completed (tee log capture failed: exit ${COORDINATOR_TEE_STATUS})"
+            fi
+          elif [[ "${COORDINATOR_STATUS:-}" == "124" ]]; then
+            STATUS="⏱️ coordinator timed out (exit 124)"
           elif [[ -n "${FATAL_REASON:-}" ]]; then
             STATUS="❌ fatal error: $FATAL_REASON"
           else
-            STATUS="⚠️ failed (coordinator exit ${COORDINATOR_OUTCOME:-})"
+            STATUS="⚠️ failed (coordinator exit ${COORDINATOR_STATUS:-})"
           fi
 
           # Check for existing PRs in every repo this run pushed to, not just this one.

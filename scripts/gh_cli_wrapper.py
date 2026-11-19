@@ -231,7 +231,7 @@ class GraphQLParser:
         return tokens
 
     def take(self, kind=None, value=None):
-        if self.index == len(self.tokens):
+        if self.index >= len(self.tokens):
             deny("malformed GraphQL query")
         token = self.tokens[self.index]
         if (kind and token[0] != kind) or (value and token[1] != value):
@@ -269,6 +269,11 @@ class GraphQLParser:
                 if set(children[0]["arguments"]) != {"number"}:
                     deny("malformed project-v2 selection")
                 children = children[0]["children"]
+            elif any(child["name"] not in {
+                "id", "number", "title", "url", "fields", "items", "pageInfo", "nodes",
+                "hasNextPage", "endCursor", "name", "options", "type",
+            } for child in children):
+                deny("node is not a supported project-v2 shape")
             if not children or any(child["name"] not in {
                 "id", "number", "title", "url", "fields", "items", "pageInfo", "nodes",
                 "hasNextPage", "endCursor", "name", "options", "content", "type", "body", "state",
@@ -306,7 +311,7 @@ class GraphQLParser:
         selections = []
         while self.index < len(self.tokens) and self.tokens[self.index][1] != "}":
             name = self.take("name")
-            if self.tokens[self.index][1] == ":":
+            if self.index < len(self.tokens) and self.tokens[self.index][1] == ":":
                 deny("GraphQL aliases are not permitted")
             arguments = self.arguments(path + (name,)) if self.index < len(self.tokens) and self.tokens[self.index][1] == "(" else {}
             children = self.selection_set(path + (name,)) if self.index < len(self.tokens) and self.tokens[self.index][1] == "{" else []
@@ -329,6 +334,8 @@ class GraphQLParser:
         return result
 
     def value(self, path):
+        if self.index >= len(self.tokens):
+            deny("malformed GraphQL value")
         if self.tokens[self.index][1] == "$":
             self.take(value="$")
             variable = self.take("name")

@@ -140,6 +140,15 @@ class CliWrapperTest(unittest.TestCase):
             "query { organization(login: $owner) { projectV2(number: $number) { id } } }",
         ):
             self.call(["api", "graphql", "-f", f"query={query}"], False)
+        for query in (
+            "query { node(id: projectId) { body } }",
+            "query { node(id: projectId) { state } }",
+            "query { node(id: projectId) { content } }",
+            "query { organization(login: owner) { projectV2(number: number) {",
+            "query { organization(login: owner) { projectV2(number: number) { id }",
+            "query { node(id: projectId) { id",
+        ):
+            self.call(["api", "graphql", "-f", f"query={query}"], False)
         self.call(["api", "graphql", "-f", "query=query($owner:String!) { organization(login: $owner) { projectV2(number: number) { id } } }", "-F", "number=1"], False)
         self.call(["api", "repos/BacLuc/r/pulls", "-f", "body=--hostname=evil.com", "--hostname=github.com"])
 

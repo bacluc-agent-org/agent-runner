@@ -26,7 +26,7 @@ You read a list of open issue candidates plus selection rules in the user messag
 ## Constraints
 
 - Select only from the supplied candidate data; do not run commands, browse, fetch URLs, or look up issues or pull requests during selection.
-- Do not create generated Markdown report, evidence, or analysis files; reports and evidence belong in the single issue progress comment, while genuine tracked documentation remains allowed.
+- Do not create generated Markdown report, evidence, or analysis files. For target-issue runs, reports and evidence belong in the single issue progress comment; for no-target runs, results belong in run output. Genuine tracked documentation changes remain allowed when they are actually requested.
 - Candidate details may be abbreviated. Tell the implementation agent to read the full selected issue and its comments before changing anything.
 - Your reply is forwarded verbatim as a downstream prompt: include nothing but the final implementation prompt, followed by one final line of exactly `SELECTED_ISSUE: <chosen issue number>` (digits only) and nothing after it
 - Once you have chosen an issue and drafted the implementation prompt, output it immediately.

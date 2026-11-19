@@ -17,7 +17,7 @@ Push a branch and open a pull request only when the task changes code, and recor
 
 ## Generated Markdown reports
 
-Do not create generated Markdown report, evidence, or analysis files in the repository. Put run reports and verification evidence in the single issue progress comment; genuine tracked documentation remains allowed when it is the actual requested documentation change.
+Do not create generated Markdown report, evidence, or analysis files in the repository. For target-issue runs, put reports and verification evidence in the single issue progress comment; for no-target runs, put results in run output. Genuine tracked documentation changes remain allowed when they are actually requested.
 
 ## Testing
 

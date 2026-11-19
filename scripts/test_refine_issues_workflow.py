@@ -50,29 +50,77 @@ def test_two_candidates_consume_their_own_feedback_files(tmp_path):
     candidates.write_text("101\n202\n")
     (runner_temp / "comments-101.txt").write_text("feedback for 101\n")
     (runner_temp / "comments-202.txt").write_text("feedback for 202\n")
-    observed = tmp_path / "observed.txt"
+    prompts = tmp_path / "prompts.txt"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "gh").write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+endpoint="$2"
+number="${endpoint##*/}"
+case "${*: -1}" in
+  .title) printf 'Issue %s\\n' "$number" ;;
+  .body) printf 'Existing body\\n' ;;
+  *) : ;;
+esac
+"""
+    )
+    (bin_dir / "timeout").write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+shift 1
+exec "$@"
+"""
+    )
+    (bin_dir / "opencode").write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '\\036%s\\n' "${!#}" >> "$PROMPTS"
+printf '%s\\n\\n%s\\n\\n' '## Goal' 'A refined issue.'
+printf '%s\\n' '## How to implement'
+printf '%s\\n' 'Implement the requested change.'
+"""
+    )
+    for command in ("gh", "timeout", "opencode"):
+        (bin_dir / command).chmod(0o755)
+
+    processing_start = CONTENT.index("while IFS= read -r number; do", CONTENT.index("refined=0"))
+    processing_end = CONTENT.index('done < "$candidates"', processing_start) + len('done < "$candidates"')
+    processing = CONTENT[processing_start:processing_end]
     script = f'''\
 set -euo pipefail
-while IFS= read -r number; do
-  comments_file="$RUNNER_TEMP/comments-${{number}}.txt"
-  printf '%s: ' "$number" >> "$OBSERVED"
-  cat "$comments_file" >> "$OBSERVED"
-done < "$CANDIDATES"
+export RUNNER_TEMP={runner_temp!s}
+export ISSUE_REPOSITORY=test/repo
+export candidates={candidates!s}
+export PROMPTS={prompts!s}
+export PATH={bin_dir!s}:$PATH
+refined=0
+failed=0
+max_attempts=2
+SECONDS=0
+selection_model=test/model
+{processing}
 '''
     result = subprocess.run(
         ["bash", "-euo", "pipefail", "-c", script],
-        env={
-            "CANDIDATES": str(candidates),
-            "OBSERVED": str(observed),
-            "RUNNER_TEMP": str(runner_temp),
-        },
+        cwd=WORKFLOW.parents[1],
         capture_output=True,
         text=True,
         check=True,
     )
 
-    assert result.stdout == ""
-    assert observed.read_text() == "101: feedback for 101\n202: feedback for 202\n"
+    assert result.returncode == 0
+    prompt_text = prompts.read_text()
+    candidate_prompts = prompt_text.split("\x1e")[1:]
+    assert candidate_prompts
+    for candidate_prompt in candidate_prompts:
+        if "Issue #101" in candidate_prompt:
+            assert "feedback for 101" in candidate_prompt
+            assert "feedback for 202" not in candidate_prompt
+        else:
+            assert "Issue #202" in candidate_prompt
+            assert "feedback for 202" in candidate_prompt
+            assert "feedback for 101" not in candidate_prompt
 
 
 def test_refined_candidates_require_strictly_new_human_feedback():

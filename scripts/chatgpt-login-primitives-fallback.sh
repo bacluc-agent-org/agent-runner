@@ -126,8 +126,8 @@ recover_blocking_login() {
   trap cleanup_recovery RETURN
   rm -f -- "$snapshot_file" "$handoff_file" "$command_file"
   rm -rf -- "$opencode_root"
-  mkdir -m 700 -p "$opencode_root/home" "$opencode_workdir" "$opencode_config" "$opencode_data" "$opencode_cache" "$opencode_tmp"
-  cat > "$opencode_config/opencode.json" << 'EOF'
+  mkdir -m 700 -p "$opencode_root/home" "$opencode_workdir" "$opencode_config/opencode" "$opencode_data" "$opencode_cache" "$opencode_tmp"
+  cat > "$opencode_config/opencode/opencode.json" << 'EOF'
 {
   "provider": {
     "opencode": {

@@ -911,7 +911,7 @@ set -Eeuo pipefail
 [[ "$XDG_DATA_HOME" == "$RUNNER_TEMP/chatgpt-login-opencode/data" ]] || { touch "$RUNNER_TEMP/agent-shared-data"; exit 1; }
 [[ "$XDG_CACHE_HOME" == "$RUNNER_TEMP/chatgpt-login-opencode/cache" ]] || { touch "$RUNNER_TEMP/agent-shared-cache"; exit 1; }
 [[ ! -e "$XDG_CONFIG_HOME/opencode/plugins/incompatible.js" ]] || { touch "$RUNNER_TEMP/agent-incompatible-plugin"; exit 1; }
-config=$(<"$XDG_CONFIG_HOME/opencode.json")
+config=$(<"$XDG_CONFIG_HOME/opencode/opencode.json")
 [[ "$config" == *'"opencode"'* && "$config" == *'"baseURL": "https://opencode.ai/zen/go/v1"'* && "$config" == *'"apiKey": "{env:OPENCODE_GO_API_KEY}"'* && "$config" == *'"big-pickle"'* ]] || { touch "$RUNNER_TEMP/agent-missing-provider-config"; exit 1; }
 for name in ACTIONS_RUNTIME_TOKEN BACLUC_AGENT_GITHUB_TOKEN BRAVE_API_KEY CHATGPT_EMAIL CHATGPT_PASSWORD CHATGPT_TOTP_KEY CHATGPT_2FA_KEY GH_TOKEN GITHUB_ENV GITHUB_OUTPUT GITHUB_PATH GITHUB_STATE GITHUB_STEP_SUMMARY GITHUB_TOKEN OPENAI_2FA_KEY OPENAI_PASSWORD OPENAI_USERNAME OPENCODE_AUTH_CONTENT OPENROUTER_API_KEY; do
   [[ -z "${!name:-}" ]] || { touch "$RUNNER_TEMP/agent-secret-env"; exit 1; }

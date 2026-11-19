@@ -307,8 +307,8 @@ jobs:
               fi
               if (( validation_status == 0 )); then
                 printf '\n\n<!-- agent-refined: %s -->\n' "$refined_marker_timestamp" >> "$out"
-                gh issue edit "$number" --body-file "$out" -R "$ISSUE_REPOSITORY"
-                gh issue edit "$number" --add-label "agent-refined" -R "$ISSUE_REPOSITORY"
+                gh api -X PATCH "repos/${ISSUE_REPOSITORY}/issues/${number}" -F "body=@$out" >/dev/null
+                gh api -X POST "repos/${ISSUE_REPOSITORY}/issues/${number}/labels" -F 'labels[]=agent-refined' >/dev/null
                 printf 'Issue #%s refined and labeled.\n' "$number"
                 (( refined++ )) || true
                 break

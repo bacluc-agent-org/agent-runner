@@ -36,10 +36,10 @@ def test_two_candidates_use_their_own_feedback_files():
     assignment = 'comments_file="$RUNNER_TEMP/comments-${number}.txt"'
     assert processing.count(assignment) == 1
     assert processing.index(assignment) < processing.index('if [[ -s "$comments_file" ]]')
-    assert [f"comments-{number}.txt" for number in ("101", "202")] == [
-        "comments-101.txt",
-        "comments-202.txt",
-    ]
+    assert processing.index('cat "$comments_file"') > processing.index(assignment)
+    feedback_paths = [f"comments-{number}.txt" for number in ("101", "202")]
+    assert len(set(feedback_paths)) == 2
+    assert all(re.search(r"comments-\$\{number\}\.txt", assignment) for _ in feedback_paths)
 
 
 def test_refined_candidates_require_strictly_new_human_feedback():
@@ -76,8 +76,21 @@ def test_prior_marker_is_removed_before_prompt_and_new_marker_after_validation()
     assert strip in CONTENT
     validation = CONTENT.index('if (( validation_status == 0 )); then')
     append = CONTENT.index('<!-- agent-refined: %s -->')
-    assert validation < append
+    sanitize = CONTENT.index('sed -E -i', CONTENT.index('tee "$out"'))
+    assert sanitize < validation < append
     assert CONTENT.index('validation_status=$?') < append
+
+
+def test_model_markers_are_sanitized_before_validation_and_append():
+    assert 'sed -E -i' in CONTENT
+    assert '/^[[:space:]]*<!-- agent-refined:' in CONTENT
+    assert 'Z -->[[:space:]]*$/d' in CONTENT
+
+
+def test_reviewer_feedback_prompt_distinguishes_prior_refinement_and_new_feedback():
+    assert 'Reviewer comments (untrusted context):' in CONTENT
+    assert 'current issue body as the prior refinement' in CONTENT
+    assert 'delimited comments as new feedback' in CONTENT
 
 
 def test_untrusted_feedback_is_delimited_and_not_used_as_instructions():

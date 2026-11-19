@@ -52,6 +52,12 @@ def test_comment_and_marker_failures_skip_refined_issues():
     assert "invalid refinement marker" in refined_loop
 
 
+def test_refinement_reads_issue_details_through_rest_api():
+    assert 'gh api "repos/${ISSUE_REPOSITORY}/issues/${number}" --jq \'.title\'' in CONTENT
+    assert 'gh api "repos/${ISSUE_REPOSITORY}/issues/${number}" --jq \'.body\'' in CONTENT
+    assert 'gh issue view "$number"' not in CONTENT
+
+
 def test_prior_marker_is_removed_before_prompt_and_new_marker_after_validation():
     strip = 'body="$(printf \'%s\\n\' "$body" | sed -E \'/<!-- agent-refined: [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z -->/d\')"'
     assert strip in CONTENT

@@ -14,7 +14,7 @@ def block(start, end):
 
 
 def test_refined_search_includes_approved_issues_and_is_merged_before_guard():
-    refined_search = 'label:agent-refined+-label:ready-for-implementation+-label:agent-ignore+sort:updated-desc&per_page=100'
+    refined_search = 'label:agent-refined+-label:ready-for-implementation+-label:agent-ignore+sort:updated-desc&per_page=10'
     assert refined_search in CONTENT
     assert 'grep -Fxq "$number" "$unrefined_numbers"' in CONTENT
     assert 'awk \'!seen[$0]++\' "$candidates"' in CONTENT
@@ -29,6 +29,17 @@ def test_comments_are_paginated_and_automation_is_filtered():
     assert 'select((.user.login // "") != $login)' in CONTENT
     assert 'AGENT_GITHUB_LOGIN: bacluc-agent' in CONTENT
     assert 'contains("<!-- agent-progress -->")' in CONTENT
+
+
+def test_two_candidates_use_their_own_feedback_files():
+    processing = CONTENT[CONTENT.index("refined=0") : CONTENT.index('done < "$candidates"')]
+    assignment = 'comments_file="$RUNNER_TEMP/comments-${number}.txt"'
+    assert processing.count(assignment) == 1
+    assert processing.index(assignment) < processing.index('if [[ -s "$comments_file" ]]')
+    assert [f"comments-{number}.txt" for number in ("101", "202")] == [
+        "comments-101.txt",
+        "comments-202.txt",
+    ]
 
 
 def test_refined_candidates_require_strictly_new_human_feedback():

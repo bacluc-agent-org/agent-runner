@@ -153,6 +153,33 @@ test("retry message usage limit / available balance → balance", () => {
   assert.equal(hit?.reason, "balance");
 });
 
+test("GoUsageLimit error → balance", () => {
+  const hit = classifyEvent(
+    {
+      type: "session.error",
+      properties: {
+        error: {
+          name: "APIError",
+          data: { message: "Account.GoUsageLimit" },
+        },
+      },
+    },
+    {},
+  );
+  assert.equal(hit?.reason, "balance");
+});
+
+test("exhausted Go usage message → balance", () => {
+  const hit = classifyEvent(
+    {
+      type: "session.execution.failed",
+      data: { error: v2err(undefined, "Account.GoUsageLimit") },
+    },
+    {},
+  );
+  assert.equal(hit?.reason, "balance");
+});
+
 test("UnknownError model not found → model_unavailable", () => {
   const hit = classifyEvent(
     {

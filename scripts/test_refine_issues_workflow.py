@@ -1,4 +1,5 @@
 import re
+import subprocess
 from pathlib import Path
 
 
@@ -40,6 +41,38 @@ def test_two_candidates_use_their_own_feedback_files():
     feedback_paths = [f"comments-{number}.txt" for number in ("101", "202")]
     assert len(set(feedback_paths)) == 2
     assert all(re.search(r"comments-\$\{number\}\.txt", assignment) for _ in feedback_paths)
+
+
+def test_two_candidates_consume_their_own_feedback_files(tmp_path):
+    runner_temp = tmp_path / "runner-temp"
+    runner_temp.mkdir()
+    candidates = tmp_path / "candidates.txt"
+    candidates.write_text("101\n202\n")
+    (runner_temp / "comments-101.txt").write_text("feedback for 101\n")
+    (runner_temp / "comments-202.txt").write_text("feedback for 202\n")
+    observed = tmp_path / "observed.txt"
+    script = f'''\
+set -euo pipefail
+while IFS= read -r number; do
+  comments_file="$RUNNER_TEMP/comments-${{number}}.txt"
+  printf '%s: ' "$number" >> "$OBSERVED"
+  cat "$comments_file" >> "$OBSERVED"
+done < "$CANDIDATES"
+'''
+    result = subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", script],
+        env={
+            "CANDIDATES": str(candidates),
+            "OBSERVED": str(observed),
+            "RUNNER_TEMP": str(runner_temp),
+        },
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout == ""
+    assert observed.read_text() == "101: feedback for 101\n202: feedback for 202\n"
 
 
 def test_refined_candidates_require_strictly_new_human_feedback():

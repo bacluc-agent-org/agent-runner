@@ -535,22 +535,78 @@ jobs:
            model=$8
            title=$9
            prompt=${10}
+           if [[ ! "$total_minutes" =~ ^[1-9][0-9]*$ || ! "$idle_minutes" =~ ^[1-9][0-9]*$ ]]; then
+             printf 'Coordinator timeouts must be positive integers: total=%s idle=%s\n' "$total_minutes" "$idle_minutes" >&2
+             exit 2
+           fi
            fifo="$RUNNER_TEMP/coordinator-output.fifo"
            rm -f "$fifo"
            mkfifo "$fifo"
            tee "$transcript_file" < "$fifo" &
            tee_pid=$!
-           setsid opencode run --agent "$agent" --model "$model" --title "$title" "$prompt" > "$fifo" 2>&1 &
+           session_title="${title}-$(date +%s%N)-$$"
+           export OPENCODE_WATCHDOG_TITLE="$session_title"
+           setsid opencode run --agent "$agent" --model "$model" --title "$session_title" "$prompt" > "$fifo" 2>&1 &
            child_pid=$!
+           child_start_ticks=$(awk '{print $22}' "/proc/$child_pid/stat")
            start_time=$(date +%s)
            last_growth_time=$start_time
+           last_activity_time=$start_time
            last_bytes=0
+           last_storage_activity=0
            total_seconds=$((total_minutes * 60))
            idle_seconds=$((idle_minutes * 60))
+           timeout_reason=''
+           cleanup_done=0
            group_alive() { kill -0 -- "-$1" 2>/dev/null; }
+           process_alive() { kill -0 "$child_pid" 2>/dev/null; }
+           owned_process_alive() {
+             process_alive && [[ "$(awk '{print $22}' "/proc/$child_pid/stat" 2>/dev/null)" == "$child_start_ticks" ]]
+           }
            terminate_group() {
              local pgid="$1" signal="$2"
              kill -"$signal" -- "-$pgid" 2>/dev/null || true
+           }
+           cleanup() {
+             local pgid session
+             ((cleanup_done)) && return
+             cleanup_done=1
+             if ! owned_process_alive; then
+               return
+             fi
+             pgid=$(ps -o pgid= -p "$child_pid" 2>/dev/null | tr -d ' ')
+             session=$(ps -o sid= -p "$child_pid" 2>/dev/null | tr -d ' ')
+             if [[ "$pgid" =~ ^[1-9][0-9]*$ && "$pgid" -gt 1 && "$pgid" == "$child_pid" && "$session" == "$pgid" ]]; then
+               terminate_group "$pgid" TERM
+               sleep 1
+               group_alive "$pgid" && terminate_group "$pgid" KILL
+             else
+               kill "$child_pid" 2>/dev/null || true
+             fi
+             wait "$child_pid" 2>/dev/null || true
+           }
+           trap cleanup EXIT
+           trap 'cleanup; exit 143' INT TERM
+           wait_for_children() {
+             set +e
+             wait "$child_pid"
+             opencode_status=$?
+             wait "$tee_pid"
+             tee_status=$?
+             set -e
+           }
+           storage_activity() {
+             local storage_root session_file session_id activity=0 file
+             storage_root="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/storage"
+             session_file=$(grep -rlF -- "$session_title" "$storage_root/session" 2>/dev/null | head -n 1 || true)
+             if [[ -n "$session_file" ]]; then
+               session_id=$(basename "$session_file" .json)
+               while IFS= read -r file; do
+                 [[ -e "$file" ]] || continue
+                 activity=$((activity + $(stat -c '%Y:%s' "$file" 2>/dev/null | tr ':' '+')))
+               done < <(find "$storage_root" \( -path "*/session/*/$session_id.json" -o -path "*/message/$session_id/*" -o -path "*/part/$session_id/*" \) -type f -print 2>/dev/null)
+             fi
+             printf '%s\n' "$activity"
            }
            while group_alive "$child_pid"; do
              now=$(date +%s)
@@ -559,49 +615,46 @@ jobs:
                last_bytes=$bytes
                last_growth_time=$now
              fi
+             storage_signal=$(storage_activity)
+             if ((storage_signal > last_storage_activity)); then
+               last_storage_activity=$storage_signal
+               last_activity_time=$now
+             fi
+             if ((last_growth_time > last_activity_time)); then
+               last_activity_time=$last_growth_time
+             fi
              if ((now - start_time >= total_seconds)); then
-               pgid=$(ps -o pgid= -p "$child_pid" | tr -d ' ')
-               if [[ "$pgid" =~ ^[1-9][0-9]*$ && "$pgid" -gt 1 && "$pgid" == "$child_pid" && "$(ps -o sid= -p "$child_pid" | tr -d ' ')" == "$pgid" ]]; then
-                 terminate_group "$pgid" TERM
-                 sleep 1
-                 group_alive "$pgid" && terminate_group "$pgid" KILL
-                 wait "$child_pid" 2>/dev/null || true
-                 wait "$tee_pid" 2>/dev/null || true
-               fi
+               timeout_reason=timeout
+               cleanup
+               wait_for_children
                printf '%s\n' 124 > "$status_file"
-               printf '%s\n' 0 > "$tee_status_file"
+               printf '%s\n' "$tee_status" > "$tee_status_file"
+               printf '%s\n' "$timeout_reason" > "$RUNNER_TEMP/coordinator-failure-mode"
                printf 'Coordinator total timeout after %ss; model=%s; session=%s; output_bytes=%s\n' "$((now - start_time))" "$model" "$child_pid" "$bytes" >&2
-               wait "$child_pid" 2>/dev/null || true
                exit 124
              fi
-             if ((now - last_growth_time >= idle_seconds)); then
+             if ((now - last_activity_time >= idle_seconds)); then
                pgid=$(ps -o pgid= -p "$child_pid" | tr -d ' ')
                session=$(ps -o sid= -p "$child_pid" | tr -d ' ')
                if [[ ! "$pgid" =~ ^[1-9][0-9]*$ || "$pgid" -le 1 || "$pgid" != "$child_pid" || "$session" != "$pgid" ]]; then
                  printf '%s\n' 'Coordinator watchdog refused to signal an invalid process group.' >&2
+                 cleanup
                  exit 1
                fi
                if ! ps -eo pid=,sid= | awk -v sid="$session" '$2 == sid && $1 != sid { found=1 } END { exit found ? 0 : 1 }'; then
-                 terminate_group "$pgid" TERM
-                 sleep 1
-                 group_alive "$pgid" && terminate_group "$pgid" KILL
-                 wait "$child_pid" 2>/dev/null || true
-                 wait "$tee_pid" 2>/dev/null || true
+                 timeout_reason=zero-progress
+                 cleanup
+                 wait_for_children
                  printf '%s\n' 124 > "$status_file"
-                 printf '%s\n' "$?" > "$tee_status_file"
+                 printf '%s\n' "$tee_status" > "$tee_status_file"
                  printf 'Coordinator zero-progress timeout after %ss (grace 1s); model=%s; session=%s; output_bytes=%s\n' "$((now - start_time))" "$model" "$session" "$bytes" >&2
-                 printf '%s\n' zero-progress > "$RUNNER_TEMP/coordinator-failure-mode"
+                 printf '%s\n' "$timeout_reason" > "$RUNNER_TEMP/coordinator-failure-mode"
                  exit 124
                fi
              fi
              sleep 1
            done
-           set +e
-           wait "$child_pid"
-           opencode_status=$?
-           wait "$tee_pid"
-           tee_status=$?
-           set -e
+           wait_for_children
            printf '%s\n' "$opencode_status" > "$status_file"
            printf '%s\n' "$tee_status" > "$tee_status_file"
            rm -f "$fifo"
@@ -619,9 +672,7 @@ jobs:
           echo "coordinator_tee_status=${coordinator_tee_status}" >> "$GITHUB_OUTPUT"
            if [[ -f "$RUNNER_TEMP/coordinator-failure-mode" ]]; then
              echo "failure_mode=$(cat "$RUNNER_TEMP/coordinator-failure-mode")" >> "$GITHUB_OUTPUT"
-           elif ((coordinator_status == 124)); then
-             echo "failure_mode=timeout" >> "$GITHUB_OUTPUT"
-          fi
+           fi
           if ((coordinator_status != 0)); then
             exit "$coordinator_status"
           fi

@@ -104,3 +104,61 @@ def test_model_discovery_status_handling_executes_all_command_and_tee_combinatio
         assert result.returncode == 0, result.stderr
         assert f"model={expected_model}" in result.stdout
         assert f"opencode={command_status} tee={tee_status}" in result.stdout
+
+
+def test_coordinator_status_handling_executes_all_command_and_tee_combinations():
+    content = OPENCODE_WORKFLOW.read_text()
+    search_start = content.index("id: coordinator")
+    start = content.index("          set +e", search_start)
+    end = content.index("\n\n      - name: Fatal guard", start)
+    fragment = content[start:end]
+    setup = (
+        "COORDINATOR_TIMEOUT=10\n"
+        "stop_token=stop\n"
+        "coordinator_session_title=coordinator\n"
+        "AGENT=coordinator\n"
+        "MODEL=model\n"
+        "PROMPT=prompt\n"
+    )
+    for command_status, tee_status in [(0, 0), (124, 0), (7, 0), (0, 9)]:
+        result = _run_fragment(
+            setup + fragment,
+            command_status,
+            tee_status,
+        )
+        assert result.returncode == command_status
+        assert f"opencode={command_status} tee={tee_status}" in result.stdout
+
+
+def test_run_result_classifier_reports_timeout_and_non_fatal_tee_failure():
+    content = OPENCODE_WORKFLOW.read_text()
+    start = content.index("          # Determine status")
+    end = content.index("\n\n          # Check for existing PRs", start)
+    fragment = content[start:end]
+    cases = [
+        ("0", "0", "✅ completed"),
+        ("0", "9", "✅ completed (tee log capture failed: exit 9)"),
+        ("124", "0", "⏱️ coordinator timed out (exit 124)"),
+        ("7", "0", "⚠️ failed (coordinator exit 7)"),
+    ]
+    for coordinator_status, tee_status, expected in cases:
+        result = subprocess.run(
+            [
+                "bash",
+                "-Eeuo",
+                "pipefail",
+                "-c",
+                fragment + '\nprintf "%s\\n" "$STATUS"\n',
+            ],
+            cwd=ROOT,
+            env=dict(
+                os.environ,
+                COORDINATOR_STATUS=coordinator_status,
+                COORDINATOR_TEE_STATUS=tee_status,
+                FATAL_REASON="",
+            ),
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert expected in result.stdout

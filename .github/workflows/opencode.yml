@@ -309,18 +309,17 @@ jobs:
             discovery_tee_status=${discovery_statuses[1]}
             set -e
             printf 'Model detection statuses: opencode=%s tee=%s\n' "$discovery_status" "$discovery_tee_status"
-            if ((discovery_status == 124)); then
-              printf '::warning::model discovery exceeded the %sm limit; falling back to the verified model %q\n' "$DISCOVERY_TIMEOUT" "$fallback_model"
-            fi
-            if ((discovery_tee_status != 0)); then
-              printf '::warning::model discovery log capture failed (tee exit %s); falling back to the verified model %q\n' "$discovery_tee_status" "$fallback_model"
-              discovery_status=1
-            fi
             stop_token="$(openssl rand -hex 32)"
             : "${stop_token:?stop-commands fence token generation failed}"
             printf '::stop-commands::%s\n' "$stop_token"
             if ((discovery_status != 0)); then
+              if ((discovery_status == 124)); then
+                printf '::warning::model discovery exceeded the %sm limit; falling back to the verified model %q\n' "$DISCOVERY_TIMEOUT" "$fallback_model"
+              fi
               printf 'Model discovery failed with status %s; falling back to the verified model %q.\n' "$discovery_status" "$fallback_model"
+              model="$fallback_model"
+            elif ((discovery_tee_status != 0)); then
+              printf '::warning::model discovery log capture failed (tee exit %s); falling back to the verified model %q\n' "$discovery_tee_status" "$fallback_model"
               model="$fallback_model"
             else
               model="$({ grep -oE 'coordinator: [^,[:space:]]+' "$discovery_output" || true; } | tail -n 1 | cut -d' ' -f2-)"

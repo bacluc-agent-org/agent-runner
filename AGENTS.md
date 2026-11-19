@@ -15,6 +15,10 @@ For any repository not owned by `BacLuc`, `bacluc-agent` or `bacluc-agent-org`, 
 
 Push a branch and open a pull request only when the task changes code, and record the branch name on the target issue; a task that changes no code (a report or analysis, or any other no-code-change task) delivers its result as a comment on the target issue, pushing no branch and opening no pull request. This overrides the out-of-repo build-agent defaults "Commit and push every change" and "Open or update the PR". When the run has no target issue, report the result in the run's own output instead.
 
+## Generated Markdown reports
+
+Do not create generated Markdown report, evidence, or analysis files in the repository. Put run reports and verification evidence in the single issue progress comment; genuine tracked documentation remains allowed when it is the actual requested documentation change.
+
 ## Testing
 
 ALL PULL REQUEST DESCRIPTIONS HAVE TO CONTAIN LINKS TO ACTION RUNS WITH THE PROBLEMS THEY FIX IF THEY FIX A BUG.

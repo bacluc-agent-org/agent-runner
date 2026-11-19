@@ -101,15 +101,23 @@ def test_deduplication():
 
 
 def test_no_direct_graphql():
-    for path in (KANBAN_AGENT, STANDING_AGENT):
-        text = read(path)
-        assert "never direct GraphQL" in text or "never call GraphQL directly" in text or "no direct GraphQL" in text
+    kanban = read(KANBAN_AGENT)
+    standing = read(STANDING_AGENT)
+    assert "never direct GraphQL" in kanban
+    assert "never call GraphQL directly" in standing
+    assert "does\nnot expose project-v2 item order/priority" in kanban
+    assert "only to read that order/priority" in kanban
+    assert "after a complete desired" in kanban
+    assert "must not replace `gh project` or REST" in kanban
 
 
 def test_no_auto_close():
     for path in (KANBAN_AGENT, STANDING_AGENT):
         text = read(path)
         assert "Do not close" in text or "never auto-close" in text or "no auto-close" in text
+        assert "gh issue close" not in text
+    assert "Do not close issues" in read(KANBAN_AGENT)
+    assert "Do not close issues automatically" in read(STANDING_AGENT)
 
 
 def test_agent_dispatch_command():

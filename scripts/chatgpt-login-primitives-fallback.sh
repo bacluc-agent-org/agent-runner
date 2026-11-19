@@ -62,6 +62,17 @@ with open(path, "w", encoding="utf-8") as handle:
 PY
 }
 
+sanitize_status() {
+  local file="$1"
+  local sanitized_file="${file}.sanitized"
+  redact_snapshot "$file" || return 1
+  jq -ce 'select(type == "object" and (.error == null) and (.step | type == "string")) | {step:(.step | .[0:100]),url:((.url // "") | tostring | .[0:500]),title:((.title // "") | tostring | .[0:500]),blocking:((.blocking // null) | if . == null then null else tostring | .[0:200] end),code_ready:(.code_ready // false)}' "$file" > "$sanitized_file" || {
+    rm -f -- "$sanitized_file"
+    return 1
+  }
+  mv -f -- "$sanitized_file" "$file"
+}
+
 recovery_attempted=false
 recover_blocking_login() {
   local session='chatgpt-auth-recovery'
@@ -203,8 +214,8 @@ EOF
       printf 'Playwright recovery status unavailable; retaining the browser session\n' >&2
     fi
     printf '%s\n' "$status_json" > "$status_tmp"
-    redact_snapshot "$status_tmp" || return 1
-    sanitized_status=$(jq -ce '{step:((.step // "unknown") | tostring | .[0:100]),url:((.url // "") | tostring | .[0:500]),title:((.title // "") | tostring | .[0:500]),blocking:((.blocking // null) | if . == null then null else tostring | .[0:200] end),code_ready:(.code_ready // false)}' "$status_tmp") || return 1
+    sanitize_status "$status_tmp" || return 1
+    sanitized_status=$(< "$status_tmp")
     snapshot_content=$(< "$snapshot_file")
     [[ -n "$snapshot_content" ]] || return 1
     snapshot_content=${snapshot_content:0:12000}
@@ -324,10 +335,26 @@ EOF
           url="${BASH_REMATCH[1]}"
           run_with_deadline "$command_timeout" playwright-cli "-s=$session" goto "$url" > /dev/null 2>&1 || return 1
         elif [[ "$command" == step ]]; then
-          run_with_deadline "$command_timeout" uv run scripts/chatgpt-login.py step > /dev/null 2>&1 || true
+          step_status=0
+          step_json=$(run_with_deadline "$command_timeout" uv run scripts/chatgpt-login.py step) || step_status=$?
+          printf '%s\n' "$step_json" > "$status_tmp"
+          sanitize_status "$status_tmp" || return 1
+          if ((step_status > 2)); then
+            return "$step_status"
+          fi
+          if ((step_status == 1 || step_status == 2)); then
+            printf 'Playwright recovery step returned recoverable status %s; continuing\n' "$step_status" >&2
+            continue
+          fi
         elif [[ "$command" =~ ^(reload|go-back|go-forward|status)$ ]]; then
           operation="${BASH_REMATCH[1]}"
-          if [[ "$operation" != status ]]; then
+          if [[ "$operation" == status ]]; then
+            status_status=0
+            status_json=$(run_with_deadline "$command_timeout" uv run scripts/chatgpt-login.py status) || status_status=$?
+            printf '%s\n' "$status_json" > "$status_tmp"
+            sanitize_status "$status_tmp" || return 1
+            ((status_status == 0)) || return "$status_status"
+          else
             run_with_deadline "$command_timeout" playwright-cli "-s=$session" "$operation" > /dev/null 2>&1 || return 1
           fi
         else

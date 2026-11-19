@@ -1396,3 +1396,40 @@ exec /bin/mv "$@"
     assert time.monotonic() - started < 6
     assert "Playwright handoff timed out" in global_deadline.stderr
     assert not (tmp_path / "gh-call").exists()
+
+
+def test_primitives_fallback_executes_status_and_preserves_recoverable_step():
+    helper = (Path(__file__).with_name("chatgpt-login-primitives-fallback.sh")).read_text(encoding="utf-8")
+    status_start = helper.index('elif [[ "$command" == step ]]')
+    status_end = helper.index('elif [[ "$command" =~', status_start)
+    status_block = helper[status_start:status_end]
+    assert 'uv run scripts/chatgpt-login.py step' in status_block
+    assert 'step_status=$?' in status_block
+    assert 'step_status == 1 || step_status == 2' in status_block
+    assert 'continue' in status_block
+    assert '|| true' not in status_block
+
+    command_status_start = helper.index('elif [[ "$command" =~ ^(reload|go-back|go-forward|status)$ ]]')
+    command_status_end = helper.index('else\n', command_status_start)
+    command_status_block = helper[command_status_start:command_status_end]
+    assert 'uv run scripts/chatgpt-login.py status' in command_status_block
+    assert 'sanitize_status' in command_status_block
+    assert '.[0:500]' in helper
+    assert 'type == "object"' in helper
+    assert '(.error == null)' in helper
+
+
+def test_status_payload_marks_renamed_route_as_unknown_and_bounded():
+    payload = chatgpt_login._status_payload(
+        types.SimpleNamespace(
+            url="https://auth.openai.com/sign-in-with-chatgpt-new?code=secret",
+            title=lambda: "x" * 1000,
+        ),
+        blocking=None,
+        code_ready=False,
+        cdp_port=9222,
+    )
+    assert payload["step"] == "unknown"
+    assert payload["blocking"].startswith("unknown authentication route")
+    assert payload["url"] == "https://auth.openai.com/sign-in-with-chatgpt-new"
+    assert len(payload["title"]) <= 500

@@ -1,0 +1,14 @@
+.venv/
+.pytest_cache/
+__pycache__/
+.idea/
+loop-metrics.json
+
+node_modules
+.venv/
+.pytest_cache/
+__pycache__/
+.playwright-cli/
+# opencode generates .opencode/.gitignore at runtime (without trailing newline)
+.opencode/.gitignore
+.prettierignore.completion-check

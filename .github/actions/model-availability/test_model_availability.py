@@ -1055,12 +1055,16 @@ class TestAvailableModels:
             "opencode/a-free": "not-a-dict",
             "opencode/b-free": ["not-a-dict"],
             "opencode/c-free": {"ok": "false", "checked": "x"},
+            "opencode/d-free": {"ok": 1, "checked": "x"},
+            "opencode/e-free": {"ok": [], "checked": "x"},
+            "opencode/f-free": {"ok": {}, "checked": "x"},
+            "opencode/g-free": {"ok": "true", "checked": "x"},
             "opencode-go-openai/glm-5.2": "not-a-dict",
             "opencode-go-openai/glm-6": {"ok": True, "checked": "x"},
         }
         assert model_availability.available_models(
             cache,
-            ["opencode/a-free", "opencode/b-free", "opencode/c-free"],
+            ["opencode/a-free", "opencode/b-free", "opencode/c-free", "opencode/d-free", "opencode/e-free", "opencode/f-free", "opencode/g-free"],
             {"opencode-go-openai": ["glm-5.2", "glm-6"]},
             {"opencode-go-openai": {"apiKey": "literal"}},
             {},

@@ -14,7 +14,7 @@ def block(start, end):
 
 
 def test_refined_search_includes_approved_issues_and_is_merged_before_guard():
-    refined_search = 'label:agent-refined+-label:agent-ignore+sort:updated-desc&per_page=100'
+    refined_search = 'label:agent-refined+-label:ready-for-implementation+-label:agent-ignore+sort:updated-desc&per_page=100'
     assert refined_search in CONTENT
     assert 'grep -Fxq "$number" "$unrefined_numbers"' in CONTENT
     assert 'awk \'!seen[$0]++\' "$candidates"' in CONTENT
@@ -32,10 +32,16 @@ def test_comments_are_paginated_and_automation_is_filtered():
 
 
 def test_refined_candidates_require_strictly_new_human_feedback():
-    assert 'select((.created_at // "") > $refined_at)' in CONTENT
+    assert 'select(($refined_at == "") or ((.created_at // "") > $refined_at))' in CONTENT
     assert 'if [[ "$(jq \'length\' "$filtered_comments")" -eq 0 ]]; then' in CONTENT
-    assert "marker_count != 1" in CONTENT
-    assert "refinement marker baseline missing or invalid" in CONTENT
+    assert 'marker_count > 1' in CONTENT
+    assert 'legacy markerless issue' in CONTENT
+
+
+def test_markerless_refined_candidates_are_migrated_from_human_feedback():
+    assert 'refined_at=""' in CONTENT
+    assert 'select(($refined_at == "") or ((.created_at // "") > $refined_at))' in CONTENT
+    assert 'marker_count == 0' in CONTENT
 
 
 def test_comment_and_marker_failures_skip_refined_issues():
@@ -43,7 +49,7 @@ def test_comment_and_marker_failures_skip_refined_issues():
     assert "comment fetch failed for refined issue" in refined_loop
     assert "continue" in refined_loop
     assert "issue body fetch failed for refined issue" in refined_loop
-    assert "marker baseline missing or invalid" in refined_loop
+    assert "invalid refinement marker" in refined_loop
 
 
 def test_prior_marker_is_removed_before_prompt_and_new_marker_after_validation():

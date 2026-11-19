@@ -79,6 +79,12 @@ recover_blocking_login() {
   local command_timeout="${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}"
   local agent_timeout="${PLAYWRIGHT_AGENT_TIMEOUT_SECONDS:-120}"
   local agent_model="${PLAYWRIGHT_AGENT_MODEL:-opencode/big-pickle}"
+  local opencode_root="$RUNNER_TEMP/chatgpt-login-opencode"
+  local opencode_workdir="$opencode_root/workdir"
+  local opencode_config="$opencode_root/config"
+  local opencode_data="$opencode_root/data"
+  local opencode_cache="$opencode_root/cache"
+  local opencode_tmp="$opencode_root/tmp"
 
   if [[ ! "$handoff_timeout" =~ ^[1-9][0-9]*$ || "$handoff_timeout" -gt 300 || ! "$command_timeout" =~ ^[1-9][0-9]*$ || "$command_timeout" -gt 30 || ! "$agent_timeout" =~ ^[1-9][0-9]*$ || "$agent_timeout" -gt 300 ]]; then
     printf 'Invalid Playwright handoff timeout\n' >&2
@@ -115,9 +121,12 @@ recover_blocking_login() {
       attached=false
     fi
     rm -f -- "$snapshot_tmp" "$status_tmp" "$handoff_tmp" "$command_tmp" "$batch_file" "$snapshot_file" "$handoff_file" "$command_file" "$agent_log"
+    rm -rf -- "$opencode_root"
   }
   trap cleanup_recovery RETURN
   rm -f -- "$snapshot_file" "$handoff_file" "$command_file"
+  rm -rf -- "$opencode_root"
+  mkdir -m 700 -p "$opencode_root/home" "$opencode_workdir" "$opencode_config" "$opencode_data" "$opencode_cache" "$opencode_tmp"
   snapshot_tmp=$(mktemp "$snapshot_file.XXXXXX")
   status_tmp=$(mktemp "$handoff_file.status.XXXXXX")
   handoff_tmp=$(mktemp "$handoff_file.XXXXXX")
@@ -155,12 +164,16 @@ EOF
       ((remaining > 0)) || return 1
       local operation_timeout="$max_timeout"
       ((operation_timeout > remaining)) && operation_timeout=$remaining
-      env -i \
-        HOME="${HOME:-}" PATH="${PATH:-/usr/local/bin:/usr/bin:/bin}" LANG="${LANG:-C.UTF-8}" \
-        TMPDIR="${TMPDIR:-}" RUNNER_TEMP="${RUNNER_TEMP:-}" FAKE_MODE="${FAKE_MODE:-}" FAKE_COMMAND="${FAKE_COMMAND:-}" \
-        OPENCODE_GO_API_KEY="${OPENCODE_GO_API_KEY:-}" \
-        OPENCODE_GO_2_API_KEY="${OPENCODE_GO_2_API_KEY:-}" \
-        timeout "$operation_timeout" "$@" 2> "$agent_log"
+      (
+        cd "$opencode_workdir"
+        env -i \
+          HOME="$opencode_root/home" XDG_CONFIG_HOME="$opencode_config" XDG_DATA_HOME="$opencode_data" XDG_CACHE_HOME="$opencode_cache" \
+          PATH="${PATH:-/usr/local/bin:/usr/bin:/bin}" LANG="${LANG:-C.UTF-8}" \
+          TMPDIR="$opencode_tmp" RUNNER_TEMP="${RUNNER_TEMP:-}" FAKE_MODE="${FAKE_MODE:-}" FAKE_COMMAND="${FAKE_COMMAND:-}" \
+          OPENCODE_GO_API_KEY="${OPENCODE_GO_API_KEY:-}" \
+          OPENCODE_GO_2_API_KEY="${OPENCODE_GO_2_API_KEY:-}" \
+          timeout "$operation_timeout" "$@"
+      ) 2> "$agent_log"
     }
     if ! capture_snapshot; then
       printf 'Playwright CLI could not capture the login page\n' >&2

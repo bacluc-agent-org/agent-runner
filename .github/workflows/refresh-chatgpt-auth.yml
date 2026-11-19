@@ -133,14 +133,9 @@ jobs:
           GH_TOKEN="$BACLUC_AGENT_GITHUB_TOKEN" gh secret set OPENCODE_AUTH_JSON --repo "$GITHUB_REPOSITORY" --body "$auth_json"
           printf 'Auth refreshed via browser login\n'
 
-      - name: Set up Playwright recovery agent
+      - name: Install isolated OpenCode recovery agent
         if: ${{ !cancelled() && (inputs.force_primitives || steps.browser-login.outcome == 'failure') }}
-        uses: ./.github/actions/setup-opencode
-        env:
-          GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
-          OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
-          OPENCODE_GO_2_API_KEY: ${{ secrets.OPENCODE_GO_2_API_KEY }}
-          BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
+        run: npm install --global opencode-ai@1.18.32
 
       - name: Agent-usable primitives fallback (start/status/step)
         if: ${{ !cancelled() && (inputs.force_primitives || steps.browser-login.outcome == 'failure') }}

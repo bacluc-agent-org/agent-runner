@@ -597,8 +597,9 @@ def test_primitives_fallback_observes_retries_and_validates_login_output():
     helper = (Path(__file__).with_name("chatgpt-login-primitives-fallback.sh")).read_text(encoding="utf-8")
     assert "if: ${{ !cancelled() && (inputs.force_primitives || steps.browser-login.outcome == 'failure') }}" in primitives
     assert "scripts/chatgpt-login-primitives-fallback.sh" in primitives
-    assert "Set up Playwright recovery agent" in workflow
-    assert "uses: ./.github/actions/setup-opencode" in workflow
+    assert "Install isolated OpenCode recovery agent" in workflow
+    assert "npm install --global opencode-ai@1.18.32" in workflow
+    assert "uses: ./.github/actions/setup-opencode" not in workflow
     assert "scripts/chatgpt-login.py start >" in helper
     assert 'CHATGPT_HEADLESS: "true"' in primitives
     assert "credentials are not configured" in helper
@@ -638,6 +639,11 @@ def test_primitives_fallback_observes_retries_and_validates_login_output():
     assert 'agent_model="${PLAYWRIGHT_AGENT_MODEL:-opencode/big-pickle}"' in helper
     assert "PLAYWRIGHT_AGENT_MODEL: opencode/big-pickle" in primitives
     assert "opencode --pure run --auto --print-logs --log-level ERROR --model" in helper
+    assert 'cd "$opencode_workdir"' in helper
+    assert 'XDG_CONFIG_HOME="$opencode_config"' in helper
+    assert 'XDG_DATA_HOME="$opencode_data"' in helper
+    assert 'XDG_CACHE_HOME="$opencode_cache"' in helper
+    assert 'HOME="$opencode_root/home"' in helper
     assert "chatgpt-login-recovery.agent.log" in helper
     assert "ai_apicallerror|ai_retryerror|usage\\ limit" in helper
 
@@ -899,6 +905,12 @@ printf '%s\\n' "$*" > "$RUNNER_TEMP/gh-call"
     (fake_bin / "opencode").write_text(
         """#!/usr/bin/env bash
 set -Eeuo pipefail
+[[ "$PWD" == "$RUNNER_TEMP/chatgpt-login-opencode/workdir" ]] || { touch "$RUNNER_TEMP/agent-wrong-workdir"; exit 1; }
+[[ "$HOME" == "$RUNNER_TEMP/chatgpt-login-opencode/home" ]] || { touch "$RUNNER_TEMP/agent-shared-home"; exit 1; }
+[[ "$XDG_CONFIG_HOME" == "$RUNNER_TEMP/chatgpt-login-opencode/config" ]] || { touch "$RUNNER_TEMP/agent-shared-config"; exit 1; }
+[[ "$XDG_DATA_HOME" == "$RUNNER_TEMP/chatgpt-login-opencode/data" ]] || { touch "$RUNNER_TEMP/agent-shared-data"; exit 1; }
+[[ "$XDG_CACHE_HOME" == "$RUNNER_TEMP/chatgpt-login-opencode/cache" ]] || { touch "$RUNNER_TEMP/agent-shared-cache"; exit 1; }
+[[ ! -e "$XDG_CONFIG_HOME/opencode/plugins/incompatible.js" ]] || { touch "$RUNNER_TEMP/agent-incompatible-plugin"; exit 1; }
 for name in ACTIONS_RUNTIME_TOKEN BACLUC_AGENT_GITHUB_TOKEN BRAVE_API_KEY CHATGPT_EMAIL CHATGPT_PASSWORD CHATGPT_TOTP_KEY CHATGPT_2FA_KEY GH_TOKEN GITHUB_ENV GITHUB_OUTPUT GITHUB_PATH GITHUB_STATE GITHUB_STEP_SUMMARY GITHUB_TOKEN OPENAI_2FA_KEY OPENAI_PASSWORD OPENAI_USERNAME OPENCODE_AUTH_CONTENT OPENROUTER_API_KEY; do
   [[ -z "${!name:-}" ]] || { touch "$RUNNER_TEMP/agent-secret-env"; exit 1; }
 done
@@ -1007,6 +1019,9 @@ fi
     )
     (fake_bin / "playwright-cli").chmod(0o755)
 
+    shared_plugins = tmp_path / "shared-config" / "opencode" / "plugins"
+    shared_plugins.mkdir(parents=True)
+    (shared_plugins / "incompatible.js").write_text("plugin", encoding="utf-8")
     env = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
@@ -1034,6 +1049,7 @@ fi
         "OPENCODE_GO_API_KEY": "test-api-key",
         "OPENCODE_GO_2_API_KEY": "test-api-key-2",
         "OPENROUTER_API_KEY": "test-openrouter-key",
+        "XDG_CONFIG_HOME": str(tmp_path / "shared-config"),
         "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "5",
     }
 

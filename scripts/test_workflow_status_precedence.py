@@ -74,7 +74,7 @@ def test_selector_status_handling_executes_all_command_and_tee_combinations():
     fragment = content[start:end]
     for command_status, tee_status, expected in [(0, 0, 0), (124, 0, 124), (7, 0, 7), (0, 9, 9), (124, 9, 124), (7, 9, 7)]:
         result, _ = _run_fragment(
-            "selection=/tmp/selection.out\nselection_model=model\nprompt=prompt\nSELECTION_TIMEOUT_MINUTES=10\n" + fragment,
+            "selection=\"$RUNNER_TEMP/selection.out\"\nselection_model=model\nprompt=prompt\nSELECTION_TIMEOUT_MINUTES=10\n" + fragment,
             command_status,
             tee_status,
         )
@@ -92,9 +92,9 @@ def test_model_discovery_status_handling_executes_all_command_and_tee_combinatio
         "fallback_model=fallback/model\n"
         "DISCOVERY_TIMEOUT=5\n"
         "discovery_prompt=prompt\n"
-        "discovery_output=/tmp/discovery.out\n"
+        "discovery_output=\"$RUNNER_TEMP/discovery.out\"\n"
         "stop_token=stop\n"
-        "available_models_file=/tmp/available-models.txt\n"
+        "available_models_file=\"$RUNNER_TEMP/available-models.txt\"\n"
         "printf '%s\\n' fallback/model discovered/model > \"$available_models_file\"\n"
         "deny_re='^$'\n"
     )

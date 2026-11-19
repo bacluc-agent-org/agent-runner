@@ -69,6 +69,11 @@ on:
         required: false
         type: number
         default: 5
+      no_output_timeout_minutes:
+        description: Coordinator idle output timeout in minutes
+        required: false
+        type: number
+        default: 15
       agent:
         description: OpenCode agent to run
         required: false
@@ -94,6 +99,11 @@ on:
         required: false
         type: number
         default: 120
+      no_output_timeout_minutes:
+        description: Coordinator idle output timeout in minutes
+        required: false
+        type: number
+        default: 15
       agent:
         description: OpenCode agent to run
         required: false
@@ -137,6 +147,7 @@ jobs:
           printf "requested_model: %s\n" "$requested"
           printf "timeout_minutes: %s\n" "$TIMEOUT_MINUTES"
           printf 'discovery_timeout_minutes: %s\n' "$DISCOVERY_TIMEOUT_MINUTES"
+          printf 'no_output_timeout_minutes: %s\n' "$NO_OUTPUT_TIMEOUT_MINUTES"
           printf 'agent: %s\n' "$AGENT"
           printf '::%s::\n' "$stop_token"
         env:
@@ -144,6 +155,7 @@ jobs:
           MODEL_CHOICE: ${{ inputs.model_choice }}
           TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
           DISCOVERY_TIMEOUT_MINUTES: ${{ inputs.discovery_timeout_minutes }}
+          NO_OUTPUT_TIMEOUT_MINUTES: ${{ inputs.no_output_timeout_minutes }}
           AGENT: ${{ inputs.agent || 'coordinator' }}
 
       - name: Check out target repository
@@ -494,6 +506,7 @@ jobs:
         env:
           MODEL: ${{ steps.select-model.outputs.model }}
           COORDINATOR_TIMEOUT: ${{ inputs.timeout_minutes || 120 }}
+          NO_OUTPUT_TIMEOUT: ${{ inputs.no_output_timeout_minutes || 15 }}
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
           BACLUC_AGENT_GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
           OPENCODE_FATAL_STAGE: coordinator
@@ -509,18 +522,105 @@ jobs:
           printf '::stop-commands::%s\n' "$stop_token"
           printf 'Final OpenCode command: opencode run --agent %q --model %q --title %q\n' "$AGENT" "$MODEL" "$coordinator_session_title"
           printf 'Coordinator prompt:\n%s\n' "$PROMPT"
-          set +e
-          timeout "${COORDINATOR_TIMEOUT}m" opencode run --agent "$AGENT" --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
-          coordinator_statuses=("${PIPESTATUS[@]}")
-          printf '::%s::\n' "$stop_token"
-          coordinator_status=${coordinator_statuses[0]}
-          coordinator_tee_status=${coordinator_statuses[1]}
-          set -e
-          printf 'Coordinator statuses: opencode=%s tee=%s\n' "$coordinator_status" "$coordinator_tee_status"
+           watchdog_script="$RUNNER_TEMP/coordinator-watchdog.sh"
+           cat > "$watchdog_script" <<'WATCHDOG'
+           set -Eeuo pipefail
+           output_file=$1
+           transcript_file=$2
+           total_minutes=$3
+           idle_minutes=$4
+           status_file=$5
+           tee_status_file=$6
+           agent=$7
+           model=$8
+           title=$9
+           prompt=${10}
+           fifo="$RUNNER_TEMP/coordinator-output.fifo"
+           rm -f "$fifo"
+           mkfifo "$fifo"
+           tee "$transcript_file" < "$fifo" &
+           tee_pid=$!
+           setsid opencode run --agent "$agent" --model "$model" --title "$title" "$prompt" > "$fifo" 2>&1 &
+           child_pid=$!
+           start_time=$(date +%s)
+           last_growth_time=$start_time
+           last_bytes=0
+           total_seconds=$((total_minutes * 60))
+           idle_seconds=$((idle_minutes * 60))
+           group_alive() { kill -0 -- "-$1" 2>/dev/null; }
+           terminate_group() {
+             local pgid="$1" signal="$2"
+             kill -"$signal" -- "-$pgid" 2>/dev/null || true
+           }
+           while group_alive "$child_pid"; do
+             now=$(date +%s)
+             bytes=$(wc -c < "$transcript_file" 2>/dev/null || printf '0')
+             if ((bytes > last_bytes)); then
+               last_bytes=$bytes
+               last_growth_time=$now
+             fi
+             if ((now - start_time >= total_seconds)); then
+               pgid=$(ps -o pgid= -p "$child_pid" | tr -d ' ')
+               if [[ "$pgid" =~ ^[1-9][0-9]*$ && "$pgid" -gt 1 && "$pgid" == "$child_pid" && "$(ps -o sid= -p "$child_pid" | tr -d ' ')" == "$pgid" ]]; then
+                 terminate_group "$pgid" TERM
+                 sleep 1
+                 group_alive "$pgid" && terminate_group "$pgid" KILL
+                 wait "$child_pid" 2>/dev/null || true
+                 wait "$tee_pid" 2>/dev/null || true
+               fi
+               printf '%s\n' 124 > "$status_file"
+               printf '%s\n' 0 > "$tee_status_file"
+               printf 'Coordinator total timeout after %ss; model=%s; session=%s; output_bytes=%s\n' "$((now - start_time))" "$model" "$child_pid" "$bytes" >&2
+               wait "$child_pid" 2>/dev/null || true
+               exit 124
+             fi
+             if ((now - last_growth_time >= idle_seconds)); then
+               pgid=$(ps -o pgid= -p "$child_pid" | tr -d ' ')
+               session=$(ps -o sid= -p "$child_pid" | tr -d ' ')
+               if [[ ! "$pgid" =~ ^[1-9][0-9]*$ || "$pgid" -le 1 || "$pgid" != "$child_pid" || "$session" != "$pgid" ]]; then
+                 printf '%s\n' 'Coordinator watchdog refused to signal an invalid process group.' >&2
+                 exit 1
+               fi
+               if ! ps -eo pid=,sid= | awk -v sid="$session" '$2 == sid && $1 != sid { found=1 } END { exit found ? 0 : 1 }'; then
+                 terminate_group "$pgid" TERM
+                 sleep 1
+                 group_alive "$pgid" && terminate_group "$pgid" KILL
+                 wait "$child_pid" 2>/dev/null || true
+                 wait "$tee_pid" 2>/dev/null || true
+                 printf '%s\n' 124 > "$status_file"
+                 printf '%s\n' "$?" > "$tee_status_file"
+                 printf 'Coordinator zero-progress timeout after %ss (grace 1s); model=%s; session=%s; output_bytes=%s\n' "$((now - start_time))" "$model" "$session" "$bytes" >&2
+                 printf '%s\n' zero-progress > "$RUNNER_TEMP/coordinator-failure-mode"
+                 exit 124
+               fi
+             fi
+             sleep 1
+           done
+           set +e
+           wait "$child_pid"
+           opencode_status=$?
+           wait "$tee_pid"
+           tee_status=$?
+           set -e
+           printf '%s\n' "$opencode_status" > "$status_file"
+           printf '%s\n' "$tee_status" > "$tee_status_file"
+           rm -f "$fifo"
+          WATCHDOG
+           rm -f "$RUNNER_TEMP/coordinator-failure-mode"
+           set +e
+           setsid bash "$watchdog_script" "$RUNNER_TEMP/coordinator.out" "$RUNNER_TEMP/coordinator.out" "$COORDINATOR_TIMEOUT" "$NO_OUTPUT_TIMEOUT" "$RUNNER_TEMP/coordinator-status" "$RUNNER_TEMP/coordinator-tee-status" "$AGENT" "$MODEL" "$coordinator_session_title" "$PROMPT"
+           watchdog_status=$?
+           printf '::%s::\n' "$stop_token"
+           coordinator_status=$(cat "$RUNNER_TEMP/coordinator-status" 2>/dev/null || printf '%s' "$watchdog_status")
+           coordinator_tee_status=$(cat "$RUNNER_TEMP/coordinator-tee-status" 2>/dev/null || printf '1')
+           set -e
+           printf 'Coordinator statuses: opencode=%s tee=%s\n' "$coordinator_status" "$coordinator_tee_status"
           echo "coordinator_status=${coordinator_status}" >> "$GITHUB_OUTPUT"
           echo "coordinator_tee_status=${coordinator_tee_status}" >> "$GITHUB_OUTPUT"
-          if ((coordinator_status == 124)); then
-            echo "failure_mode=timeout" >> "$GITHUB_OUTPUT"
+           if [[ -f "$RUNNER_TEMP/coordinator-failure-mode" ]]; then
+             echo "failure_mode=$(cat "$RUNNER_TEMP/coordinator-failure-mode")" >> "$GITHUB_OUTPUT"
+           elif ((coordinator_status == 124)); then
+             echo "failure_mode=timeout" >> "$GITHUB_OUTPUT"
           fi
           if ((coordinator_status != 0)); then
             exit "$coordinator_status"

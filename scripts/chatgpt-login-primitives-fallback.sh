@@ -127,6 +127,24 @@ recover_blocking_login() {
   rm -f -- "$snapshot_file" "$handoff_file" "$command_file"
   rm -rf -- "$opencode_root"
   mkdir -m 700 -p "$opencode_root/home" "$opencode_workdir" "$opencode_config" "$opencode_data" "$opencode_cache" "$opencode_tmp"
+  cat > "$opencode_config/opencode.json" << 'EOF'
+{
+  "provider": {
+    "opencode": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "https://opencode.ai/zen/go/v1",
+        "apiKey": "{env:OPENCODE_GO_API_KEY}"
+      },
+      "models": {
+        "big-pickle": {
+          "name": "big-pickle"
+        }
+      }
+    }
+  }
+}
+EOF
   snapshot_tmp=$(mktemp "$snapshot_file.XXXXXX")
   status_tmp=$(mktemp "$handoff_file.status.XXXXXX")
   handoff_tmp=$(mktemp "$handoff_file.XXXXXX")

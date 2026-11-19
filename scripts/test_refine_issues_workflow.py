@@ -76,7 +76,8 @@ exec "$@"
         """#!/usr/bin/env bash
 set -euo pipefail
 printf '\\036%s\\n' "${!#}" >> "$PROMPTS"
-printf '%s\\n\\n%s\\n\\n' '## Goal' 'A refined issue.'
+printf '%s\\n' '## Goal'
+printf '%s\\n' 'The issue is refined.'
 printf '%s\\n' '## How to implement'
 printf '%s\\n' 'Implement the requested change.'
 """
@@ -96,7 +97,7 @@ export PROMPTS={prompts!s}
 export PATH={bin_dir!s}:$PATH
 refined=0
 failed=0
-max_attempts=2
+max_attempts=1
 SECONDS=0
 selection_model=test/model
 {processing}
@@ -112,7 +113,13 @@ selection_model=test/model
     assert result.returncode == 0
     prompt_text = prompts.read_text()
     candidate_prompts = prompt_text.split("\x1e")[1:]
-    assert candidate_prompts
+    assert len(candidate_prompts) == 2
+    observed_issue_numbers = {
+        match.group(1)
+        for candidate_prompt in candidate_prompts
+        if (match := re.search(r"Issue #(\d+)", candidate_prompt))
+    }
+    assert observed_issue_numbers == {"101", "202"}
     for candidate_prompt in candidate_prompts:
         if "Issue #101" in candidate_prompt:
             assert "feedback for 101" in candidate_prompt

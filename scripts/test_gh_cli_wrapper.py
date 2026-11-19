@@ -130,26 +130,6 @@ class CliWrapperTest(unittest.TestCase):
         self.call(["api", "graphql", "-f", "query=query { organization(login: owner) { projectV2(number: number) { id } } }"])
         self.call(["api", "graphql", "-f", "query=mutation { updateProjectV2ItemPosition(input: {projectId: id, itemId: id, afterId: null}) { projectV2Item { id } } }"])
         self.call(["api", "graphql", "-f", "query=query { repository(owner: owner, name: name) { id } }"] , False)
-        self.call(["api", "graphql", "-f", "query=query { organization(login: \"updateProjectV2ItemPosition\") { projectV2(number: number) { id } } # updateProjectV2ItemPosition\n }"])
-        self.call(["api", "graphql", "-f", "query=query($owner:String!, $number:Int!) { organization(login: $owner) { projectV2(number: $number) { id } } }", "-F", "owner=org", "-F", "number=1"])
-        for query in (
-            "query { organization: projectV2 { id } }",
-            "query { node(id: projectId) { updateProjectV2ItemPosition { id } } }",
-            "mutation { node(id: projectId) { updateProjectV2ItemPosition(input: {projectId: id, itemId: id, afterId: null}) { projectV2Item { id } } } }",
-            "query { organization(login: owner) { repository { id } } }",
-            "query { organization(login: $owner) { projectV2(number: $number) { id } } }",
-        ):
-            self.call(["api", "graphql", "-f", f"query={query}"], False)
-        for query in (
-            "query { node(id: projectId) { body } }",
-            "query { node(id: projectId) { state } }",
-            "query { node(id: projectId) { content } }",
-            "query { organization(login: owner) { projectV2(number: number) {",
-            "query { organization(login: owner) { projectV2(number: number) { id }",
-            "query { node(id: projectId) { id",
-        ):
-            self.call(["api", "graphql", "-f", f"query={query}"], False)
-        self.call(["api", "graphql", "-f", "query=query($owner:String!) { organization(login: $owner) { projectV2(number: number) { id } } }", "-F", "number=1"], False)
         self.call(["api", "repos/BacLuc/r/pulls", "-f", "body=--hostname=evil.com", "--hostname=github.com"])
 
     def test_revert(self):

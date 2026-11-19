@@ -309,19 +309,22 @@ jobs:
             set +e
             timeout "${DISCOVERY_TIMEOUT}m" opencode run --agent model-discovery --model "$fallback_model" --title "model-discovery" "$discovery_prompt" | tee "$discovery_output"
             discovery_statuses=("${PIPESTATUS[@]}")
-            printf '::%s::\n' "$stop_token"
+            printf '\n::%s::\n' "$stop_token"
             discovery_status=${discovery_statuses[0]}
             discovery_tee_status=${discovery_statuses[1]}
             set -e
             printf 'Model detection statuses: opencode=%s tee=%s\n' "$discovery_status" "$discovery_tee_status"
-            if ((discovery_tee_status != 0)); then
-              exit "$discovery_tee_status"
-            fi
             stop_token="$(openssl rand -hex 32)"
             : "${stop_token:?stop-commands fence token generation failed}"
             printf '::stop-commands::%s\n' "$stop_token"
             if ((discovery_status != 0)); then
+              if ((discovery_status == 124)); then
+                printf '::warning::model discovery exceeded the %sm limit; falling back to the verified model %q\n' "$DISCOVERY_TIMEOUT" "$fallback_model"
+              fi
               printf 'Model discovery failed with status %s; falling back to the verified model %q.\n' "$discovery_status" "$fallback_model"
+              model="$fallback_model"
+            elif ((discovery_tee_status != 0)); then
+              printf '::warning::model discovery log capture failed (tee exit %s); falling back to the verified model %q\n' "$discovery_tee_status" "$fallback_model"
               model="$fallback_model"
             else
               model="$({ grep -oE 'coordinator: [^,[:space:]]+' "$discovery_output" || true; } | tail -n 1 | cut -d' ' -f2-)"
@@ -512,7 +515,7 @@ jobs:
           set +e
           timeout "${COORDINATOR_TIMEOUT}m" opencode run --agent "$AGENT" --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
           coordinator_statuses=("${PIPESTATUS[@]}")
-          printf '::%s::\n' "$stop_token"
+          printf '\n::%s::\n' "$stop_token"
           coordinator_status=${coordinator_statuses[0]}
           coordinator_tee_status=${coordinator_statuses[1]}
           set -e
@@ -522,10 +525,14 @@ jobs:
           if ((coordinator_status == 124)); then
             echo "failure_mode=timeout" >> "$GITHUB_OUTPUT"
           fi
+          if ((coordinator_tee_status != 0)); then
+            printf '::warning::coordinator log capture failed (tee exit %s); the coordinator result is unaffected\n' "$coordinator_tee_status"
+          fi
           if ((coordinator_status != 0)); then
+            ((coordinator_status == 124)) && printf '::error::coordinator exceeded the %sm limit (opencode exit %s)\n' "$COORDINATOR_TIMEOUT" "$coordinator_status"
             exit "$coordinator_status"
           fi
-          exit "$coordinator_tee_status"
+          exit 0
 
       - name: Fatal guard
         id: fatal-guard
@@ -682,7 +689,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
           COMMENT_ID: ${{ steps.run-start-comment.outputs.comment_id }}
           MODEL: ${{ steps.select-model.outputs.model }}
-          COORDINATOR_OUTCOME: ${{ steps.coordinator.outcome }}
+          COORDINATOR_STATUS: ${{ steps.coordinator.outputs.coordinator_status }}
+          COORDINATOR_TEE_STATUS: ${{ steps.coordinator.outputs.coordinator_tee_status }}
           FATAL_REASON: ${{ steps.fatal-guard.outputs.fatal-reason }}
           BRANCH: ${{ steps.push-work.outputs.branch_name }}
           PUSHED_REPOS: ${{ steps.push-work.outputs.pushed_repos }}
@@ -694,12 +702,17 @@ jobs:
           RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
           # Determine status
-          if [[ "${COORDINATOR_OUTCOME:-}" == "success" ]]; then
+          if [[ "${COORDINATOR_STATUS:-}" == "0" ]]; then
             STATUS="✅ completed"
+            if [[ "${COORDINATOR_TEE_STATUS:-0}" != "0" ]]; then
+              STATUS="✅ completed (tee log capture failed: exit ${COORDINATOR_TEE_STATUS})"
+            fi
+          elif [[ "${COORDINATOR_STATUS:-}" == "124" ]]; then
+            STATUS="⏱️ coordinator timed out (exit 124)"
           elif [[ -n "${FATAL_REASON:-}" ]]; then
             STATUS="❌ fatal error: $FATAL_REASON"
           else
-            STATUS="⚠️ failed (coordinator exit ${COORDINATOR_OUTCOME:-})"
+            STATUS="⚠️ failed (coordinator exit ${COORDINATOR_STATUS:-})"
           fi
 
           # Check for existing PRs in every repo this run pushed to, not just this one.

@@ -152,27 +152,202 @@ def validate_api(args):
 def validate_graphql(parsed):
     fields = parsed.get("body", [])
     queries = [field.partition("=")[2] for field in fields if field.startswith("query=")]
+    form_fields = {
+        "owner", "number", "projectId", "itemId", "fieldId", "afterId", "singleSelectOptionId",
+    }
     if len(queries) != 1 or any(
-        not field.partition("=")[0] in {
-            "query", "owner", "login", "number", "projectId", "itemId", "fieldId",
-            "afterId", "singleSelectOptionId",
-        }
-        for field in fields
+        field.partition("=")[0] not in {"query", *form_fields} for field in fields
     ):
         deny("GraphQL requires a project-v2 query")
-    tokens = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", queries[0]))
-    allowed = {
-        "ProjectV2", "ProjectV2FieldConfiguration", "ProjectV2Item",
-        "ProjectV2SingleSelectField", "organization", "projectV2", "projectV2Items",
-        "updateProjectV2ItemFieldValue", "updateProjectV2ItemPosition", "query", "mutation",
-        "node", "id", "number", "after", "afterId", "first", "last", "field", "fields", "input",
-        "items", "nodes", "pageInfo", "hasNextPage", "endCursor", "position", "fieldId",
-        "singleSelectOptionId", "projectId", "itemId", "organizationId", "owner", "login",
-        "cursor", "value", "clientMutationId", "projectV2Item", "null", "true", "false",
-        "Int", "String", "ID",
+    document = GraphQLParser(queries[0]).parse()
+    variables = {field.partition("=")[0] for field in fields if field.partition("=")[0] != "query"}
+    if not variables <= form_fields:
+        deny("GraphQL variables are not permitted")
+    for variable, path in document["uses"]:
+        if variable not in variables or (variable, path) not in {
+            ("owner", ("organization", "login")),
+            ("number", ("projectV2", "number")),
+            ("projectId", ("input", "projectId")),
+            ("itemId", ("input", "itemId")),
+            ("fieldId", ("input", "fieldId")),
+            ("afterId", ("input", "afterId")),
+            ("singleSelectOptionId", ("value", "singleSelectOptionId")),
+        }:
+            deny("GraphQL variable is used outside its permitted project-v2 argument")
+
+
+class GraphQLParser:
+    names = {
+        "ProjectV2", "ProjectV2FieldConfiguration", "ProjectV2Item", "ProjectV2SingleSelectField",
+        "organization", "projectV2", "projectV2Items", "updateProjectV2ItemFieldValue",
+        "updateProjectV2ItemPosition", "query", "mutation", "node", "id", "number", "after",
+        "afterId", "first", "last", "field", "fields", "input", "items", "nodes", "pageInfo",
+        "hasNextPage", "endCursor", "position", "fieldId", "singleSelectOptionId", "projectId",
+        "itemId", "organizationId", "owner", "login", "cursor", "value", "clientMutationId",
+        "projectV2Item", "null", "true", "false", "Int", "String", "ID", "name", "options",
+        "content", "number", "title", "url", "type", "body", "state", "__typename",
     }
-    if not tokens or not tokens <= allowed:
-        deny("only project-v2 GraphQL operations are supported")
+
+    def __init__(self, source):
+        self.tokens = self.tokenize(source)
+        self.index = 0
+        self.uses = []
+
+    @staticmethod
+    def tokenize(source):
+        tokens = []
+        index = 0
+        while index < len(source):
+            if source[index].isspace() or source[index] == ",":
+                index += 1
+            elif source[index] == "#":
+                index = source.find("\n", index)
+                if index < 0:
+                    break
+            elif source[index] == '"':
+                end = index + 1
+                while end < len(source):
+                    if source[end] == "\\":
+                        end += 2
+                    elif source[end] == '"':
+                        end += 1
+                        break
+                    else:
+                        end += 1
+                if end > len(source) or source[end - 1] != '"':
+                    deny("malformed GraphQL string")
+                tokens.append(("string", source[index:end]))
+                index = end
+            elif source[index] in "!$():={}[]":
+                tokens.append((source[index], source[index]))
+                index += 1
+            else:
+                match = re.match(r"[A-Za-z_][A-Za-z0-9_]*|-?[0-9]+(?:\.[0-9]+)?", source[index:])
+                if not match:
+                    deny("malformed GraphQL query")
+                value = match.group(0)
+                tokens.append(("name", value))
+                index += len(value)
+        return tokens
+
+    def take(self, kind=None, value=None):
+        if self.index == len(self.tokens):
+            deny("malformed GraphQL query")
+        token = self.tokens[self.index]
+        if (kind and token[0] != kind) or (value and token[1] != value):
+            deny("malformed GraphQL query")
+        self.index += 1
+        return token[1]
+
+    def parse(self):
+        operation = self.take("name")
+        if operation not in {"query", "mutation"}:
+            deny("GraphQL requires an explicit project-v2 operation")
+        if self.index < len(self.tokens) and self.tokens[self.index][1] == "(":
+            self.parse_variables()
+        roots = self.selection_set(())
+        if self.index != len(self.tokens) or len(roots) != 1:
+            deny("GraphQL requires one project-v2 root selection")
+        root = roots[0]
+        if operation == "query" and root["name"] not in {"organization", "node"}:
+            deny("only project-v2 query roots are supported")
+        if operation == "mutation" and root["name"] not in {
+            "updateProjectV2ItemFieldValue", "updateProjectV2ItemPosition",
+        }:
+            deny("only project-v2 mutation roots are supported")
+        self.validate_root(operation, root)
+        return {"uses": self.uses}
+
+    def validate_root(self, operation, root):
+        if operation == "query":
+            if set(root["arguments"]) != ({"login"} if root["name"] == "organization" else {"id"}):
+                deny("malformed project-v2 query root")
+            children = root["children"]
+            if root["name"] == "organization":
+                if len(children) != 1 or children[0]["name"] != "projectV2":
+                    deny("project-v2 query must select organization.projectV2")
+                if set(children[0]["arguments"]) != {"number"}:
+                    deny("malformed project-v2 selection")
+                children = children[0]["children"]
+            if not children or any(child["name"] not in {
+                "id", "number", "title", "url", "fields", "items", "pageInfo", "nodes",
+                "hasNextPage", "endCursor", "name", "options", "content", "type", "body", "state",
+            } for child in children):
+                deny("unrelated project selection")
+            return
+        if set(root["arguments"]) != {"input"} or len(root["children"]) != 1:
+            deny("malformed project-v2 mutation root")
+        input_fields = root["arguments"]["input"]
+        if root["name"] == "updateProjectV2ItemPosition":
+            required = {"projectId", "itemId", "afterId"}
+        else:
+            required = {"projectId", "itemId", "fieldId", "value"}
+        if not isinstance(input_fields, dict) or set(input_fields) != required or root["children"][0]["name"] != "projectV2Item":
+            deny("malformed project-v2 mutation input")
+        if root["name"] == "updateProjectV2ItemFieldValue":
+            if not isinstance(input_fields["value"], dict) or set(input_fields["value"]) != {"singleSelectOptionId"}:
+                deny("malformed project-v2 field value")
+        if [child["name"] for child in root["children"][0]["children"]] != ["id"]:
+            deny("malformed project-v2 mutation selection")
+
+    def parse_variables(self):
+        self.take(value="(")
+        while self.index < len(self.tokens) and self.tokens[self.index][1] != ")":
+            self.take(value="$")
+            self.take("name")
+            self.take(value=":")
+            self.take("name")
+            if self.index < len(self.tokens) and self.tokens[self.index][1] == "!":
+                self.take(value="!")
+        self.take(value=")")
+
+    def selection_set(self, path):
+        self.take(value="{")
+        selections = []
+        while self.index < len(self.tokens) and self.tokens[self.index][1] != "}":
+            name = self.take("name")
+            if self.tokens[self.index][1] == ":":
+                deny("GraphQL aliases are not permitted")
+            arguments = self.arguments(path + (name,)) if self.index < len(self.tokens) and self.tokens[self.index][1] == "(" else {}
+            children = self.selection_set(path + (name,)) if self.index < len(self.tokens) and self.tokens[self.index][1] == "{" else []
+            if name not in self.names:
+                deny("only project-v2 GraphQL selections are supported")
+            selections.append({"name": name, "arguments": arguments, "children": children})
+        self.take(value="}")
+        if not selections:
+            deny("malformed GraphQL selection")
+        return selections
+
+    def arguments(self, path):
+        result = {}
+        self.take(value="(")
+        while self.index < len(self.tokens) and self.tokens[self.index][1] != ")":
+            name = self.take("name")
+            self.take(value=":")
+            result[name] = self.value(path + (name,))
+        self.take(value=")")
+        return result
+
+    def value(self, path):
+        if self.tokens[self.index][1] == "$":
+            self.take(value="$")
+            variable = self.take("name")
+            self.uses.append((variable, path[-2:]))
+            return variable
+        if self.tokens[self.index][1] == "{":
+            self.take(value="{")
+            result = {}
+            while self.index < len(self.tokens) and self.tokens[self.index][1] != "}":
+                name = self.take("name")
+                self.take(value=":")
+                result[name] = self.value(path + (name,))
+            self.take(value="}")
+            return result
+        token = self.tokens[self.index]
+        if token[0] not in {"name", "string"}:
+            deny("malformed GraphQL value")
+        self.index += 1
+        return token[1]
 
 
 def main():

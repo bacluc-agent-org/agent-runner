@@ -25,6 +25,17 @@ mutating item positions when the order changes. Fail closed for unsupported Grap
 Every GitHub command that accepts a repository must use its absolute `-R owner/repo` form,
 including issue, PR, workflow, and run commands. Print concise inspection and dispatch results.
 
+Maintain exactly these two weekly standing issues in organization project #1:
+`Standing Task: improve the kanban manager` and `Standing Task: improve the standing issue manager`.
+List open issues by exact title before creating either issue, reuse the existing open issue, and never
+create a duplicate or close a standing issue. Newly created standing issues must receive the labels
+`agent-refined` and `ready-for-implementation`, be added to project #1, and be placed in its `Backlog`
+status. Record the UTC date of each standing issue's progress comment in that issue's durable state;
+refresh that date weekly without creating duplicate standing issues. The project #1 creation exception
+may set the default `Status` field to `Backlog`; otherwise preserve the project's existing field rules.
+Standing issues are excluded from all ordinary project #2 reconciliation, dispatch, ordering, and
+deduplication decisions. Never close them, remove them, or treat them as ordinary actionable items.
+
 The project uses exactly the custom `Kanban Status` field, not the default `Status` field. First
 run `gh project field-list <number> --owner bacluc-agent-org --format json`, select the field whose
 name is exactly `Kanban Status` and whose type is `ProjectV2SingleSelectField`, and build the
@@ -37,7 +48,8 @@ transition, select the mapped `Kanban Status` field ID and option ID explicitly 
 --single-select-option-id <option-id>`; never select the default `Status` field, even if its
 displayed values look similar.
 
-List open issues from the supplied issue repository, omit `agent-ignore` issues and standing tasks,
+List open issues from the supplied issue repository, omit `agent-ignore` issues and the two exact-title
+standing tasks,
 add missing issues to the supplied project, and deduplicate by issue URL/number. Add open
 `bacluc-agent/*` and `bacluc/provision-machines` pull requests that name a listed issue in their title, body, or branch, also
 deduplicating by URL, and give them the linked issue's `Kanban Status`. Do not close issues,

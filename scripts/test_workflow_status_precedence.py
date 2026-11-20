@@ -114,11 +114,14 @@ def test_model_discovery_status_handling_executes_all_command_and_tee_combinatio
 def test_coordinator_status_handling_executes_all_command_and_tee_combinations():
     content = OPENCODE_WORKFLOW.read_text()
     search_start = content.index("id: coordinator")
-    start = content.index("          set +e", search_start)
-    end = content.index("\n\n      - name: Fatal guard", start)
-    fragment = content[start:end]
+    func_start = content.index("run_coordinator() {", search_start)
+    func_end = content.index("\n          }", func_start) + len("\n          }")
+    call_start = content.index('run_coordinator "$COORDINATOR_TIMEOUT" "-a" "$PROMPT"', func_end)
+    end = content.index('\n          if [[ -n "$COORDINATOR_PROGRESS_CHECKER" ]]; then', call_start)
+    fragment = content[func_start:func_end] + "\n" + content[call_start:end]
     setup = (
         "COORDINATOR_TIMEOUT=10\n"
+        "COORDINATOR_PROGRESS_CHECKER=\n"
         "stop_token=stop\n"
         "coordinator_session_title=coordinator\n"
         "AGENT=coordinator\n"

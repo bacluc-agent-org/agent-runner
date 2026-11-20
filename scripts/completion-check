@@ -14,6 +14,10 @@ if ! node --version | grep -qE '^v(2[2-9]|[3-9][0-9])\.'; then
     fi
   done
 fi
+if ! node --version | grep -qE '^v(2[2-9]|[3-9][0-9])\.'; then
+  printf 'ERROR: Node.js >=22 is required for completion-check tests, but it is unavailable.\n' >&2
+  exit 1
+fi
 
 # renovate: datasource=docker depName=ghcr.io/bacluc/prettier-image/prettier-image
 PRETTIER_VERSION=3.9.4
@@ -47,12 +51,12 @@ check() {
 
 renovate_check() {
   local output
-  if ! output="$(docker run --rm "${mount[@]}" "renovate/renovate:${RENOVATE_VERSION}" --platform=local --dry-run=lookup --require-config=ignored --onboarding=false 2>&1)"; then
+  if ! output="$(docker run --rm "${mount[@]}" "renovate/renovate:${RENOVATE_VERSION}" --platform=local --dry-run=lookup --require-config=ignored --onboarding=false --include-paths=scripts/completion-check 2>&1)"; then
     printf '%s\n' "$output"
     return 1
   fi
   printf '%s\n' "$output"
-  grep -Fq '"regex": {"fileCount": 2, "depCount": 4}' <<< "$output"
+  grep -Fq '"regex": {"fileCount": 1, "depCount": 3}' <<< "$output"
 }
 
 check 'formatting (prettier --check .)' docker run --rm "${mount[@]}" "ghcr.io/bacluc/prettier-image/prettier-image:${PRETTIER_VERSION}" --ignore-path "$prettier_ignore" --check .

@@ -20,8 +20,9 @@ CONFIG = {
 
 
 @pytest.fixture(autouse=True)
-def _provider_api_keys(monkeypatch):
+def _provider_api_keys(monkeypatch, tmp_path):
     """Provider discovery tests exercise the real PROVIDERS loop; provide the keys."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
     monkeypatch.setenv("OPENCODE_GO_API_KEY", "test-go-key")
     monkeypatch.setenv("OPENCODE_GO_2_API_KEY", "test-go-2-key")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-or-key")
@@ -365,6 +366,57 @@ class TestDiscoverModels:
 EXAMPLE_OPENCODE_WHITELIST = [r"(?:-|:)free$", r"big-pickle", r"glm", r"gpt-5\.6-luna", r"qwen", r"kimi"]
 
 class TestProviderProbeable:
+    def test_auth_json_api_key_makes_configured_provider_probeable(self, monkeypatch, tmp_path):
+        data_home = tmp_path / "data"
+        auth_dir = data_home / "opencode"
+        auth_dir.mkdir(parents=True)
+        (auth_dir / "auth.json").write_text(
+            json.dumps({"vshn-us-ai": {"type": "api", "key": "auth-key"}})
+        )
+        source = tmp_path / "opencode.json"
+        source.write_text(
+            '{"provider":{"vshn-us-ai":{"options":{"baseURL":"https://example.test/v1"}}}}'
+        )
+        monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+
+        def fake_run(*args, **kwargs):
+            kwargs["stdout"].write(json.dumps([{"path": str(source)}]))
+            return types.SimpleNamespace(stdout="")
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+
+        config = model_availability.load_provider_config()
+
+        assert config["vshn-us-ai"]["apiKey"] == "auth-key"
+        assert model_availability.provider_probeable("vshn-us-ai/model", config, {})
+
+    def test_config_source_jsonc_is_parsed_and_takes_precedence_over_auth(self, monkeypatch, tmp_path):
+        source = tmp_path / "opencode.jsonc"
+        source.write_text(
+            '{\n'
+            '  // active provider configuration\n'
+            '  "provider": {\n'
+            '    "vshn-us-ai": {"options": {"baseURL": "https://example.test/v1", '
+            '"apiKey": "config-key",}},\n'
+            '  },\n'
+            '}\n'
+        )
+        data_home = tmp_path / "data"
+        auth_dir = data_home / "opencode"
+        auth_dir.mkdir(parents=True)
+        (auth_dir / "auth.json").write_text(
+            json.dumps({"vshn-us-ai": {"type": "api", "key": "auth-key"}})
+        )
+        monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+
+        def fake_run(*args, **kwargs):
+            kwargs["stdout"].write(json.dumps([{"path": str(source)}]))
+            return types.SimpleNamespace(stdout="")
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+
+        assert model_availability.load_provider_config()["vshn-us-ai"]["apiKey"] == "config-key"
+
     @pytest.mark.parametrize("config", [{"openrouter": []}, {"openrouter": {"baseURL": []}}])
     def test_malformed_provider_config_is_not_probeable(self, config):
         assert not model_availability.provider_probeable("openrouter/foo:free", config, {})

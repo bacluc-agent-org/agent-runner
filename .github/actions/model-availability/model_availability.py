@@ -157,7 +157,7 @@ def load_provider_config() -> dict[str, dict[str, str | None]]:
                 options = provider.get("options", {}) if isinstance(provider, dict) else {}
                 if isinstance(options, dict) and options:
                     result[name] = {key: options.get(key) for key in ("baseURL", "apiKey")}
-            return result
+            sources = []
     for source in sources:
         try:
             with open(source, encoding="utf-8") as fh:
@@ -177,6 +177,21 @@ def load_provider_config() -> dict[str, dict[str, str | None]]:
                 result.setdefault(name, {}).update(
                     {key: options.get(key) for key in ("baseURL", "apiKey") if key in options}
                 )
+    auth_path = os.path.join(
+        os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")), "opencode", "auth.json"
+    )
+    try:
+        with open(auth_path, encoding="utf-8") as fh:
+            auth = json.load(fh)
+        if isinstance(auth, dict):
+            for name, credential in auth.items():
+                if not isinstance(credential, dict) or credential.get("type") not in ("api", "oauth"):
+                    continue
+                value = credential.get("key") if credential["type"] == "api" else credential.get("access")
+                if isinstance(value, str) and value and name in result:
+                    result[name].setdefault("apiKey", value)
+    except (OSError, json.JSONDecodeError):
+        pass
     return result
 
 

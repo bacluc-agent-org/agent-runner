@@ -414,6 +414,16 @@ class TestProviderProbeable:
     def test_openai_passes_like_builtin_provider(self):
         assert model_availability.provider_probeable("openai/gpt-5.6-luna", {}, {})
 
+    def test_provider_without_resolvable_env_credentials_is_not_probeable(self):
+        config = {"vshn-us-ai": {"baseURL": "https://example.test/v1", "apiKey": "{env:MISSING_KEY}"}}
+        assert not model_availability.provider_probeable("vshn-us-ai/model", config, {})
+
+    def test_provider_with_resolved_credentials_is_probeable(self):
+        config = {"vshn-us-ai": {"baseURL": "{env:VSHN_BASE_URL}", "apiKey": "{env:VSHN_KEY}"}}
+        assert model_availability.provider_probeable(
+            "vshn-us-ai/model", config, {"VSHN_BASE_URL": "https://example.test/v1", "VSHN_KEY": "secret"}
+        )
+
 class TestParseWhitelistedModels:
     def test_uses_exact_openai_patterns_without_changing_opencode_matching(self):
         output = (

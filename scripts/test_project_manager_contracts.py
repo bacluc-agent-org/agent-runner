@@ -56,12 +56,11 @@ def test_project_variables_and_default_five():
 
 
 def test_repository_projects_write_only_in_manager_workflows():
-    import re
     workflows = list((ROOT / ".github/workflows").glob("*.yml"))
     for path in workflows:
         text = read(path)
         if "repository-projects: write" in text:
-            assert path.name in {"kanban-manager.yml", "standing-issue-manager.yml"}, path.name
+            assert path.name in {"kanban-manager.yml", "standing-issue-manager.yml", "opencode.yml"}, path.name
 
 
 def test_agent_wiring_and_frontmatter():
@@ -103,12 +102,19 @@ def test_deduplication():
 def test_no_direct_graphql():
     kanban = read(KANBAN_AGENT)
     standing = read(STANDING_AGENT)
-    assert "never direct GraphQL" in kanban
+    assert "Direct GraphQL is denied" in kanban
+    assert "repository-approved guarded GraphQL path" in kanban
     assert "never call GraphQL directly" in standing
-    assert "does\nnot expose project-v2 item order/priority" in kanban
-    assert "only to read that order/priority" in kanban
+    assert "does not expose\nproject-v2 item order/priority" in kanban
+    assert "may only read order/priority" in kanban
     assert "after a complete desired" in kanban
     assert "must not replace `gh project` or REST" in kanban
+
+
+def test_reusable_manager_permission_boundary():
+    text = read(OPENCODE_WF)
+    assert "permissions:" in text
+    assert "repository-projects: write" in text
 
 
 def test_no_auto_close():

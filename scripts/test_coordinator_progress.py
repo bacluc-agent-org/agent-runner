@@ -171,6 +171,13 @@ def test_new_root_commit_is_observable_delivery(tmp_path):
 
 def test_opencode_runtime_artifacts_are_not_observable_delivery(tmp_path):
     workspace = make_repo(tmp_path)
+    opencode_dir = workspace / ".opencode"
+    opencode_dir.mkdir()
+    package_json = opencode_dir / "package.json"
+    package_json.write_text('{"name": "before"}\n')
+    git("add", ".", cwd=workspace)
+    git("commit", "-m", "track opencode package", cwd=workspace)
+
     baseline = tmp_path / "baseline.json"
     output = tmp_path / "coordinator.out"
     snapshot(workspace, baseline)
@@ -181,9 +188,14 @@ def test_opencode_runtime_artifacts_are_not_observable_delivery(tmp_path):
     assert result.returncode == 1
     assert "incomplete" in result.stdout
 
-    opencode_dir = workspace / ".opencode"
-    opencode_dir.mkdir()
-    (opencode_dir / ".gitignore").write_text("*\n")
+    (opencode_dir / "runtime-marker.json").write_text("{}\n")
+
+    result = run_check(workspace, output, baseline)
+
+    assert result.returncode == 1
+    assert "incomplete" in result.stdout
+
+    package_json.write_text('{"name": "after"}\n')
 
     result = run_check(workspace, output, baseline)
 

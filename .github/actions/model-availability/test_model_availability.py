@@ -103,6 +103,42 @@ class TestDiscoverModels:
         assert any(k.lower() == "x-opencode-session" for k in captured["headers"])
         assert captured["full_url"].endswith("/models")
 
+    def test_discovery_uses_mapped_key_when_config_omits_api_key(self, monkeypatch):
+        config = {"provider": {"openrouter": {"options": {"baseURL": "https://openrouter.ai/api/v1"}}}}
+        options = {"openrouter": config["provider"]["openrouter"]["options"]}
+        captured = {}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"data": [{"id": "model"}]}'
+
+        def fake_run(args, *a, **kw):
+            if args == ["opencode", "models"]:
+                return types.SimpleNamespace(stdout="openrouter/model\n")
+            if args == ["opencode", "debug", "config"]:
+                kw["stdout"].write(json.dumps(config))
+                return types.SimpleNamespace(stdout="")
+            raise AssertionError(f"unexpected args: {args}")
+
+        def fake_urlopen(request, **kwargs):
+            captured["authorization"] = request.get_header("Authorization")
+            return FakeResponse()
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+        monkeypatch.setattr(model_availability.urllib.request, "urlopen", fake_urlopen)
+
+        models, provider_models = model_availability.discover_models(options)
+
+        assert models == ["openrouter/model"]
+        assert provider_models == {"openrouter": ["model"]}
+        assert captured["authorization"] == "Bearer test-or-key"
+
     def test_endpoint_failure_per_provider(self, monkeypatch):
         def fail(request, timeout=30):
             raise RuntimeError("403 Forbidden")
@@ -477,6 +513,18 @@ class TestProviderCredentials:
         )
         assert not model_availability.provider_has_credentials(
             "vshn-us-ai/model", options, {"VSHN_US_BASE_URL": "https://vshn.example/v1"}, str(auth_path)
+        )
+
+    def test_mapped_environment_key_fallback_matches_discovery(self, tmp_path):
+        auth_path = tmp_path / "auth.json"
+        auth_path.write_text("{}")
+        provider_options = {"openrouter": {"baseURL": "https://openrouter.ai/api/v1"}}
+
+        assert model_availability.provider_has_credentials(
+            "openrouter/model", provider_options, {"OPENROUTER_API_KEY": "key"}, str(auth_path)
+        )
+        assert not model_availability.provider_has_credentials(
+            "openrouter/model", provider_options, {}, str(auth_path)
         )
 
     def test_builtin_literal_key_auth_and_arbitrary_provider(self, tmp_path):
@@ -1575,6 +1623,32 @@ class TestMainProbeSummary:
         monkeypatch.setattr(model_availability, "probe_candidates", lambda *args: pytest.fail("fallback must not probe"))
         assert model_availability.main() == 0
         assert captured == {"saved": cache, "models": [other_candidate]}
+
+    def test_discovery_failure_allows_mapped_key_for_cached_output(self, monkeypatch):
+        candidate = "openrouter/provider/model"
+        cache = {candidate: {"ok": True, "checked": "fresh"}}
+        monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: "49")
+        monkeypatch.setattr(model_availability, "read_cache", lambda issue: dict(cache))
+        monkeypatch.setattr(
+            model_availability,
+            "load_provider_options",
+            lambda: {"openrouter": {"baseURL": "https://openrouter.ai/api/v1"}},
+        )
+        monkeypatch.setattr(
+            model_availability,
+            "discover_models",
+            lambda *args: (_ for _ in ()).throw(subprocess.CalledProcessError(1, "opencode models")),
+        )
+        monkeypatch.setenv("OPENROUTER_API_KEY", "mapped-key")
+        captured = {}
+        monkeypatch.setattr(
+            model_availability,
+            "write_outputs",
+            lambda issue, saved, models: captured.update(saved=saved, models=models),
+        )
+
+        assert model_availability.main() == 0
+        assert captured == {"saved": cache, "models": [candidate]}
 
     def test_main_passes_loaded_provider_options_to_discovery(self, monkeypatch):
         captured = {}

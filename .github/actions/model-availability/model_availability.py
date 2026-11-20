@@ -295,6 +295,12 @@ def auth_has_provider(provider: str, auth_path: str | None = None) -> bool:
         return False
 
 
+def provider_api_key(provider: str, options: dict, env: dict) -> str | None:
+    api_key = resolve_env_refs(options.get("apiKey"), env)
+    fallback_key = dict(PROVIDERS).get(provider)
+    return api_key or env.get(fallback_key or "")
+
+
 def provider_has_credentials(model_id: str, provider_options: dict, env: dict, auth_path: str | None = None) -> bool:
     """Configured providers require a resolved key; absent providers remain probeable."""
     provider = model_id.split("/", 1)[0] if "/" in model_id else ""
@@ -305,7 +311,7 @@ def provider_has_credentials(model_id: str, provider_options: dict, env: dict, a
     if auth_has_provider(provider, auth_path):
         return True
     options = provider_options[provider]
-    api_key = resolve_env_refs(options.get("apiKey"), env)
+    api_key = provider_api_key(provider, options, env)
     base_url = options.get("baseURL")
     return bool(api_key) and (base_url is None or valid_base_url(resolve_env_refs(base_url, env)))
 
@@ -387,13 +393,11 @@ def discover_models(provider_options: dict[str, dict] | None) -> tuple[list[str]
         )
     whitelisted_models = kept
     provider_models = {}
-    fallback_keys = dict(PROVIDERS)
     for provider, options in provider_config.items():
         base_url = base_urls.get(provider)
         if not valid_base_url(base_url):
             continue
-        api_key = resolve_env_refs(options.get("apiKey"), os.environ)
-        api_key = api_key or os.environ.get(fallback_keys.get(provider, ""))
+        api_key = provider_api_key(provider, options, os.environ)
         if not api_key:
             print(f"warning: no API key configured for {provider}", file=sys.stderr)
             continue

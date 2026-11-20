@@ -116,11 +116,11 @@ class TestDiscoverModels:
                 return False
 
             def read(self):
-                return b'{"data": [{"id": "model"}]}'
+                return b'{"data": [{"id": "big-pickle"}]}'
 
         def fake_run(args, *a, **kw):
             if args == ["opencode", "models"]:
-                return types.SimpleNamespace(stdout="openrouter/model\n")
+                return types.SimpleNamespace(stdout="openrouter/big-pickle\n")
             if args == ["opencode", "debug", "config"]:
                 kw["stdout"].write(json.dumps(config))
                 return types.SimpleNamespace(stdout="")
@@ -135,8 +135,8 @@ class TestDiscoverModels:
 
         models, provider_models = model_availability.discover_models(options)
 
-        assert models == ["openrouter/model"]
-        assert provider_models == {"openrouter": ["model"]}
+        assert models == ["openrouter/big-pickle"]
+        assert provider_models == {"openrouter": ["big-pickle"]}
         assert captured["authorization"] == "Bearer test-or-key"
 
     def test_endpoint_failure_per_provider(self, monkeypatch):

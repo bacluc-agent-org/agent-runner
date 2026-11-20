@@ -169,6 +169,28 @@ def test_new_root_commit_is_observable_delivery(tmp_path):
     assert "delivery" in result.stdout
 
 
+def test_opencode_runtime_artifacts_are_not_observable_delivery(tmp_path):
+    workspace = make_repo(tmp_path)
+    baseline = tmp_path / "baseline.json"
+    output = tmp_path / "coordinator.out"
+    snapshot(workspace, baseline)
+    output.write_text("I made no changes and ran no tests.\n")
+
+    result = run_check(workspace, output, baseline)
+
+    assert result.returncode == 1
+    assert "incomplete" in result.stdout
+
+    opencode_dir = workspace / ".opencode"
+    opencode_dir.mkdir()
+    (opencode_dir / ".gitignore").write_text("*\n")
+
+    result = run_check(workspace, output, baseline)
+
+    assert result.returncode == 1
+    assert "incomplete" in result.stdout
+
+
 def test_refusal_verdict_overrides_apparent_delivery(tmp_path):
     workspace = make_repo(tmp_path)
     baseline = tmp_path / "baseline.json"

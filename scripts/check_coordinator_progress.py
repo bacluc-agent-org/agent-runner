@@ -64,6 +64,8 @@ def relevant_status(root):
             for nested in nested_paths
         ):
             continue
+        if line.startswith("??") and Path(path).parts[:1] == (".opencode",):
+            continue
         status.append(line)
     return "\n".join(status)
 

@@ -1,11 +1,25 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 077
 
 auth_file="$RUNNER_TEMP/primitives-auth.json"
 stderr_file="$RUNNER_TEMP/primitives-login.stderr"
 status_file="$RUNNER_TEMP/primitives-status.json"
 step_file="$RUNNER_TEMP/primitives-step.json"
 start_pid=""
+
+wait_for_start() {
+  local attempts=${1:-10}
+  local attempt
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    if ! kill -0 "$start_pid" 2> /dev/null || [[ "$(ps -o stat= -p "$start_pid" 2> /dev/null)" == *Z* ]]; then
+      wait "$start_pid" 2> /dev/null
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
 
 redact() {
   local value=${1:-}
@@ -38,6 +52,16 @@ diagnostics() {
 cleanup() {
   set +e
   uv run scripts/chatgpt-login.py stop > /dev/null 2>&1
+  if [[ -n "$start_pid" ]] && kill -0 "$start_pid" 2> /dev/null; then
+    if ! wait_for_start 5; then
+      kill -TERM "$start_pid" 2> /dev/null
+      if ! wait_for_start 5; then
+        kill -KILL "$start_pid" 2> /dev/null
+      fi
+    fi
+    wait "$start_pid" 2> /dev/null
+  fi
+  rm -f "$auth_file" "$stderr_file" "$status_file" "$step_file"
 }
 trap cleanup EXIT INT TERM
 

@@ -637,11 +637,11 @@ def test_primitives_fallback_observes_retries_and_validates_login_output():
     assert 'command_timeout="${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}"' in helper
     assert 'agent_timeout="${PLAYWRIGHT_AGENT_TIMEOUT_SECONDS:-120}"' in helper
     assert 'agent_provider="${PLAYWRIGHT_AGENT_PROVIDER:-opencode-go-openai}"' in helper
-    assert 'agent_model="${PLAYWRIGHT_AGENT_MODEL:-glm-5.2}"' in helper
+    assert 'agent_model="${PLAYWRIGHT_AGENT_MODEL:-glm-5.3}"' in helper
     assert 'agent_base_url="${PLAYWRIGHT_AGENT_BASE_URL:-https://opencode.ai/zen/go/v1}"' in helper
     assert 'agent_api_key_env="${PLAYWRIGHT_AGENT_API_KEY_ENV:-OPENCODE_GO_API_KEY}"' in helper
     assert "PLAYWRIGHT_AGENT_PROVIDER: opencode-go-openai" in primitives
-    assert "PLAYWRIGHT_AGENT_MODEL: glm-5.2" in primitives
+    assert "PLAYWRIGHT_AGENT_MODEL: glm-5.3" in primitives
     assert "PLAYWRIGHT_AGENT_BASE_URL: https://opencode.ai/zen/go/v1" in primitives
     assert "PLAYWRIGHT_AGENT_API_KEY_ENV: OPENCODE_GO_API_KEY" in primitives
     assert "opencode --pure run --auto --print-logs --log-level ERROR --model" in helper
@@ -922,7 +922,7 @@ set -Eeuo pipefail
 [[ "$XDG_CACHE_HOME" == "$RUNNER_TEMP/chatgpt-login-opencode/cache" ]] || { touch "$RUNNER_TEMP/agent-shared-cache"; exit 1; }
 [[ ! -e "$XDG_CONFIG_HOME/opencode/plugins/incompatible.js" ]] || { touch "$RUNNER_TEMP/agent-incompatible-plugin"; exit 1; }
 config=$(<"$XDG_CONFIG_HOME/opencode/opencode.json")
-[[ "$config" == *'"opencode-go-openai"'* && "$config" == *'"baseURL": "https://opencode.ai/zen/go/v1"'* && "$config" == *'"apiKey": "{env:OPENCODE_GO_API_KEY}"'* && "$config" == *'"glm-5.2"'* ]] || { touch "$RUNNER_TEMP/agent-missing-provider-config"; exit 1; }
+[[ "$config" == *'"opencode-go-openai"'* && "$config" == *'"baseURL": "https://opencode.ai/zen/go/v1"'* && "$config" == *'"apiKey": "{env:OPENCODE_GO_API_KEY}"'* && "$config" == *'"glm-5.3"'* ]] || { touch "$RUNNER_TEMP/agent-missing-provider-config"; exit 1; }
 for name in ACTIONS_RUNTIME_TOKEN BACLUC_AGENT_GITHUB_TOKEN BRAVE_API_KEY CHATGPT_EMAIL CHATGPT_PASSWORD CHATGPT_TOTP_KEY CHATGPT_2FA_KEY GH_TOKEN GITHUB_ENV GITHUB_OUTPUT GITHUB_PATH GITHUB_STATE GITHUB_STEP_SUMMARY GITHUB_TOKEN OPENAI_2FA_KEY OPENAI_PASSWORD OPENAI_USERNAME OPENCODE_AUTH_CONTENT OPENCODE_GO_2_API_KEY OPENROUTER_API_KEY; do
   [[ -z "${!name:-}" ]] || { touch "$RUNNER_TEMP/agent-secret-env"; exit 1; }
 done

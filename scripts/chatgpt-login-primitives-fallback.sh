@@ -90,7 +90,7 @@ recover_blocking_login() {
   local command_timeout="${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}"
   local agent_timeout="${PLAYWRIGHT_AGENT_TIMEOUT_SECONDS:-120}"
   local agent_provider="${PLAYWRIGHT_AGENT_PROVIDER:-opencode-go-openai}"
-  local agent_model="${PLAYWRIGHT_AGENT_MODEL:-glm-5.2}"
+  local agent_model="${PLAYWRIGHT_AGENT_MODEL:-glm-5.3}"
   local agent_base_url="${PLAYWRIGHT_AGENT_BASE_URL:-https://opencode.ai/zen/go/v1}"
   local agent_api_key_env="${PLAYWRIGHT_AGENT_API_KEY_ENV:-OPENCODE_GO_API_KEY}"
   local opencode_root="$RUNNER_TEMP/chatgpt-login-opencode"

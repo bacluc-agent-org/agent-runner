@@ -13,6 +13,11 @@ class ForkSlugTests(unittest.TestCase):
         self.assertEqual(fork_slug("bacluc-agent", "agent-runner"), "bacluc-agent/agent-runner")
         self.assertEqual(fork_slug("bacluc-agent-org", "agent-runner"), "bacluc-agent-org/agent-runner")
 
+    def test_recognizes_case_variants_without_changing_the_owner(self):
+        self.assertEqual(fork_slug("BACLUC", "agent-runner"), "BACLUC/agent-runner")
+        self.assertEqual(fork_slug("BacLuc-Agent", "agent-runner"), "BacLuc-Agent/agent-runner")
+        self.assertEqual(fork_slug("BACLUC-AGENT-ORG", "agent-runner"), "BACLUC-AGENT-ORG/agent-runner")
+
 
 if __name__ == "__main__":
     unittest.main()

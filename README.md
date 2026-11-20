@@ -106,6 +106,7 @@ dispatching when no allowed model is available.
 ### Scripts
 
 - `completion-check` — runs all quality checks (see below).
+- `check_coordinator_progress.py` — detects observable coordinator delivery and the exact no-code result.
 - `validate_refined_issue.py` — checks that a refined issue body has exactly
   the two required sections and at most 4000 visible characters before any
   `<details>` fold (reason `too_long`); extra detail goes into a
@@ -116,6 +117,9 @@ dispatching when no allowed model is available.
   a browser, or fall back to a browser login.
 - `issue-selection-tail.txt` — the default selection instructions appended to
   the issue-selector prompt.
+
+The coordinator prompt carries a completion contract, and a run with no
+observable delivery gets one bounded continuation before it is marked incomplete.
 
 ## GitHub CLI wrapper
 

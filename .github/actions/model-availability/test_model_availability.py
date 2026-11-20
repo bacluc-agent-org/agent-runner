@@ -390,6 +390,30 @@ class TestProviderProbeable:
         assert config["vshn-us-ai"]["apiKey"] == "auth-key"
         assert model_availability.provider_probeable("vshn-us-ai/model", config, {})
 
+    def test_auth_json_oauth_access_makes_configured_provider_probeable(self, monkeypatch, tmp_path):
+        data_home = tmp_path / "data"
+        auth_dir = data_home / "opencode"
+        auth_dir.mkdir(parents=True)
+        (auth_dir / "auth.json").write_text(
+            json.dumps({"vshn-us-ai": {"type": "oauth", "access": "oauth-access-token"}})
+        )
+        source = tmp_path / "opencode.json"
+        source.write_text(
+            '{"provider":{"vshn-us-ai":{"options":{"baseURL":"https://example.test/v1"}}}}'
+        )
+        monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+
+        def fake_run(*args, **kwargs):
+            kwargs["stdout"].write(json.dumps([{"path": str(source)}]))
+            return types.SimpleNamespace(stdout="")
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+
+        config = model_availability.load_provider_config()
+
+        assert config["vshn-us-ai"]["apiKey"] == "oauth-access-token"
+        assert model_availability.provider_probeable("vshn-us-ai/model", config, {})
+
     def test_config_source_jsonc_is_parsed_and_takes_precedence_over_auth(self, monkeypatch, tmp_path):
         source = tmp_path / "opencode.jsonc"
         source.write_text(

@@ -21,6 +21,10 @@ wait_for_start() {
   return 1
 }
 
+process_group_alive() {
+  [[ -n "$start_pid" ]] && kill -0 -- "-$start_pid" 2> /dev/null
+}
+
 redact() {
   local value=${1:-}
   for secret_name in CHATGPT_EMAIL CHATGPT_PASSWORD CHATGPT_2FA_KEY CHATGPT_TOTP_KEY OPENAI_USERNAME OPENAI_PASSWORD OPENAI_2FA_KEY; do
@@ -52,12 +56,15 @@ diagnostics() {
 cleanup() {
   set +e
   uv run scripts/chatgpt-login.py stop > /dev/null 2>&1
-  if [[ -n "$start_pid" ]] && kill -0 "$start_pid" 2> /dev/null; then
+  if [[ -n "$start_pid" ]] && { kill -0 "$start_pid" 2> /dev/null || process_group_alive; }; then
     if ! wait_for_start 5; then
-      kill -TERM "$start_pid" 2> /dev/null
+      kill -TERM -- "-$start_pid" 2> /dev/null
       if ! wait_for_start 5; then
-        kill -KILL "$start_pid" 2> /dev/null
+        kill -KILL -- "-$start_pid" 2> /dev/null
       fi
+    fi
+    if process_group_alive; then
+      kill -KILL -- "-$start_pid" 2> /dev/null
     fi
     wait "$start_pid" 2> /dev/null
   fi
@@ -66,7 +73,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 rm -f "$auth_file" "$stderr_file" "$status_file" "$step_file"
-uv run scripts/chatgpt-login.py start > "$auth_file" 2> "$stderr_file" &
+setsid uv run scripts/chatgpt-login.py start > "$auth_file" 2> "$stderr_file" &
 start_pid=$!
 
 for ((attempt = 1; attempt <= 60; attempt++)); do

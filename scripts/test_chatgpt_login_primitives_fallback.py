@@ -18,7 +18,12 @@ case "$command" in
       success) printf '%s\n' '{\"openai\":{\"type\":\"oauth\",\"access\":\"a\",\"refresh\":\"r\",\"expires\":1}}' ;;
       invalid) printf '%s\n' '{}' ;;
       retry) /bin/sleep 0.1 ;;
-      cleanup) trap '' TERM; while true; do /bin/sleep 1; done ;;
+      cleanup)
+        (trap '' TERM; while true; do /bin/sleep 1; done) &
+        printf '%s\n' "$!" > "$CHILD_PID_FILE"
+        trap '' TERM
+        while true; do /bin/sleep 1; done
+        ;;
     esac
     ;;
   status)
@@ -58,11 +63,13 @@ def _run(tmp_path, mode, **extra):
     _fake_uv(fake_bin)
     command_log = tmp_path / "commands.log"
     pid_file = tmp_path / "start.pid"
+    child_pid_file = tmp_path / "child.pid"
     env = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "RUNNER_TEMP": str(tmp_path),
         "PID_FILE": str(pid_file),
+        "CHILD_PID_FILE": str(child_pid_file),
         "COMMAND_LOG": str(command_log),
         "AUTH_FILE": str(tmp_path / "primitives-auth.json"),
         "STORED_FILE": str(tmp_path / "stored-file"),
@@ -107,4 +114,6 @@ def test_cleanup_kills_stuck_browser_starter(tmp_path):
     assert result.returncode == 3
     assert "stop" in (tmp_path / "commands.log").read_text()
     pid = int((tmp_path / "start.pid").read_text())
+    child_pid = int((tmp_path / "child.pid").read_text())
     assert subprocess.run(["kill", "-0", str(pid)], capture_output=True).returncode != 0
+    assert subprocess.run(["kill", "-0", str(child_pid)], capture_output=True).returncode != 0

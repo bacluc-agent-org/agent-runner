@@ -522,6 +522,7 @@ jobs:
           printf '::stop-commands::%s\n' "$stop_token"
           printf 'Final OpenCode command: opencode run --agent %q --model %q --title %q\n' "$AGENT" "$MODEL" "$coordinator_session_title"
           printf 'Coordinator prompt:\n%s\n' "$PROMPT"
+           # The inner opencode command is not wrapped in GNU timeout: timeout forks a process group, so kill -- -\$coordinator_pid would miss opencode. The loop owns the total timeout; job timeout-minutes is the outer net. A live child (task subagent) suppresses the zero-progress kill.
            watchdog_script="$RUNNER_TEMP/coordinator-watchdog.sh"
            cat > "$watchdog_script" <<'WATCHDOG'
            set -Eeuo pipefail
@@ -553,6 +554,7 @@ jobs:
            last_growth_time=$start_time
            last_activity_time=$start_time
            last_bytes=0
+           last_mtime=0
            last_storage_activity=0
            total_seconds=$((total_minutes * 60))
            idle_seconds=$((idle_minutes * 60))
@@ -615,6 +617,11 @@ jobs:
                last_bytes=$bytes
                last_growth_time=$now
              fi
+             current_mtime=$(stat -c %Y "$transcript_file" 2>/dev/null || printf '0')
+             if ((current_mtime > last_mtime)); then
+               last_mtime=$current_mtime
+               last_growth_time=$now
+             fi
              storage_signal=$(storage_activity)
              if ((storage_signal > last_storage_activity)); then
                last_storage_activity=$storage_signal
@@ -641,13 +648,13 @@ jobs:
                  cleanup
                  exit 1
                fi
-               if ! ps -eo pid=,sid= | awk -v sid="$session" '$2 == sid && $1 != sid { found=1 } END { exit found ? 0 : 1 }'; then
+               if ! pgrep -P "$child_pid" >/dev/null 2>&1; then
                  timeout_reason=zero-progress
                  cleanup
                  wait_for_children
                  printf '%s\n' 124 > "$status_file"
                  printf '%s\n' "$tee_status" > "$tee_status_file"
-                 printf 'Coordinator zero-progress timeout after %ss (grace 1s); model=%s; session=%s; output_bytes=%s\n' "$((now - start_time))" "$model" "$session" "$bytes" >&2
+                 printf '::error::coordinator zero-progress after %sm (grace=%sm, model=%s, session=%s, last_output_bytes=%s)\n' "$(((now - start_time) / 60))" "$idle_minutes" "$model" "$title" "$(stat -c %s "$transcript_file" 2>/dev/null || printf 0)" >&2
                  printf '%s\n' "$timeout_reason" > "$RUNNER_TEMP/coordinator-failure-mode"
                  exit 124
                fi

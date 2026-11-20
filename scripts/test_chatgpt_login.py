@@ -636,8 +636,14 @@ def test_primitives_fallback_observes_retries_and_validates_login_output():
     assert 'RUNNER_TEMP="${RUNNER_TEMP:-}"' in helper
     assert 'command_timeout="${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}"' in helper
     assert 'agent_timeout="${PLAYWRIGHT_AGENT_TIMEOUT_SECONDS:-120}"' in helper
-    assert 'agent_model="${PLAYWRIGHT_AGENT_MODEL:-opencode/big-pickle}"' in helper
-    assert "PLAYWRIGHT_AGENT_MODEL: opencode/big-pickle" in primitives
+    assert 'agent_provider="${PLAYWRIGHT_AGENT_PROVIDER:-opencode-go-openai}"' in helper
+    assert 'agent_model="${PLAYWRIGHT_AGENT_MODEL:-glm-5.2}"' in helper
+    assert 'agent_base_url="${PLAYWRIGHT_AGENT_BASE_URL:-https://opencode.ai/zen/go/v1}"' in helper
+    assert 'agent_api_key_env="${PLAYWRIGHT_AGENT_API_KEY_ENV:-OPENCODE_GO_API_KEY}"' in helper
+    assert "PLAYWRIGHT_AGENT_PROVIDER: opencode-go-openai" in primitives
+    assert "PLAYWRIGHT_AGENT_MODEL: glm-5.2" in primitives
+    assert "PLAYWRIGHT_AGENT_BASE_URL: https://opencode.ai/zen/go/v1" in primitives
+    assert "PLAYWRIGHT_AGENT_API_KEY_ENV: OPENCODE_GO_API_KEY" in primitives
     assert "opencode --pure run --auto --print-logs --log-level ERROR --model" in helper
     assert 'cd "$opencode_workdir"' in helper
     assert 'XDG_CONFIG_HOME="$opencode_config"' in helper
@@ -831,13 +837,14 @@ def test_primitives_fallback_recovers_or_fails_closed_and_cleans_up(tmp_path):
     (fake_bin / "uv").write_text(
         """#!/usr/bin/env bash
 set -Eeuo pipefail
+printf '%s\\n' "${3:-}" >> "$RUNNER_TEMP/uv-calls"
 case "${3:-}" in
   -c)
     printf '%s\\n' '123456'
     ;;
   start)
     trap 'touch "$RUNNER_TEMP/stopped"; exit 143' TERM INT
-    if [[ "$FAKE_MODE" == success || "$FAKE_MODE" == recovered || "$FAKE_MODE" == step-failure || "$FAKE_MODE" == broadened-commands || "$FAKE_MODE" == custom-command ]]; then
+    if [[ "$FAKE_MODE" == success || "$FAKE_MODE" == recovered || "$FAKE_MODE" == step-failure || "$FAKE_MODE" == status-step || "$FAKE_MODE" == broadened-commands || "$FAKE_MODE" == custom-command ]]; then
       printf '%s\\n' '{"openai":{"type":"oauth","access":"test-access","refresh":"test-refresh","expires":123}}'
     elif [[ "$FAKE_MODE" == float-expires ]]; then
       printf '%s\\n' '{"openai":{"type":"oauth","access":"test-access","refresh":"test-refresh","expires":123.5}}'
@@ -856,9 +863,11 @@ case "${3:-}" in
     if [[ "$FAKE_MODE" == success || "$FAKE_MODE" == invalid-output || "$FAKE_MODE" == float-expires ]]; then
       touch "$RUNNER_TEMP/release-start"
       printf '%s\\n' '{"step":"done","blocking":null,"code_ready":true}'
-    elif [[ "$FAKE_MODE" =~ ^(recovered|detach-failure|handoff-write-failure|agent-timeout-retry|slow-command|step-failure|broadened-commands|custom-command)$ ]] && [[ -e "$RUNNER_TEMP/recovered" ]]; then
+    elif [[ "$FAKE_MODE" =~ ^(recovered|detach-failure|handoff-write-failure|agent-timeout-retry|slow-command|step-failure|status-step|broadened-commands|custom-command)$ ]] && [[ -e "$RUNNER_TEMP/recovered" ]]; then
       touch "$RUNNER_TEMP/release-start"
       printf '%s\\n' '{"step":"done","blocking":null,"code_ready":true}'
+    elif [[ "$FAKE_MODE" == status-step ]]; then
+      printf '%s\\n' '{"step":"email","blocking":null,"code_ready":false}'
     elif [[ "$FAKE_MODE" =~ ^(step-failure|broadened-commands|custom-command)$ ]]; then
       printf '%s\\n' '{"step":"email","blocking":null,"code_ready":false}'
     elif [[ "$FAKE_MODE" == changing-snapshot ]]; then
@@ -883,6 +892,7 @@ case "${3:-}" in
     ;;
   step)
     printf '%s\\n' '{"step":"email","blocking":null,"code_ready":false}'
+    if [[ "$FAKE_MODE" == status-step ]]; then touch "$RUNNER_TEMP/recovered"; exit 2; fi
     if [[ "$FAKE_MODE" =~ ^(step-failure|broadened-commands|custom-command)$ ]]; then exit 1; fi
     ;;
   stop)
@@ -912,11 +922,11 @@ set -Eeuo pipefail
 [[ "$XDG_CACHE_HOME" == "$RUNNER_TEMP/chatgpt-login-opencode/cache" ]] || { touch "$RUNNER_TEMP/agent-shared-cache"; exit 1; }
 [[ ! -e "$XDG_CONFIG_HOME/opencode/plugins/incompatible.js" ]] || { touch "$RUNNER_TEMP/agent-incompatible-plugin"; exit 1; }
 config=$(<"$XDG_CONFIG_HOME/opencode/opencode.json")
-[[ "$config" == *'"opencode"'* && "$config" == *'"baseURL": "https://opencode.ai/zen/go/v1"'* && "$config" == *'"apiKey": "{env:OPENCODE_GO_API_KEY}"'* && "$config" == *'"big-pickle"'* ]] || { touch "$RUNNER_TEMP/agent-missing-provider-config"; exit 1; }
-for name in ACTIONS_RUNTIME_TOKEN BACLUC_AGENT_GITHUB_TOKEN BRAVE_API_KEY CHATGPT_EMAIL CHATGPT_PASSWORD CHATGPT_TOTP_KEY CHATGPT_2FA_KEY GH_TOKEN GITHUB_ENV GITHUB_OUTPUT GITHUB_PATH GITHUB_STATE GITHUB_STEP_SUMMARY GITHUB_TOKEN OPENAI_2FA_KEY OPENAI_PASSWORD OPENAI_USERNAME OPENCODE_AUTH_CONTENT OPENROUTER_API_KEY; do
+[[ "$config" == *'"opencode-go-openai"'* && "$config" == *'"baseURL": "https://opencode.ai/zen/go/v1"'* && "$config" == *'"apiKey": "{env:OPENCODE_GO_API_KEY}"'* && "$config" == *'"glm-5.2"'* ]] || { touch "$RUNNER_TEMP/agent-missing-provider-config"; exit 1; }
+for name in ACTIONS_RUNTIME_TOKEN BACLUC_AGENT_GITHUB_TOKEN BRAVE_API_KEY CHATGPT_EMAIL CHATGPT_PASSWORD CHATGPT_TOTP_KEY CHATGPT_2FA_KEY GH_TOKEN GITHUB_ENV GITHUB_OUTPUT GITHUB_PATH GITHUB_STATE GITHUB_STEP_SUMMARY GITHUB_TOKEN OPENAI_2FA_KEY OPENAI_PASSWORD OPENAI_USERNAME OPENCODE_AUTH_CONTENT OPENCODE_GO_2_API_KEY OPENROUTER_API_KEY; do
   [[ -z "${!name:-}" ]] || { touch "$RUNNER_TEMP/agent-secret-env"; exit 1; }
 done
-[[ -n "${OPENCODE_GO_API_KEY:-}${OPENCODE_GO_2_API_KEY:-}" ]] || { touch "$RUNNER_TEMP/missing-provider-env"; exit 1; }
+[[ -n "${OPENCODE_GO_API_KEY:-}" ]] || { touch "$RUNNER_TEMP/missing-provider-env"; exit 1; }
 if [[ "$FAKE_MODE" == agent-timeout-retry && ! -e "$RUNNER_TEMP/agent-retried" ]]; then
   touch "$RUNNER_TEMP/agent-retried"
   sleep 2
@@ -940,6 +950,8 @@ elif [[ "$FAKE_MODE" == agent-timeout-retry && -e "$RUNNER_TEMP/agent-retried" ]
   printf '%s\\n' 'fill_secret e1 email' > "$RUNNER_TEMP/chatgpt-login-recovery.commands"
 elif [[ "$FAKE_MODE" == slow-command ]]; then
   printf '%s\\n' 'click e1' > "$RUNNER_TEMP/chatgpt-login-recovery.commands"
+elif [[ "$FAKE_MODE" == status-step ]]; then
+  printf '%s\\n' 'status' 'step' > "$RUNNER_TEMP/chatgpt-login-recovery.commands"
 elif [[ "$FAKE_MODE" == step-failure ]]; then
   snapshot=$(<"$RUNNER_TEMP/chatgpt-login-recovery.snapshot")
   [[ "$snapshot" == *'[redacted'* ]] || exit 1
@@ -984,7 +996,7 @@ if [[ "$FAKE_MODE" == snapshot-failure && "${2:-}" == snapshot ]]; then
   printf '%s\\n' 'secret-password snapshot failure' >&2
   exit 1
 fi
-if [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == detach-hang || "$FAKE_MODE" == handoff-write-failure || "$FAKE_MODE" == agent-timeout-retry || "$FAKE_MODE" == provider-error || "$FAKE_MODE" == global-deadline ]] && [[ "${2:-}" == snapshot ]]; then
+if [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == detach-hang || "$FAKE_MODE" == handoff-write-failure || "$FAKE_MODE" == agent-timeout-retry || "$FAKE_MODE" == provider-error || "$FAKE_MODE" == global-deadline || "$FAKE_MODE" == status-step ]] && [[ "${2:-}" == snapshot ]]; then
   touch "$RUNNER_TEMP/recovered"
   printf '%s\\n' 'inspectable snapshot'
 fi
@@ -1202,6 +1214,18 @@ exec /bin/mv "$@"
     assert missing.returncode != 0
     assert "credentials" in missing.stderr.lower()
 
+    for invalid_config in (
+        {"PLAYWRIGHT_AGENT_PROVIDER": "bad/provider"},
+        {"PLAYWRIGHT_AGENT_MODEL": "bad model"},
+        {"PLAYWRIGHT_AGENT_BASE_URL": "http://insecure.example"},
+        {"PLAYWRIGHT_AGENT_API_KEY_ENV": "BAD-NAME"},
+    ):
+        invalid = subprocess.run(
+            ["bash", str(helper)], env={**env, **invalid_config, "FAKE_MODE": "blocked", "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "1"}, capture_output=True, text=True, timeout=10
+        )
+        assert invalid.returncode != 0
+        assert "agent" in invalid.stderr.lower()
+
     for mode in ("invalid-status", "invalid-output", "float-expires"):
         invalid = subprocess.run(
             ["bash", str(helper)], env={**env, "FAKE_MODE": mode}, capture_output=True, text=True, timeout=10
@@ -1221,6 +1245,17 @@ exec /bin/mv "$@"
     assert "test-access" in (tmp_path / "auth.json").read_text()
     assert not (tmp_path / "chatgpt-login-recovery.snapshot").exists()
     assert not (tmp_path / "agent-secret-env").exists()
+
+    for path in tmp_path.iterdir():
+        if path.is_file():
+            path.unlink()
+    status_step = subprocess.run(
+        ["bash", str(helper)], env={**env, "FAKE_MODE": "status-step"}, capture_output=True, text=True, timeout=10
+    )
+    assert status_step.returncode == 0
+    calls = (tmp_path / "uv-calls").read_text().splitlines() if (tmp_path / "uv-calls").exists() else []
+    assert "status" in calls and "step" in calls
+    assert "recoverable status 2" in status_step.stderr
 
     for path in tmp_path.iterdir():
         if path.is_file():

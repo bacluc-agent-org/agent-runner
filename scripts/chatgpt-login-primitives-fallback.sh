@@ -89,7 +89,10 @@ recover_blocking_login() {
   local handoff_timeout="${PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS:-300}"
   local command_timeout="${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}"
   local agent_timeout="${PLAYWRIGHT_AGENT_TIMEOUT_SECONDS:-120}"
-  local agent_model="${PLAYWRIGHT_AGENT_MODEL:-opencode/big-pickle}"
+  local agent_provider="${PLAYWRIGHT_AGENT_PROVIDER:-opencode-go-openai}"
+  local agent_model="${PLAYWRIGHT_AGENT_MODEL:-glm-5.2}"
+  local agent_base_url="${PLAYWRIGHT_AGENT_BASE_URL:-https://opencode.ai/zen/go/v1}"
+  local agent_api_key_env="${PLAYWRIGHT_AGENT_API_KEY_ENV:-OPENCODE_GO_API_KEY}"
   local opencode_root="$RUNNER_TEMP/chatgpt-login-opencode"
   local opencode_workdir="$opencode_root/workdir"
   local opencode_config="$opencode_root/config"
@@ -99,6 +102,30 @@ recover_blocking_login() {
 
   if [[ ! "$handoff_timeout" =~ ^[1-9][0-9]*$ || "$handoff_timeout" -gt 300 || ! "$command_timeout" =~ ^[1-9][0-9]*$ || "$command_timeout" -gt 30 || ! "$agent_timeout" =~ ^[1-9][0-9]*$ || "$agent_timeout" -gt 300 ]]; then
     printf 'Invalid Playwright handoff timeout\n' >&2
+    return 1
+  fi
+  if [[ ! "$agent_provider" =~ ^[A-Za-z0-9_-]+$ || ! "$agent_model" =~ ^[A-Za-z0-9._:-]+$ || ! "$agent_api_key_env" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    printf 'Invalid Playwright recovery agent configuration\n' >&2
+    return 1
+  fi
+  if ! python3 - "$agent_base_url" << 'PY'; then
+import sys
+from urllib.parse import urlparse
+
+url = urlparse(sys.argv[1])
+if url.scheme != "https" or not url.hostname or url.username or url.password or url.query or url.fragment:
+    raise SystemExit(1)
+try:
+    url.port
+except ValueError:
+    raise SystemExit(1)
+PY
+    printf 'Invalid Playwright recovery agent base URL\n' >&2
+    return 1
+  fi
+  local agent_api_key="${!agent_api_key_env:-}"
+  if [[ -z "$agent_api_key" ]]; then
+    printf 'Playwright recovery agent API key is not configured\n' >&2
     return 1
   fi
 
@@ -138,24 +165,13 @@ recover_blocking_login() {
   rm -f -- "$snapshot_file" "$handoff_file" "$command_file"
   rm -rf -- "$opencode_root"
   mkdir -m 700 -p "$opencode_root/home" "$opencode_workdir" "$opencode_config/opencode" "$opencode_data" "$opencode_cache" "$opencode_tmp"
-  cat > "$opencode_config/opencode/opencode.json" << 'EOF'
-{
-  "provider": {
-    "opencode": {
-      "npm": "@ai-sdk/openai-compatible",
-      "options": {
-        "baseURL": "https://opencode.ai/zen/go/v1",
-        "apiKey": "{env:OPENCODE_GO_API_KEY}"
-      },
-      "models": {
-        "big-pickle": {
-          "name": "big-pickle"
-        }
-      }
-    }
-  }
-}
-EOF
+  jq -n \
+    --arg provider "$agent_provider" \
+    --arg model "$agent_model" \
+    --arg base_url "$agent_base_url" \
+    --arg api_key_env "{env:$agent_api_key_env}" \
+    '{provider: {($provider): {npm: "@ai-sdk/openai-compatible", options: {baseURL: $base_url, apiKey: $api_key_env}, models: {($model): {name: $model}}}}}' \
+    > "$opencode_config/opencode/opencode.json"
   snapshot_tmp=$(mktemp "$snapshot_file.XXXXXX")
   status_tmp=$(mktemp "$handoff_file.status.XXXXXX")
   handoff_tmp=$(mktemp "$handoff_file.XXXXXX")
@@ -199,8 +215,7 @@ EOF
           HOME="$opencode_root/home" XDG_CONFIG_HOME="$opencode_config" XDG_DATA_HOME="$opencode_data" XDG_CACHE_HOME="$opencode_cache" \
           PATH="${PATH:-/usr/local/bin:/usr/bin:/bin}" LANG="${LANG:-C.UTF-8}" \
           TMPDIR="$opencode_tmp" RUNNER_TEMP="${RUNNER_TEMP:-}" FAKE_MODE="${FAKE_MODE:-}" FAKE_COMMAND="${FAKE_COMMAND:-}" \
-          OPENCODE_GO_API_KEY="${OPENCODE_GO_API_KEY:-}" \
-          OPENCODE_GO_2_API_KEY="${OPENCODE_GO_2_API_KEY:-}" \
+          env "$agent_api_key_env=$agent_api_key" \
           timeout "$operation_timeout" "$@"
       ) 2> "$agent_log"
     }
@@ -242,7 +257,7 @@ EOF
     ((agent_attempt += 1))
     : > "$agent_log"
     chmod 600 "$agent_log"
-    if ! run_agent_with_deadline "$run_timeout" opencode --pure run --auto --print-logs --log-level ERROR --model "$agent_model" --title chatgpt-auth-recovery "$recovery_prompt" > /dev/null; then
+    if ! run_agent_with_deadline "$run_timeout" opencode --pure run --auto --print-logs --log-level ERROR --model "$agent_provider/$agent_model" --title chatgpt-auth-recovery "$recovery_prompt" > /dev/null; then
       local reason=''
       if [[ -s "$agent_log" ]] && redact_snapshot "$agent_log"; then
         reason=$(tail -c 2000 "$agent_log" || true)

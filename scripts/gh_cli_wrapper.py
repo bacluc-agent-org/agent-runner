@@ -1,13 +1,26 @@
 #!/usr/bin/env python3
+import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import time
+
+
+RETRYABLE = re.compile(r"API rate limit (?:already )?exceeded|secondary rate limit|abuse detection|HTTP 429", re.I)
+SECONDARY = re.compile(r"HTTP 429|secondary rate limit|abuse detection", re.I)
 
 
 def deny(reason):
     raise ValueError(reason)
+
+
+def env_int(name, default, minimum):
+    try:
+        return max(minimum, int(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
 
 
 def owned_repo(repo):
@@ -130,7 +143,7 @@ def validate_api(args):
     path = path.rstrip("/")
     if path.lower() == "graphql":
         validate_graphql(parsed)
-        return
+        return "graphql"
     if not re.fullmatch(r"[A-Za-z0-9_{}.-]+(?:/[A-Za-z0-9_{}.-]+)*", path) or any(
         part in {".", ".."} for part in path.split("/")
     ):
@@ -147,6 +160,7 @@ def validate_api(args):
             if len(parts) != 6 or parts[0] != "repos" or parts[3].lower() != "pulls":
                 deny("PR revert requires the canonical repos/OWNER/REPO/pulls/N/reverts endpoint")
             owned_repo("/".join(parts[1:3]))
+    return path
 
 
 def validate_graphql(parsed):
@@ -175,6 +189,152 @@ def validate_graphql(parsed):
         deny("only project-v2 GraphQL operations are supported")
 
 
+def streaming(args):
+    if any(stream.isatty() for stream in (sys.stdin, sys.stdout, sys.stderr)):
+        return True
+    if not args:
+        return True
+    if args[0] in {"auth", "browse", "config", "help", "version", "--help", "--version"}:
+        return True
+    if tuple(args[:2]) == ("run", "watch"):
+        return True
+    return any(token.partition("=")[0] in {"--web", "--watch", "--log-follow", "--editor"} for token in args)
+
+
+def needs_stdin(args):
+    return any(arg == "-" or arg.endswith("=-") or arg.endswith("@-") for arg in args)
+
+
+def classify(stderr):
+    text = stderr.decode(errors="replace")
+    if not RETRYABLE.search(text):
+        return None
+    return "secondary" if SECONDARY.search(text) else "primary"
+
+
+def bucket_for(args, endpoint, stderr):
+    text = stderr.decode(errors="replace").lower()
+    if "graphql" in text:
+        return "graphql"
+    if "search" in text:
+        return "search"
+    if args and args[0] == "search":
+        return "search"
+    if endpoint == "graphql":
+        return "graphql"
+    if endpoint and (endpoint == "search" or endpoint.startswith("search/")):
+        return "search"
+    if args and args[0] == "api":
+        return "core"
+    return {
+        ("issue", "view"): "graphql",
+        ("issue", "edit"): "graphql",
+        ("pr", "view"): "graphql",
+        ("pr", "list"): "graphql",
+        ("pr", "checks"): "graphql",
+        ("repo", "view"): "graphql",
+        ("label", "list"): "graphql",
+        ("label", "create"): "core",
+    }.get(tuple(args[:2]))
+
+
+def quota(backend):
+    try:
+        result = subprocess.run([backend, "api", "rate_limit"], capture_output=True, text=True, timeout=5)
+        if result.returncode:
+            return None
+        resources = json.loads(result.stdout).get("resources")
+        return resources if isinstance(resources, dict) else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def backoff(attempt, cap):
+    return min(cap, 5 * 2 ** (attempt - 1))
+
+
+def reset_wait(resources):
+    return max(0, max((resource.get("reset", 0) for resource in resources), default=0) - time.time())
+
+
+def retry_delay(backend, bucket, kind, attempt, cap):
+    if kind == "secondary":
+        return backoff(attempt, cap)
+    resources = quota(backend)
+    if resources is None:
+        print("::warning::gh cli wrapper: cannot read the GitHub rate limit; using exponential backoff", file=sys.stderr)
+        return backoff(attempt, cap)
+    known = bucket in {"core", "search", "graphql"} and isinstance(resources.get(bucket), dict)
+    if known:
+        resource = resources[bucket]
+        if resource.get("remaining", 1) <= 0:
+            delay = reset_wait([resource])
+            if delay > cap:
+                reset_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + delay))
+                print(f"::error::gh cli wrapper: {bucket} rate limit exhausted; resets at {reset_at} (in {delay:.0f}s), beyond the {cap}s retry cap; reduce gh calls or rerun after reset", file=sys.stderr)
+                return None
+            return delay
+        return backoff(attempt, cap)
+    depleted = [
+        resource for name in ("core", "search", "graphql")
+        if isinstance(resource := resources.get(name), dict) and resource.get("remaining", 1) <= 0
+    ]
+    if depleted:
+        delay = reset_wait(depleted)
+        if delay > cap:
+            reset_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + delay))
+            print(f"::error::gh cli wrapper: rate limit exhausted; resets at {reset_at} (in {delay:.0f}s), beyond the {cap}s retry cap; reduce gh calls or rerun after reset", file=sys.stderr)
+            return None
+        return delay
+    return backoff(attempt, cap)
+
+
+def pause(seconds):
+    override = os.environ.get("GH_CLI_WRAPPER_SLEEP_SECONDS")
+    try:
+        time.sleep(float(override) if override is not None else seconds)
+    except ValueError:
+        time.sleep(seconds)
+
+
+def emit(result):
+    try:
+        sys.stdout.buffer.write(result.stdout)
+        sys.stdout.buffer.flush()
+        sys.stderr.buffer.write(result.stderr)
+        sys.stderr.buffer.flush()
+    except BrokenPipeError:
+        pass
+    return 128 - result.returncode if result.returncode < 0 else result.returncode
+
+
+def run_with_retries(backend, args, endpoint):
+    attempts = env_int("GH_CLI_WRAPPER_MAX_ATTEMPTS", 3, 1)
+    cap = env_int("GH_CLI_WRAPPER_MAX_SLEEP_SECONDS", 120, 0)
+    stdin_data = None
+    if needs_stdin(args) and not sys.stdin.isatty():
+        stdin_data = sys.stdin.buffer.read()
+    for attempt in range(1, attempts + 1):
+        # GitHub rejects rate-limited calls before applying them, so replaying a mutation cannot duplicate a side effect.
+        result = subprocess.run([backend, *args], input=stdin_data, capture_output=True)
+        kind = classify(result.stderr)
+        if result.returncode == 0 or kind is None:
+            return emit(result)
+        if attempt == attempts:
+            print(f"::warning::gh cli wrapper: gh {' '.join(args[:2])} still rate limited after {attempts} attempts", file=sys.stderr)
+            return emit(result)
+        bucket = bucket_for(args, endpoint, result.stderr)
+        delay = retry_delay(backend, bucket, kind, attempt, cap)
+        if delay is None:
+            return emit(result)
+        print(
+            f"::notice::gh cli wrapper: retrying gh {' '.join(args[:2])} in {delay}s "
+            f"(attempt {attempt}/{attempts}, {bucket or 'unknown'} {kind} limit)",
+            file=sys.stderr,
+        )
+        pause(delay)
+
+
 def main():
     backend = Path(__file__).resolve().with_name("real-gh").read_text().strip()
     if not os.path.isabs(backend) or not os.access(backend, os.X_OK) or Path(backend).resolve() == Path(__file__).resolve():
@@ -193,11 +353,14 @@ def main():
         deny("configured alias execution is disabled; use the builtin command explicitly")
     if os.environ.get("GH_HOST", "github.com").lower() != "github.com":
         deny("only github.com is supported")
+    endpoint = None
     if args[0] == "pr":
         validate_pr(args[1:])
     elif args[0] == "api":
-        validate_api(args[1:])
-    os.execv(backend, [backend, *args])
+        endpoint = validate_api(args[1:])
+    if streaming(args):
+        os.execv(backend, [backend, *args])
+    sys.exit(run_with_retries(backend, args, endpoint))
 
 
 if __name__ == "__main__":

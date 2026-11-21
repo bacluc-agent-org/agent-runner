@@ -5,7 +5,7 @@ __pycache__/
 .idea/
 docs/run-history/
 loop-metrics.json
-node_modules/
+node_modules
 # opencode generates .opencode/.gitignore at runtime (without trailing newline)
 .opencode/.gitignore
-.opencode/node_modules/
+.opencode/node_modules

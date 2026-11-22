@@ -126,7 +126,14 @@ def parse_go_model_ids(models_json: str) -> list[str]:
         return []
 
 
-def load_provider_config() -> dict[str, dict[str, str | None]]:
+def parse_jsonc(text: str) -> dict | list | str | int | float | bool | None:
+    """Parse JSONC by stripping comments and trailing commas."""
+    text = re.sub(r'("(?:\\.|[^"\\])*")|/\*[\s\S]*?\*/|//[^\n]*', lambda m: m.group(1) or " " * len(m.group()), text)
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+    return json.loads(text)
+
+
+def load_provider_options() -> dict[str, dict[str, str | None]]:
     """Return provider options from the raw config files referenced by OpenCode."""
     tmp_path = None
     try:
@@ -161,10 +168,7 @@ def load_provider_config() -> dict[str, dict[str, str | None]]:
     for source in sources:
         try:
             with open(source, encoding="utf-8") as fh:
-                text = fh.read()
-            text = re.sub(r'("(?:\\.|[^"\\])*")|/\*[\s\S]*?\*/|//[^\n]*', lambda m: m.group(1) or " " * len(m.group()), text)
-            text = re.sub(r",\s*([}\]])", r"\1", text)
-            parsed = json.loads(text)
+                parsed = parse_jsonc(fh.read())
         except (OSError, json.JSONDecodeError):
             print(f"warning: failed to parse OpenCode config source: {source}", file=sys.stderr)
             continue
@@ -175,7 +179,7 @@ def load_provider_config() -> dict[str, dict[str, str | None]]:
             options = provider.get("options", {}) if isinstance(provider, dict) else {}
             if isinstance(options, dict):
                 result.setdefault(name, {}).update(
-                    {key: options.get(key) for key in ("baseURL", "apiKey") if key in options}
+                    {key: options.get(key) for key in ("baseURL", "apiKey")}
                 )
     auth_path = os.path.join(
         os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")), "opencode", "auth.json"
@@ -189,19 +193,37 @@ def load_provider_config() -> dict[str, dict[str, str | None]]:
                     continue
                 value = credential.get("key") if credential["type"] == "api" else credential.get("access")
                 if isinstance(value, str) and value and name in result:
-                    result[name].setdefault("apiKey", value)
+                    current = resolve_env_refs(result[name].get("apiKey"), os.environ)
+                    if not current or current == "***":
+                        result[name]["apiKey"] = value
     except (OSError, json.JSONDecodeError):
         pass
+    for info in result.values():
+        if info.get("apiKey") == "***":
+            info["apiKey"] = None
     return result
+
+
+load_provider_config = load_provider_options
 
 
 def load_provider_base_urls() -> dict[str, str]:
     """Run `opencode debug config`, return {provider_id: baseURL} for providers with a baseURL."""
     return {
-        name: info["baseURL"]
+        name: info.get("baseURL")
         for name, info in load_provider_config().items()
-        if info["baseURL"]
+        if info.get("baseURL")
     }
+
+
+def provider_has_credentials(provider: str, options: object, env: dict) -> bool:
+    if not isinstance(options, dict):
+        return False
+    declared = options.get("baseURL")
+    if declared and not valid_base_url(resolve_env_refs(declared, env)):
+        return False
+    api_key = resolve_env_refs(options.get("apiKey"), env)
+    return bool(api_key) and api_key != "***"
 
 
 def provider_probeable(model_id: str, provider_config: dict, env: dict) -> bool:
@@ -212,14 +234,7 @@ def provider_probeable(model_id: str, provider_config: dict, env: dict) -> bool:
         return True
     if provider not in provider_config:
         return True
-    info = provider_config[provider]
-    if not isinstance(info, dict):
-        return False
-    base_url = resolve_env_refs(info.get("baseURL"), env)
-    if not valid_base_url(base_url):
-        return False
-    api_key = resolve_env_refs(info.get("apiKey"), env)
-    return bool(api_key)
+    return provider_has_credentials(provider, provider_config[provider], env)
 
 
 def resolve_env_refs(value: object, env: dict) -> str | None:
@@ -263,7 +278,7 @@ def fetch_model_ids(endpoint: str, api_key: str | None = None) -> list[str]:
         return []
 
 
-def discover_models() -> tuple[list[str], dict[str, list[str]]]:
+def discover_models(provider_config: dict | None = None) -> tuple[list[str], dict[str, list[str]]]:
     """whitelisted_models from `opencode models`; provider_models: {provider: model_ids} per provider."""
     global DISCOVERY_TIMED_OUT
     DISCOVERY_TIMED_OUT = False
@@ -289,12 +304,13 @@ def discover_models() -> tuple[list[str], dict[str, list[str]]]:
     except OSError:
         pass
     whitelisted_models = parse_whitelisted_models(result.stdout)
-    provider_config = load_provider_config()
-    base_urls = {
-        name: info["baseURL"]
-        for name, info in provider_config.items()
-        if valid_base_url(info["baseURL"])
-    }
+    if provider_config is None:
+        provider_config = load_provider_options()
+    base_urls = {}
+    for name, info in provider_config.items():
+        base_url = resolve_env_refs(info.get("baseURL"), os.environ)
+        if valid_base_url(base_url):
+            base_urls[name] = base_url
     kept, dropped = [], []
     for model in whitelisted_models:
         (kept if provider_probeable(model, provider_config, os.environ) else dropped).append(model)
@@ -489,7 +505,7 @@ def main() -> int:
     if cache_issue is not None:
         cache = read_cache(cache_issue)
     provider_config = load_provider_config()
-    whitelisted_models, provider_models = discover_models()
+    whitelisted_models, provider_models = discover_models(provider_config)
     if DISCOVERY_TIMED_OUT:
         available = [
             model

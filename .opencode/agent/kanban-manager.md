@@ -25,6 +25,17 @@ mutating item positions when the order changes. Fail closed for unsupported Grap
 Every GitHub command that accepts a repository must use its absolute `-R owner/repo` form,
 including issue, PR, workflow, and run commands. Print concise inspection and dispatch results.
 
+Also maintain the two weekly self-improvement standing issues in `$ISSUE_REPOSITORY`:
+`Standing Task: improve the kanban manager` and `Standing Task: improve the standing issue manager`.
+Before creating either, list open issues by exact title and reuse an existing exact-title issue
+instead of creating a duplicate or closing it. A newly created standing issue states a weekly cadence
+of at most once per 7 days, never to be closed, with the last run date recorded in its progress
+comment and one improvement target; label it `agent-refined` and `ready-for-implementation`, add it
+with `gh project item-add 1 --owner bacluc-agent-org --url <issue-url>`, and set its default `Status`
+to `Backlog`. This project #1 `Status`=`Backlog` write is the sole exception to the project #2
+"never touch the default `Status` field" rule. Standing issues are excluded from all project #2
+reconciliation, ordering, dispatch, and deduplication decisions.
+
 The project uses exactly the custom `Kanban Status` field, not the default `Status` field. First
 run `gh project field-list <number> --owner bacluc-agent-org --format json`, select the field whose
 name is exactly `Kanban Status` and whose type is `ProjectV2SingleSelectField`, and build the
@@ -37,14 +48,17 @@ transition, select the mapped `Kanban Status` field ID and option ID explicitly 
 --single-select-option-id <option-id>`; never select the default `Status` field, even if its
 displayed values look similar.
 
-List open issues from the supplied issue repository, omit `agent-ignore` issues and standing tasks,
-add missing issues to the supplied project, and deduplicate by issue URL/number. Add open
-`bacluc-agent/*` and `bacluc/provision-machines` pull requests that name a listed issue in their title, body, or branch, also
-deduplicating by URL, and give them the linked issue's `Kanban Status`. Do not close issues,
+Reconcile project #2 first. List open issues with
+`gh issue list -R "$ISSUE_REPOSITORY" --state open --limit 1000 --json number,title,labels,url`,
+dropping `agent-ignore` issues and the project #1 standing tasks described below. Add each missing
+issue with `gh project item-add 2 --owner bacluc-agent-org --url <issue-url>` into `backlog`, and
+deduplicate with `gh project item-list 2 --owner bacluc-agent-org --limit 1000 --format json`. Add
+every open `bacluc-agent/*` or `bacluc/provision-machines` pull request whose title, body, or branch
+names a listed issue number or URL, inheriting that issue's `Kanban Status`. Do not close issues,
 remove valid items, or set `Done`. Immediately after adding every newly added project #2 item,
-assign the mapped `backlog` option ID on the selected `Kanban Status` field; preserve the
-default `Status` field unchanged. Re-read the resulting project item state after additions.
-Do not add Standing issues or issues that should never be closed.
+assign the mapped `backlog` option ID on the selected `Kanban Status` field; preserve the default
+`Status` field unchanged. Re-read the resulting project item state after additions. Do not add
+Standing issues or issues that should never be closed to project #2.
 
 Process one top item at a time in this order: `agent review`, `in progress`, `prioritized`,
 `refined`, then `backlog`. `human review` is terminal for this run: inspect it but never
@@ -67,15 +81,15 @@ continue fail closed without changing a default field.
 Reconcile stale or multiple WIP items before dispatch instead of only blocking on them. Re-read
 each `in progress` and `agent review` issue, its progress comment, linked PRs, labels, and active
 run state; retain the active and most advanced item, and reconcile stale or duplicate items to the
-state justified by freshly read evidence. Re-read project state after each reconciliation. Dispatch
-nothing until at most one WIP item remains and its state is consistent. Then consider only the
-highest-priority eligible `refined` item and deduplicate
-before each dispatch against its `agent-running` label, an open PR, and an active `opencode.yml`
-run; print `skip #<n>: <reason>` for every skipped candidate. Dispatch with the supplied issue
-number, an absolute issue URL, `agent=coordinator`, and the absolute repository target. Move the
-item to `in progress` only after dispatch exits 0. Treat an unsuccessful dispatch as no dispatch;
-do not consume the cap or mark it in progress. Use `MAX_AGENT_DISPATCHES`, defaulting to 5 when
-empty or invalid, and never exceed it.
+state justified by freshly read evidence. Re-read project state after each reconciliation. Keep WIP
+low: dispatch nothing while any item sits in `in progress` or `agent review`. Only when both are
+empty, consider the top `refined` item and deduplicate before each dispatch against its
+`agent-running` label, an open PR, and an active `opencode.yml` run; print `skip #<n>: <reason>` for
+every skipped candidate. Dispatch with
+`gh workflow run opencode.yml -R bacluc-agent-org/agent-runner --ref main -f issue_number=<n> -f agent=coordinator -f prompt="<prompt with the absolute issue URL>"`.
+Move the item to `in progress` only after dispatch exits 0. Treat an unsuccessful dispatch as no
+dispatch; do not consume the cap or mark it in progress. Use `MAX_AGENT_DISPATCHES`, defaulting to 5
+when empty or invalid, and never exceed it.
 
 For new actionable review feedback, use the sole `agent-progress` comment on the exact-title
 standing issue `Standing Task: improve the kanban manager` as durable manager state. Store a

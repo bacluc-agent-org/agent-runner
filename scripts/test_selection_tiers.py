@@ -183,23 +183,6 @@ def test_select_job_skips_oauth_refresh_but_run_job_keeps_it():
     assert "refresh_oauth" not in (root / ".github/workflows/opencode.yml").read_text()
 
 
-def test_oauth_refresh_is_locked_without_workflow_serialization():
-    root = Path(__file__).parents[1]
-    workflows = (
-        ".github/workflows/refresh-chatgpt-auth.yml",
-        ".github/workflows/opencode.yml",
-        ".github/workflows/refine-issues.yml",
-    )
-    for workflow in workflows:
-        content = (root / workflow).read_text()
-        assert "group: chatgpt-oauth-refresh\n  cancel-in-progress: false" not in content
-    setup = (root / ".github/actions/setup-opencode/action.yml").read_text()
-    assert "scripts/with-oauth-refresh-lock.py -- bash -c" in setup
-    refresh = (root / ".github/workflows/refresh-chatgpt-auth.yml").read_text()
-    assert "scripts/with-oauth-refresh-lock.py --acquire" in refresh
-    assert "scripts/with-oauth-refresh-lock.py --release" in refresh
-
-
 def test_selection_tail_requires_fast_tool_free_selection():
     tail = (Path(__file__).parents[1] / "scripts/issue-selection-tail.txt").read_text()
     agent = (Path(__file__).parents[1] / ".opencode/agent/issue-selector.md").read_text()

@@ -12,7 +12,7 @@ on:
       - "scripts/**"
 
 permissions:
-  contents: write
+  contents: read
   issues: write
 
 jobs:

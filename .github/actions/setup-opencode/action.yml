@@ -123,14 +123,7 @@ runs:
           printf 'ChatGPT OAuth credentials are not configured; skipping AISIX startup\n'
           exit 0
         fi
-        scripts/with-oauth-refresh-lock.py -- bash -c '
-          OPENAI_REFRESH_TOKEN="${OPENAI_REFRESH_TOKEN:-}" python3 scripts/refresh-token.py > "$RUNNER_TEMP/chatgpt-oauth.json"
-          access_token="$(jq -r .access_token "$RUNNER_TEMP/chatgpt-oauth.json")"
-          refresh_token="$(jq -r .refresh_token "$RUNNER_TEMP/chatgpt-oauth.json")"
-          github_token="${BACLUC_AGENT_GITHUB_TOKEN:-$GITHUB_TOKEN}"
-          printf "%s" "$access_token" | GH_TOKEN="$github_token" gh secret set CHATGPT_ACCESS_TOKEN --repo "$GITHUB_REPOSITORY"
-          printf "%s" "$refresh_token" | GH_TOKEN="$github_token" gh secret set CHATGPT_REFRESH_TOKEN --repo "$GITHUB_REPOSITORY"
-        '
+        OPENAI_REFRESH_TOKEN="${OPENAI_REFRESH_TOKEN:-}" python3 scripts/refresh-token.py > "$RUNNER_TEMP/chatgpt-oauth.json"
         jq -e '.access_token != "" and .refresh_token != "" and (.expires_at | type == "number")' "$RUNNER_TEMP/chatgpt-oauth.json" >/dev/null
         OPENAI_ACCESS_TOKEN="$(jq -r '.access_token' "$RUNNER_TEMP/chatgpt-oauth.json")"
         OPENAI_REFRESH_TOKEN="$(jq -r '.refresh_token' "$RUNNER_TEMP/chatgpt-oauth.json")"
@@ -170,6 +163,9 @@ runs:
           fi
           sleep 1
         done
+        github_token="${BACLUC_AGENT_GITHUB_TOKEN:-$GITHUB_TOKEN}"
+        printf '%s' "$OPENAI_ACCESS_TOKEN" | GH_TOKEN="$github_token" gh secret set CHATGPT_ACCESS_TOKEN --repo "$GITHUB_REPOSITORY"
+        printf '%s' "$OPENAI_REFRESH_TOKEN" | GH_TOKEN="$github_token" gh secret set CHATGPT_REFRESH_TOKEN --repo "$GITHUB_REPOSITORY"
         rm -f "$AISIX_DIR/config.yaml" "$AISIX_DIR/resources.yaml" "$RUNNER_TEMP/chatgpt-oauth.json"
         {
           printf 'OPENAI_ACCESS_TOKEN=\n'

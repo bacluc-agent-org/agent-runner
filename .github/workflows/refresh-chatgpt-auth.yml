@@ -19,11 +19,7 @@ on:
     - cron: "0 0 1,15 * *"
 
 permissions:
-  contents: write
-
-concurrency:
-  group: chatgpt-oauth-refresh-workflow
-  cancel-in-progress: false
+  contents: read
 
 jobs:
   refresh:
@@ -36,11 +32,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
-
-      - name: Acquire OAuth refresh lock
-        env:
-          BACLUC_AGENT_GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
-        run: python3 scripts/with-oauth-refresh-lock.py --acquire
 
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
@@ -231,9 +222,3 @@ jobs:
             printf '::error::No path produced usable ChatGPT OAuth token secrets\n'
             exit 1
           fi
-
-      - name: Release OAuth refresh lock
-        if: ${{ always() }}
-        env:
-          BACLUC_AGENT_GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
-        run: python3 scripts/with-oauth-refresh-lock.py --release

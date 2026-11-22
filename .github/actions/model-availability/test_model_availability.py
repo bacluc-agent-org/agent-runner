@@ -1691,6 +1691,7 @@ class TestHourlyAvailabilityHandoff:
     @pytest.mark.parametrize("workflow", [KANBAN_MANAGER, STANDING_MANAGER])
     def test_manager_workflows_hand_off_model_availability(self, workflow):
         content = workflow.read_text()
+        assert "uses: ./.github/actions/setup-opencode" in content
         assert "uses: ./.github/actions/model-availability" in content
         assert "available_models: ${{ steps.model-availability.outputs.available-models }}" in content
         assert "cache_issue: ${{ steps.model-availability.outputs.cache-issue }}" in content

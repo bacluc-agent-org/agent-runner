@@ -39,6 +39,9 @@ jobs:
         with:
           token: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
 
+      - name: Set up OpenCode
+        uses: ./.github/actions/setup-opencode
+
       - name: Check model availability
         id: model-availability
         timeout-minutes: 10

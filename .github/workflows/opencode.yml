@@ -584,7 +584,8 @@ jobs:
             fi
 
             printf '\nBounded continuation: the successful coordinator run produced no observable delivery.\n' | tee -a "$RUNNER_TEMP/coordinator.out"
-            resume_prompt="${PROMPT}"$'\n\n'"The previous coordinator attempt exited successfully without observable delivery. Continue the requested task now. Make the requested changes and verify them, or output exactly AGENT_RESULT: NO_CODE_CHANGE only when the task legitimately requires no code change. Do not claim completion without delivery or that exact result."
+            coordinator_output_tail="$(tail -n 120 "$RUNNER_TEMP/coordinator.out" 2>/dev/null || true)"
+            resume_prompt="${PROMPT}"$'\n\n'"The previous coordinator attempt exited successfully without observable delivery. Its output tail is included below so you can detect any refusal, blocker, or uncertainty and address it now. Continue the requested task: make the requested changes and verify them, or output exactly AGENT_RESULT: NO_CODE_CHANGE only when the task legitimately requires no code change. Do not claim completion without delivery or that exact result."$'\n\n'"Previous coordinator output tail:"$'\n'"${coordinator_output_tail}"
             run_coordinator "$COORDINATOR_RESUME_TIMEOUT" "-a" "$resume_prompt"
             echo "resume_coordinator_status=${coordinator_status}" >> "$GITHUB_OUTPUT"
             echo "resume_coordinator_tee_status=${coordinator_tee_status}" >> "$GITHUB_OUTPUT"

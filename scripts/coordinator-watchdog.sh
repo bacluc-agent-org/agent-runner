@@ -12,7 +12,7 @@ if [[ ! "$total_minutes" =~ ^[1-9][0-9]*$ || ! "$idle_minutes" =~ ^[1-9][0-9]*$ 
   exit 2
 fi
 : > "$output_file"
-# Launch opencode in its own process group so kill -- -$pid reaches it (GNU timeout forks a group and would miss it). tee keeps Actions logs live while the loop samples the file size.
+# Launch opencode in its own process group so kill -- -$pid reaches it (GNU timeout forks a group and would miss it). Output is captured to a file and tailed live while the loop samples file size.
 setsid opencode run --agent "$agent" --model "$model" --title "$title" "$prompt" > "$output_file" 2>&1 &
 child_pid=$!
 # Live-stream the captured output to stdout (Actions log) without coupling to opencode's process group.

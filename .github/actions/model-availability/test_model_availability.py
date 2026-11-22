@@ -1201,7 +1201,7 @@ class TestMainProbeSummary:
     def test_prints_fresh_cache_summary_without_probing(self, monkeypatch, capsys):
         monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: None)
         monkeypatch.setattr(
-            model_availability, "discover_models", lambda: (["opencode/a-free"], {})
+            model_availability, "discover_models", lambda *a, **k: (["opencode/a-free"], {})
         )
         monkeypatch.setattr(
             model_availability, "build_candidates", lambda *args: ["opencode/a-free"]
@@ -1219,7 +1219,7 @@ class TestMainProbeSummary:
 
     def test_does_not_invoke_probe_for_empty_pending(self, monkeypatch):
         monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: None)
-        monkeypatch.setattr(model_availability, "discover_models", lambda: ([], {}))
+        monkeypatch.setattr(model_availability, "discover_models", lambda *a, **k: ([], {}))
         monkeypatch.setattr(model_availability, "build_candidates", lambda *args: [])
         monkeypatch.setattr(model_availability, "select_pending", lambda *args: ([], 0))
         calls = []
@@ -1231,7 +1231,7 @@ class TestMainProbeSummary:
     def test_prints_checked_probe_summary(self, monkeypatch, capsys):
         monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: None)
         monkeypatch.setattr(
-            model_availability, "discover_models", lambda: (["opencode/a-free", "opencode/b-free"], {})
+            model_availability, "discover_models", lambda *a, **k: (["opencode/a-free", "opencode/b-free"], {})
         )
         monkeypatch.setattr(
             model_availability, "build_candidates", lambda *args: ["opencode/a-free", "opencode/b-free"]
@@ -1322,7 +1322,7 @@ class TestMainDiscoveryTimeout:
     }
 
     @staticmethod
-    def _timed_out_discovery():
+    def _timed_out_discovery(*args, **kwargs):
         model_availability.DISCOVERY_TIMED_OUT = True
         return [], {}
 

@@ -107,6 +107,11 @@ def test_workflow_wires_failure_mode_and_diagnostic():
     assert 'echo "failure_mode=$(cat "$RUNNER_TEMP/coordinator-failure-mode")" >> "$GITHUB_OUTPUT"' in workflow
     assert 'cat "$RUNNER_TEMP/coordinator-diagnostic"' in workflow
     assert 'VERIFY_WATCHDOG: ${{ inputs.verify_watchdog }}' in workflow
+    watchdog_inputs = workflow.split("\n      verify_watchdog:\n")[1:]
+    assert len(watchdog_inputs) == 2
+    assert all("default: false" in block[:200] for block in watchdog_inputs)
+    assert '> "$RUNNER_TEMP/stub-bin/opencode"' in workflow
+    assert 'export PATH="$RUNNER_TEMP/stub-bin:$PATH"' in workflow
 
 
 def _alive(pid):

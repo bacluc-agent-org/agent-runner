@@ -159,6 +159,7 @@ jobs:
           printf 'discovery_timeout_minutes: %s\n' "$DISCOVERY_TIMEOUT_MINUTES"
           printf 'no_output_timeout_minutes: %s\n' "$NO_OUTPUT_TIMEOUT_MINUTES"
           printf 'agent: %s\n' "$AGENT"
+          printf 'verify_watchdog: %s\n' "$VERIFY_WATCHDOG"
           printf '::%s::\n' "$stop_token"
         env:
           MODEL_TEXT: ${{ inputs.model }}
@@ -167,6 +168,7 @@ jobs:
           DISCOVERY_TIMEOUT_MINUTES: ${{ inputs.discovery_timeout_minutes }}
           NO_OUTPUT_TIMEOUT_MINUTES: ${{ inputs.no_output_timeout_minutes }}
           AGENT: ${{ inputs.agent || 'coordinator' }}
+          VERIFY_WATCHDOG: ${{ inputs.verify_watchdog }}
 
       - name: Check out target repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -581,7 +583,7 @@ jobs:
           fi
 
       - name: Update cache on coordinator failure
-        if: (failure() || steps.fatal-guard.outputs.fatal-model != '') && (steps.select-model.outputs.model != '' || steps.fatal-guard.outputs.fatal-model != '') && steps.model-availability.outputs.cache-issue != ''
+        if: (failure() || steps.fatal-guard.outputs.fatal-model != '') && (steps.select-model.outputs.model != '' || steps.fatal-guard.outputs.fatal-model != '') && steps.model-availability.outputs.cache-issue != '' && inputs.verify_watchdog != true
         shell: bash
         env:
           MODEL: ${{ steps.fatal-guard.outputs.fatal-model || steps.select-model.outputs.model }}
@@ -709,7 +711,7 @@ jobs:
           printf '::%s::\n' "$stop_token"
 
       - name: Post run-result comment
-        if: always() && steps.target-issue.outputs.issue_number != ''
+        if: always() && steps.target-issue.outputs.issue_number != '' && inputs.verify_watchdog != true
         continue-on-error: true
         shell: bash
         env:

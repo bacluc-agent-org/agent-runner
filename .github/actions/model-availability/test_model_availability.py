@@ -532,9 +532,13 @@ class TestProviderCredentials:
         monkeypatch.delenv("VSHN_US_AI_API_KEY", raising=False)
         monkeypatch.delenv("VSHN_US_BASE_URL", raising=False)
 
-        def fake_run(*args, **kwargs):
-            kwargs["stdout"].write(json.dumps([{"path": str(source)}]))
-            return types.SimpleNamespace(stdout="")
+        def fake_run(args, *a, **kw):
+            if args == ["opencode", "models"]:
+                return types.SimpleNamespace(stdout="", stderr="")
+            if args == ["opencode", "debug", "config"]:
+                kw["stdout"].write(json.dumps([{"path": str(source)}]))
+                return types.SimpleNamespace(stdout="")
+            raise AssertionError(f"unexpected args: {args}")
 
         monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
 
@@ -1508,7 +1512,7 @@ class TestDiscoveryTimeout:
         monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
         monkeypatch.setattr(model_availability, "load_provider_config", lambda: {})
 
-        assert model_availability.discover_models() == ([], {})
+        assert model_availability.discover_models(provider_config={}) == ([], {})
         assert model_availability.DISCOVERY_TIMED_OUT is False
         assert "timed out" not in capsys.readouterr().err
 
@@ -1542,7 +1546,7 @@ class TestMainDiscoveryTimeout:
     }
 
     @staticmethod
-    def _timed_out_discovery():
+    def _timed_out_discovery(*args):
         model_availability.DISCOVERY_TIMED_OUT = True
         return [], {}
 

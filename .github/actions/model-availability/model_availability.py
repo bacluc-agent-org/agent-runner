@@ -129,8 +129,11 @@ def parse_go_model_ids(models_json: str) -> list[str]:
 def parse_jsonc(text: str) -> dict | list | str | int | float | bool | None:
     """Parse JSONC by stripping comments and trailing commas."""
     text = re.sub(r'("(?:\\.|[^"\\])*")|/\*[\s\S]*?\*/|//[^\n]*', lambda m: m.group(1) or " " * len(m.group()), text)
-    text = re.sub(r",\s*([}\]])", r"\1", text)
-    return json.loads(text)
+    text = re.sub(r'("(?:\\.|[^"\\])*")|,\s*([}\]])', lambda m: m.group(1) if m.group(1) is not None else m.group(2), text)
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
 
 
 def load_provider_options() -> dict[str, dict[str, str | None]]:
@@ -169,7 +172,10 @@ def load_provider_options() -> dict[str, dict[str, str | None]]:
         try:
             with open(source, encoding="utf-8") as fh:
                 parsed = parse_jsonc(fh.read())
-        except (OSError, json.JSONDecodeError):
+        except OSError:
+            print(f"warning: failed to parse OpenCode config source: {source}", file=sys.stderr)
+            continue
+        if parsed is None:
             print(f"warning: failed to parse OpenCode config source: {source}", file=sys.stderr)
             continue
         providers = parsed.get("provider", {}) if isinstance(parsed, dict) else {}

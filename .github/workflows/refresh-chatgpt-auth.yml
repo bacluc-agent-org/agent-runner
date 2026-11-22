@@ -148,7 +148,7 @@ jobs:
           PLAYWRIGHT_AGENT_MODEL: glm-5.3
           PLAYWRIGHT_AGENT_BASE_URL: https://opencode.ai/zen/go/v1
           PLAYWRIGHT_AGENT_API_KEY_ENV: OPENCODE_GO_API_KEY
-          OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+          OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_2_API_KEY }}
         run: |
           set -Eeuo pipefail
           scripts/chatgpt-login-primitives-fallback.sh

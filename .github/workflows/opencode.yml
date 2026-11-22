@@ -522,25 +522,28 @@ jobs:
           printf '::stop-commands::%s\n' "$stop_token"
           printf 'Final OpenCode command: opencode run --agent %q --model %q --title %q\n' "$AGENT" "$MODEL" "$coordinator_session_title"
           printf 'Coordinator prompt:\n%s\n' "$PROMPT"
-           # No GNU timeout wrapper: it forks a process group, so kill -- -$pid would miss opencode. A live child (task subagent) suppresses the zero-progress kill. Output is streamed through process substitution so Actions logs stay live while the watchdog samples file size.
-           watchdog_script="$RUNNER_TEMP/coordinator-watchdog.sh"
-           cp "$RUNNER_TEMP/agent-runner/scripts/coordinator-watchdog.sh" "$watchdog_script"
-           rm -f "$RUNNER_TEMP/coordinator-failure-mode"
-           set +e
-           setsid bash "$watchdog_script" "$RUNNER_TEMP/coordinator.out" "$COORDINATOR_TIMEOUT" "$NO_OUTPUT_TIMEOUT" "$RUNNER_TEMP/coordinator-status" "$AGENT" "$MODEL" "$coordinator_session_title" "$PROMPT"
-           watchdog_status=$?
-           printf '::%s::\n' "$stop_token"
-           coordinator_status=$(cat "$RUNNER_TEMP/coordinator-status" 2>/dev/null || printf '%s' "$watchdog_status")
-           set -e
-           printf 'Coordinator statuses: opencode=%s tee=0\n' "$coordinator_status"
-           echo "coordinator_status=${coordinator_status}" >> "$GITHUB_OUTPUT"
-           echo "coordinator_tee_status=0" >> "$GITHUB_OUTPUT"
-           if [[ -f "$RUNNER_TEMP/coordinator-failure-mode" ]]; then
-             echo "failure_mode=$(cat "$RUNNER_TEMP/coordinator-failure-mode")" >> "$GITHUB_OUTPUT"
-           fi
-           if ((coordinator_status != 0)); then
-             exit "$coordinator_status"
-           fi
+          # No GNU timeout wrapper: it forks a process group, so kill -- -$pid would miss opencode. A live child (task subagent) suppresses the zero-progress kill. Output is streamed through process substitution so Actions logs stay live while the watchdog samples file size.
+          watchdog_script="$RUNNER_TEMP/coordinator-watchdog.sh"
+          cp "$RUNNER_TEMP/agent-runner/scripts/coordinator-watchdog.sh" "$watchdog_script"
+          rm -f "$RUNNER_TEMP/coordinator-failure-mode" "$RUNNER_TEMP/coordinator-diagnostic"
+          set +e
+          setsid bash "$watchdog_script" "$RUNNER_TEMP/coordinator.out" "$COORDINATOR_TIMEOUT" "$NO_OUTPUT_TIMEOUT" "$RUNNER_TEMP/coordinator-status" "$AGENT" "$MODEL" "$coordinator_session_title" "$PROMPT"
+          watchdog_status=$?
+          printf '::%s::\n' "$stop_token"
+          if [[ -f "$RUNNER_TEMP/coordinator-diagnostic" ]]; then
+            cat "$RUNNER_TEMP/coordinator-diagnostic"
+          fi
+          coordinator_status=$(cat "$RUNNER_TEMP/coordinator-status" 2>/dev/null || printf '%s' "$watchdog_status")
+          set -e
+          printf 'Coordinator statuses: opencode=%s tee=0\n' "$coordinator_status"
+          echo "coordinator_status=${coordinator_status}" >> "$GITHUB_OUTPUT"
+          echo "coordinator_tee_status=0" >> "$GITHUB_OUTPUT"
+          if [[ -f "$RUNNER_TEMP/coordinator-failure-mode" ]]; then
+            echo "failure_mode=$(cat "$RUNNER_TEMP/coordinator-failure-mode")" >> "$GITHUB_OUTPUT"
+          fi
+          if ((coordinator_status != 0)); then
+            exit "$coordinator_status"
+          fi
 
       - name: Fatal guard
         id: fatal-guard

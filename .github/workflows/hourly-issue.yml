@@ -319,6 +319,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           cache_json=$(gh issue view "$CACHE_ISSUE" -R "$ISSUE_REPOSITORY" --json body --jq '.body' 2>/dev/null || echo '{}')
+          # The cache issue body is free text; a non-JSON body would fail the jq updates below with exit 5.
+          if ! printf '%s' "$cache_json" | jq -e 'type == "object"' >/dev/null 2>&1; then
+            cache_json='{}'
+          fi
           checked="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           fatal_model=""
           fatal_reason=""

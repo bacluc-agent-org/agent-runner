@@ -41,8 +41,6 @@ Candidate lines contain issue metadata and `[attempts: N] [recent-attempts: N]`.
 
 Tell the implementation agent to check for an existing PR and feedback for the selected issue before starting work.
 
-The preselection lookup may miss a PR whose branch, title, and body never mention the issue number. The implementation agent must verify related PRs and review feedback for the selected issue before starting work.
-
 Branch and pull-request handling below applies only to code-change tasks, and the generated implementation prompt must state which class the chosen issue is in: code change or no code change.
 
 ## Handling Review Feedback

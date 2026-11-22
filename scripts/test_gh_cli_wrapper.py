@@ -173,6 +173,14 @@ class CliWrapperTest(unittest.TestCase):
         self.assertIn("attempt 1/3, graphql secondary limit", result.stderr)
         self.assertFalse(Path(self.env["TEST_LOG"] + ".probes").exists())
 
+    def test_retry_after_header_is_honored(self):
+        result = self.run_gh(["issue", "view", "1", "-R", "bacluc-agent-org/agent-runner"],
+                             TEST_FAIL_COUNT="1",
+                             TEST_FAIL_STDERR="HTTP 403: secondary rate limit\nretry-after: 7\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("in 7s (attempt 1/3, graphql secondary limit)", result.stderr)
+        self.assertFalse(Path(self.env["TEST_LOG"] + ".probes").exists())
+
     def test_http_429_retried(self):
         result = self.run_gh(["issue", "view", "1", "-R", "bacluc-agent-org/agent-runner"],
                              TEST_FAIL_COUNT="1", TEST_FAIL_STDERR="HTTP 429: Too Many Requests\n")

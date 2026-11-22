@@ -10,6 +10,7 @@ import time
 
 RETRYABLE = re.compile(r"API rate limit (?:already )?exceeded|secondary rate limit|abuse detection|HTTP 429", re.I)
 SECONDARY = re.compile(r"HTTP 429|secondary rate limit|abuse detection", re.I)
+RETRY_AFTER = re.compile(r"retry-after:\s*(\d+)", re.I)
 
 
 def deny(reason):
@@ -257,7 +258,9 @@ def reset_wait(resources):
     return max(0, max((resource.get("reset", 0) for resource in resources), default=0) - time.time())
 
 
-def retry_delay(backend, bucket, kind, attempt, cap):
+def retry_delay(backend, bucket, kind, attempt, cap, retry_after=None):
+    if retry_after is not None:
+        return min(cap, retry_after)
     if kind == "secondary":
         return backoff(attempt, cap)
     resources = quota(backend)
@@ -323,8 +326,11 @@ def run_with_retries(backend, args, endpoint):
         if attempt == attempts:
             print(f"::warning::gh cli wrapper: gh {' '.join(args[:2])} still rate limited after {attempts} attempts", file=sys.stderr)
             return emit(result)
+        # shortcut: gh writes response headers to stdout, so Retry-After is rarely on stderr; upgrade if gh surfaces it there.
+        match = RETRY_AFTER.search(result.stderr.decode(errors="replace"))
+        retry_after = int(match.group(1)) if match else None
         bucket = bucket_for(args, endpoint, result.stderr)
-        delay = retry_delay(backend, bucket, kind, attempt, cap)
+        delay = retry_delay(backend, bucket, kind, attempt, cap, retry_after)
         if delay is None:
             return emit(result)
         print(

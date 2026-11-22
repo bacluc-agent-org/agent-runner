@@ -205,19 +205,19 @@ jobs:
           pr_jq='.[] | "\(.head.ref // "")|#\(.number)|\(.created_at)|\(.updated_at)|\(if .state == "closed" and .merged_at then "MERGED" elif .state == "closed" then "CLOSED" else "OPEN" end)|\(.title)"'
           for repo in "${repo_list[@]}"; do
             key="$(echo "$repo" | tr '/' '_')"
-            page1="$(gh api "repos/$repo/pulls?state=all&per_page=100&page=1" --jq "$pr_jq" 2>/dev/null || true)"
+            page1="$(gh api "repos/$repo/pulls?state=all&per_page=100&page=1" --jq "$pr_jq" || true)"
             {
               if [[ -n "$page1" ]]; then printf '%s\n' "$page1"; fi
               if (( $(printf '%s\n' "$page1" | grep -c .) == 100 )); then
                 page=2
-                gh api "repos/$repo/pulls?state=all&per_page=100&page=$page" --jq "$pr_jq" 2>/dev/null || true
+                gh api "repos/$repo/pulls?state=all&per_page=100&page=$page" --jq "$pr_jq" || true
               fi
             } | sort -t'|' -k4 -r > "$pr_lookup_dir/$key.lookup" || true
           done
 
           human_comments="$RUNNER_TEMP/human-comments.lookup"
           gh api --paginate "repos/$ISSUE_REPOSITORY/issues/comments?per_page=100" \
-            --jq '.[] | select(.user.login != "bacluc-agent") | "\(.issue_url | split("/")[-1])|\(.created_at)"' 2>/dev/null \
+            --jq '.[] | select(.user.login != "bacluc-agent") | "\(.issue_url | split("/")[-1])|\(.created_at)"' \
             | sort -t'|' -k2 -r > "$human_comments" || true
 
           # Shuffle candidates so enrichment order (and the debug dump) is random.
@@ -246,7 +246,7 @@ jobs:
             # submitted_at and also mirror inline review comments, so one call covers both.
             pr_human_ts="none"
             if [[ -n "$pr_number" ]]; then
-              pr_human_ts="$(gh pr view "$pr_number" -R "$pr_repo" --json comments,reviews --jq '[[.comments[] | select(.author.login != "bacluc-agent") | .createdAt], [.reviews[] | select(.author.login != "bacluc-agent") | .submittedAt]] | add | max // "none"' 2>/dev/null || echo "none")"
+              pr_human_ts="$(gh pr view "$pr_number" -R "$pr_repo" --json comments,reviews --jq '[[.comments[] | select(.author.login != "bacluc-agent") | .createdAt], [.reviews[] | select(.author.login != "bacluc-agent") | .submittedAt]] | add | max // "none"' || echo "none")"
             fi
             issue_human_ts="$(grep -m1 "^${num}|" "$human_comments" 2>/dev/null | cut -d'|' -f2 || true)"
             [[ -n "$issue_human_ts" ]] || issue_human_ts="none"
@@ -324,7 +324,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
         run: |
           set -Eeuo pipefail
-          cache_json=$(gh issue view "$CACHE_ISSUE" -R "$ISSUE_REPOSITORY" --json body --jq '.body' 2>/dev/null || echo '{}')
+          cache_json=$(gh issue view "$CACHE_ISSUE" -R "$ISSUE_REPOSITORY" --json body --jq '.body' || echo '{}')
           checked="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           fatal_model=""
           fatal_reason=""

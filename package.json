@@ -1,0 +1,12 @@
+{
+  "name": "agent-runner",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2"
+  },
+  "engines": {
+    "node": ">=26.13.1"
+  }
+}

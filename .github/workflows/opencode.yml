@@ -74,6 +74,11 @@ on:
         required: false
         type: number
         default: 15
+      verify_watchdog:
+        description: Verify the zero-progress watchdog with a stub silent opencode (fails the coordinator step on purpose)
+        required: false
+        type: boolean
+        default: false
       agent:
         description: OpenCode agent to run
         required: false
@@ -104,6 +109,11 @@ on:
         required: false
         type: number
         default: 15
+      verify_watchdog:
+        description: Verify the zero-progress watchdog with a stub silent opencode (fails the coordinator step on purpose)
+        required: false
+        type: boolean
+        default: false
       agent:
         description: OpenCode agent to run
         required: false
@@ -507,6 +517,7 @@ jobs:
           MODEL: ${{ steps.select-model.outputs.model }}
           COORDINATOR_TIMEOUT: ${{ inputs.timeout_minutes || 120 }}
           NO_OUTPUT_TIMEOUT: ${{ inputs.no_output_timeout_minutes || 15 }}
+          VERIFY_WATCHDOG: ${{ inputs.verify_watchdog }}
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
           BACLUC_AGENT_GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
           OPENCODE_FATAL_STAGE: coordinator
@@ -514,6 +525,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           rm -f "$RUNNER_TEMP/opencode-fatal.json"
+          if [[ "${VERIFY_WATCHDOG:-false}" == "true" ]]; then
+            mkdir -p "$RUNNER_TEMP/stub-bin"
+            printf '#!/usr/bin/env bash\nwhile :; do :; done\n' > "$RUNNER_TEMP/stub-bin/opencode"
+            chmod +x "$RUNNER_TEMP/stub-bin/opencode"
+            export PATH="$RUNNER_TEMP/stub-bin:$PATH"
+          fi
 
           coordinator_session_title='coordinator-run'
           PROMPT=$(printf 'model: %s \n%s\n\n%s' "$MODEL" "$PROMPT" "$(cat "$RUNNER_TEMP/agent-runner/scripts/progress-reporting.txt")")

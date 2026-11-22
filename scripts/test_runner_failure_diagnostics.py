@@ -106,6 +106,7 @@ def test_workflow_wires_failure_mode_and_diagnostic():
     workflow = open(WORKFLOW, encoding="utf-8").read()
     assert 'echo "failure_mode=$(cat "$RUNNER_TEMP/coordinator-failure-mode")" >> "$GITHUB_OUTPUT"' in workflow
     assert 'cat "$RUNNER_TEMP/coordinator-diagnostic"' in workflow
+    assert 'VERIFY_WATCHDOG: ${{ inputs.verify_watchdog }}' in workflow
 
 
 def _alive(pid):

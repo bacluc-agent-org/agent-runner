@@ -59,7 +59,16 @@ REDIRECT_URI = f"http://localhost:{CALLBACK_PORT}/auth/callback"
 AUTHORIZE_PATH = "/oauth/authorize"
 CALLBACK_PATH = "/auth/callback"
 
-AUTH_HOSTS = {"auth.openai.com", "chatgpt.com", "www.chatgpt.com", "chat.openai.com"}
+AUTH_HOST_SUFFIXES = ("openai.com", "chatgpt.com")
+
+
+def _is_auth_host(hostname: str | None) -> bool:
+    if not hostname:
+        return False
+    return any(
+        hostname == suffix or hostname.endswith("." + suffix)
+        for suffix in AUTH_HOST_SUFFIXES
+    )
 
 STEP_BY_PATH = {
     "/log-in-or-create-account": "email",
@@ -378,7 +387,7 @@ def _is_auth_page_url(url: str) -> bool:
     if parsed.username or parsed.password:
         return False
     if parsed.scheme == "https":
-        return parsed.hostname in AUTH_HOSTS and port in (None, 443)
+        return _is_auth_host(parsed.hostname) and port in (None, 443)
     if parsed.scheme == "http":
         return (
             parsed.hostname == "localhost"

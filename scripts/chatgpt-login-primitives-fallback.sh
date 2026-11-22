@@ -243,9 +243,9 @@ $sanitized_status
 Current redacted Playwright snapshot:
 $snapshot_content
 Write only newline-delimited commands to $command_file, then exit.
-Allowed commands are exactly: snapshot, click eN, hover eN, check eN, uncheck eN, fill eN TEXT, type eN TEXT, fill_secret eN email|password, type_secret eN email|password, otp eN, select eN VALUE, goto https://auth.openai.com/PATH, goto https://chatgpt.com/PATH, press KEY, reload, go-back, go-forward, status, step.
+Allowed commands are exactly: snapshot, click eN, hover eN, check eN, uncheck eN, fill eN TEXT, type eN TEXT, fill_secret eN email|password, type_secret eN email|password, otp eN, select eN VALUE, goto https://auth.openai.com/PATH, goto https://<openai.com-or-chatgpt.com-host>/PATH, press KEY, reload, go-back, go-forward, status, step.
 OpenAI may change the login flow; adapt the path using the primitives and snapshot instead of assuming a fixed sequence. Use step to invoke the built-in automation primitive when it can make progress.
-Use symbolic secret commands for credentials and otp for TOTP; never read, print, or write credential values. Use only refs from the snapshot. URLs must use https on auth.openai.com, chatgpt.com, www.chatgpt.com, or chat.openai.com, with optional path, query, and fragment. TEXT and VALUE may contain up to 200 printable characters. Keep the batch at most 32 commands. The global recovery deadline has $remaining seconds remaining. Do not call playwright-cli directly, modify any other file, or report secrets.
+Use symbolic secret commands for credentials and otp for TOTP; never read, print, or write credential values. Use only refs from the snapshot. URLs must use https on openai.com, chatgpt.com, or any subdomain of either (for example login.openai.com), with optional path, query, and fragment; no userinfo or port. TEXT and VALUE may contain up to 200 printable characters. Keep the batch at most 32 commands. The global recovery deadline has $remaining seconds remaining. Do not call playwright-cli directly, modify any other file, or report secrets.
 EOF
     )
     printf 'Playwright recovery status: %s\n' "$sanitized_status" >&2
@@ -346,7 +346,7 @@ EOF
         elif [[ "$command" =~ ^press\ ([A-Za-z0-9+_-]{1,32})$ ]]; then
           key="${BASH_REMATCH[1]}"
           run_with_deadline "$command_timeout" playwright-cli "-s=$session" press "$key" > /dev/null 2>&1 || return 1
-        elif [[ "$command" =~ ^goto\ (https://(auth\.openai\.com|chatgpt\.com|www\.chatgpt\.com|chat\.openai\.com)([/?#][^[:space:]\\]*)?)$ ]]; then
+        elif [[ "$command" =~ ^goto\ (https://(([A-Za-z0-9-]+\.)*(openai|chatgpt)\.com)([/?#][^[:space:]\\]*)?)$ ]]; then
           url="${BASH_REMATCH[1]}"
           run_with_deadline "$command_timeout" playwright-cli "-s=$session" goto "$url" > /dev/null 2>&1 || return 1
         elif [[ "$command" == step ]]; then

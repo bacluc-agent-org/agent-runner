@@ -92,7 +92,10 @@ def test_build_auth_json_rejects_non_positive_expiry():
     [
         "https://auth.openai.com/log-in",
         "https://auth.openai.com:443/log-in",
+        "https://login.openai.com/log-in",
+        "https://auth.chat.openai.com/log-in",
         "https://chatgpt.com/auth/login?next=/",
+        "https://chatgpt.com/log-in",
         "https://www.chatgpt.com/",
         "https://chat.openai.com/auth/callback#code",
         "http://localhost:1455/auth/callback",
@@ -106,9 +109,15 @@ def test_is_auth_page_url_accepts_auth_pages(url):
     "url",
     [
         "https://evil.example.com/log-in",
+        "https://evilopenai.com/log-in",
+        "https://notchatgpt.com/log-in",
         "https://auth.openai.com.evil.example/log-in",
+        "https://login.openai.com.evil.example/log-in",
+        "https://openai.com.co/log-in",
         "https://user@auth.openai.com/log-in",
+        "https://user@login.openai.com/log-in",
         "https://auth.openai.com:8443/log-in",
+        "https://login.openai.com:8443/log-in",
         "http://auth.openai.com/log-in",
         "http://localhost:1456/auth/callback",
         "http://localhost:1455/other",
@@ -117,6 +126,28 @@ def test_is_auth_page_url_accepts_auth_pages(url):
 )
 def test_is_auth_page_url_rejects_other_pages(url):
     assert not chatgpt_login._is_auth_page_url(url)
+
+
+@pytest.mark.parametrize(
+    "hostname,expected",
+    [
+        ("openai.com", True),
+        ("chatgpt.com", True),
+        ("auth.openai.com", True),
+        ("login.openai.com", True),
+        ("auth.chat.openai.com", True),
+        ("www.chatgpt.com", True),
+        ("evilopenai.com", False),
+        ("notchatgpt.com", False),
+        ("login.openai.com.evil.example", False),
+        ("openai.com.co", False),
+        ("openai.com.evil.example", False),
+        (None, False),
+        ("", False),
+    ],
+)
+def test_is_auth_host_uses_dot_boundary(hostname, expected):
+    assert chatgpt_login._is_auth_host(hostname) is expected
 
 
 def test_find_auth_page_does_not_fall_back_to_the_last_page():
@@ -621,7 +652,7 @@ def test_primitives_fallback_observes_retries_and_validates_login_output():
     assert "redact_snapshot()" in helper
     assert "type\\ (e[0-9]+)" in helper
     assert "\\ (email|password)$" in helper
-    assert "https://(auth\\.openai\\.com|chatgpt\\.com|www\\.chatgpt\\.com|chat\\.openai\\.com)" in helper
+    assert "https://(([A-Za-z0-9-]+\\.)*(openai|chatgpt)\\.com)" in helper
     assert '.openai.expires | type == "number" and . == floor and . > 0' in helper
     for name in (
         "ACTIONS_RUNTIME_TOKEN",
@@ -1280,11 +1311,35 @@ exec /bin/mv "$@"
         "-s=chatgpt-auth-recovery|detach",
     ]
 
+    for path in tmp_path.iterdir():
+        if path.is_file():
+            path.unlink()
+    custom_goto = subprocess.run(
+        ["bash", str(helper)],
+        env={
+            **env,
+            "FAKE_MODE": "custom-command",
+            "FAKE_COMMAND": "goto https://login.openai.com/log-in?next=/mfa-challenge",
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert custom_goto.returncode == 0
+    assert "-s=chatgpt-auth-recovery|goto|https://login.openai.com/log-in?next=/mfa-challenge" in (
+        tmp_path / "playwright-cli-calls"
+    ).read_text().splitlines()
+    assert "secret set OPENCODE_AUTH_JSON" in (tmp_path / "gh-call").read_text()
+
     for invalid_command in (
         "goto https://evil.example.com/log-in",
         "goto https://auth.openai.com.evil.example/log-in",
+        "goto https://login.openai.com.evil.example/log-in",
+        "goto https://evilopenai.com/log-in",
         "goto https://user@auth.openai.com/log-in",
+        "goto https://user@login.openai.com/log-in",
         "goto https://auth.openai.com:443/log-in",
+        "goto https://login.openai.com:8443/log-in",
         "fill_secret e1 email extra",
         "delete_everything",
     ):

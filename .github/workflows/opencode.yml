@@ -170,7 +170,7 @@ jobs:
         shell: bash
         run: |
           case "$GITHUB_REPOSITORY" in
-            bacluc-agent/agent-runner|bacluc-agent-org/agent-runner)
+            bacluc-agent-org/agent-runner)
               primary="$GITHUB_WORKSPACE/scripts"; fallback="$RUNNER_TEMP/agent-runner/scripts" ;;
             *) primary="$RUNNER_TEMP/agent-runner/scripts"; fallback="$GITHUB_WORKSPACE/scripts" ;;
           esac
@@ -526,6 +526,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           rm -f "$RUNNER_TEMP/opencode-fatal.json"
+          rm -f "$RUNNER_TEMP/coordinator.out"
 
           coordinator_session_title='coordinator-run'
           task_prompt="$(printf '%s' "$PROMPT" | python3 -c 'import html, sys; sys.stdout.write(html.escape(sys.stdin.read(), quote=False))')"
@@ -552,7 +553,7 @@ jobs:
             printf 'Coordinator statuses: opencode=%s tee=%s\n' "$coordinator_status" "$coordinator_tee_status"
           }
 
-          run_coordinator "$COORDINATOR_TIMEOUT" "" "$PROMPT"
+          run_coordinator "$COORDINATOR_TIMEOUT" "-a" "$PROMPT"
           echo "coordinator_status=${coordinator_status}" >> "$GITHUB_OUTPUT"
           echo "coordinator_tee_status=${coordinator_tee_status}" >> "$GITHUB_OUTPUT"
           if ((coordinator_status == 124)); then

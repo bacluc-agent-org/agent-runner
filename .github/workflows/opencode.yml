@@ -541,7 +541,7 @@ jobs:
           printf '::stop-commands::%s\n' "$stop_token"
           printf 'Final OpenCode command: opencode run --agent %q --model %q --title %q\n' "$AGENT" "$MODEL" "$coordinator_session_title"
           printf 'Coordinator prompt:\n%s\n' "$PROMPT"
-          # No GNU timeout wrapper: it forks a process group, so kill -- -$pid would miss opencode. A live child (task subagent) suppresses the zero-progress kill. Output is streamed through process substitution so Actions logs stay live while the watchdog samples file size.
+          # No GNU timeout wrapper: it forks a process group, so kill -- -$pid would miss opencode. A live child (task subagent) suppresses the zero-progress kill. Output is captured to a file and tailed live so Actions logs stay live while the watchdog samples file size.
           watchdog_script="$RUNNER_TEMP/coordinator-watchdog.sh"
           cp "$RUNNER_TEMP/agent-runner/scripts/coordinator-watchdog.sh" "$watchdog_script"
           rm -f "$RUNNER_TEMP/coordinator-failure-mode" "$RUNNER_TEMP/coordinator-diagnostic"

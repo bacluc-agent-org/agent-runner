@@ -12,13 +12,12 @@ if [[ ! "$total_minutes" =~ ^[1-9][0-9]*$ || ! "$idle_minutes" =~ ^[1-9][0-9]*$ 
   exit 2
 fi
 : > "$output_file"
-fifo="$RUNNER_TEMP/coordinator-output.fifo"
-rm -f "$fifo"
-mkfifo "$fifo"
-tee -a "$output_file" < "$fifo" &
-tee_pid=$!
-setsid opencode run --agent "$agent" --model "$model" --title "$title" "$prompt" > "$fifo" 2>&1 &
+# Launch opencode in its own process group so kill -- -$pid reaches it (GNU timeout forks a group and would miss it). tee keeps Actions logs live while the loop samples the file size.
+setsid opencode run --agent "$agent" --model "$model" --title "$title" "$prompt" > "$output_file" 2>&1 &
 child_pid=$!
+# Live-stream the captured output to stdout (Actions log) without coupling to opencode's process group.
+tail -n +1 -f "$output_file" &
+tail_pid=$!
 start_time=$(date +%s)
 last_growth_time=$start_time
 last_bytes=0
@@ -35,8 +34,8 @@ cleanup() {
     kill -KILL -- "-$child_pid" 2>/dev/null || true
     wait "$child_pid" 2>/dev/null || true
   fi
-  rm -f "$fifo"
-  wait "$tee_pid" 2>/dev/null || true
+  kill "$tail_pid" 2>/dev/null || true
+  wait "$tail_pid" 2>/dev/null || true
 }
 trap cleanup EXIT
 while kill -0 "$child_pid" 2>/dev/null; do
@@ -70,8 +69,8 @@ if [[ -z "$failure_mode" ]]; then
   opencode_status=$?
   set -e
 fi
-rm -f "$fifo"
-wait "$tee_pid" 2>/dev/null || true
+kill "$tail_pid" 2>/dev/null || true
+wait "$tail_pid" 2>/dev/null || true
 printf '%s\n' "$opencode_status" > "$status_file"
 printf '%s\n' "$failure_mode" > "$RUNNER_TEMP/coordinator-failure-mode"
 if [[ -n "$failure_mode" ]]; then

@@ -1632,6 +1632,8 @@ class TestHourlyAvailabilityHandoff:
     ROOT = Path(__file__).parents[3]
     HOURLY = ROOT / ".github/workflows/hourly-issue.yml"
     OPENCODE = ROOT / ".github/workflows/opencode.yml"
+    KANBAN_MANAGER = ROOT / ".github/workflows/kanban-manager.yml"
+    STANDING_MANAGER = ROOT / ".github/workflows/standing-issue-manager.yml"
 
     @staticmethod
     def _probe_decision(available_models, cache_issue):
@@ -1685,3 +1687,23 @@ class TestHourlyAvailabilityHandoff:
         assert "inputs.available_models || steps.model-availability.outputs.available-models" in content
         assert "inputs.cache_issue || steps.model-availability.outputs.cache-issue" in content
         assert "(inputs.cache_issue || steps.model-availability.outputs.cache-issue) != ''" in content
+
+    @pytest.mark.parametrize("workflow", [KANBAN_MANAGER, STANDING_MANAGER])
+    def test_manager_workflows_hand_off_model_availability(self, workflow):
+        content = workflow.read_text()
+        assert "uses: ./.github/actions/model-availability" in content
+        assert "available_models: ${{ steps.model-availability.outputs.available-models }}" in content
+        assert "cache_issue: ${{ steps.model-availability.outputs.cache-issue }}" in content
+        assert "needs: availability" in content
+        assert "available_models: ${{ needs.availability.outputs.available_models }}" in content
+        assert "cache_issue: ${{ needs.availability.outputs.cache_issue }}" in content
+        assert "secrets: inherit" in content
+        for env_line in (
+            "GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}",
+            "OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}",
+            "OPENCODE_GO_2_API_KEY: ${{ secrets.OPENCODE_GO_2_API_KEY }}",
+            "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}",
+            "ISSUE_REPOSITORY: ${{ vars.ISSUE_REPOSITORY || github.repository }}",
+            "MODEL_AVAILABILITY_CACHE_ISSUE: ${{ vars.MODEL_AVAILABILITY_CACHE_ISSUE }}",
+        ):
+            assert env_line in content

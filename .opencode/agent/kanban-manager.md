@@ -30,7 +30,7 @@ Maintain exactly these two weekly standing issues in organization project #1:
 List open issues in the supplied issue repository by exact title before creating either issue. Reuse
 the existing open exact-title issue, including its existing labels and project item, and never create
 a duplicate or close a standing issue. Newly created standing issues must receive both labels
-`agent-refined` and `ready-for-implementation`, be added to project #1 with
+`agent-refined` and `ready-for-implementation` (i.e. `agent-refined,ready-for-implementation`), be added to project #1 with
 `gh project item-add 1 --owner bacluc-agent-org --url <issue-url>`, and be placed in its `Backlog`
 status. Each standing issue body must state the weekly cadence — at most once per 7 days, never
 close the issue, and record the last run date in its progress comment — and name one concrete

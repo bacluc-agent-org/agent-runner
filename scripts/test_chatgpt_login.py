@@ -614,7 +614,7 @@ def test_refresh_workflow_rejects_nonempty_string_tokens_before_storage(invalid_
 def test_primitives_fallback_uses_explicit_recovery_environment_allowlist():
     helper = (Path(__file__).with_name("chatgpt-login-primitives-fallback.sh")).read_text(encoding="utf-8")
     assert "env -i" in helper
-    assert "OPENCODE_GO_API_KEY" in helper
+    assert "OPENROUTER_API_KEY" in helper
     assert "CHATGPT_EMAIL" not in helper[helper.index("run_agent_with_deadline()") : helper.index("if ! capture_snapshot")]
 
 
@@ -667,14 +667,14 @@ def test_primitives_fallback_observes_retries_and_validates_login_output():
     assert 'RUNNER_TEMP="${RUNNER_TEMP:-}"' in helper
     assert 'command_timeout="${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}"' in helper
     assert 'agent_timeout="${PLAYWRIGHT_AGENT_TIMEOUT_SECONDS:-120}"' in helper
-    assert 'agent_provider="${PLAYWRIGHT_AGENT_PROVIDER:-opencode-go-openai}"' in helper
-    assert 'agent_model="${PLAYWRIGHT_AGENT_MODEL:-glm-5.3}"' in helper
-    assert 'agent_base_url="${PLAYWRIGHT_AGENT_BASE_URL:-https://opencode.ai/zen/go/v1}"' in helper
-    assert 'agent_api_key_env="${PLAYWRIGHT_AGENT_API_KEY_ENV:-OPENCODE_GO_API_KEY}"' in helper
-    assert "PLAYWRIGHT_AGENT_PROVIDER: opencode-go-openai" in primitives
-    assert "PLAYWRIGHT_AGENT_MODEL: glm-5.3" in primitives
-    assert "PLAYWRIGHT_AGENT_BASE_URL: https://opencode.ai/zen/go/v1" in primitives
-    assert "PLAYWRIGHT_AGENT_API_KEY_ENV: OPENCODE_GO_API_KEY" in primitives
+    assert 'agent_provider="${PLAYWRIGHT_AGENT_PROVIDER:-openrouter}"' in helper
+    assert 'agent_model="${PLAYWRIGHT_AGENT_MODEL:-openai/gpt-4o-mini}"' in helper
+    assert 'agent_base_url="${PLAYWRIGHT_AGENT_BASE_URL:-https://openrouter.ai/api/v1}"' in helper
+    assert 'agent_api_key_env="${PLAYWRIGHT_AGENT_API_KEY_ENV:-OPENROUTER_API_KEY}"' in helper
+    assert "PLAYWRIGHT_AGENT_PROVIDER: openrouter" in primitives
+    assert "PLAYWRIGHT_AGENT_MODEL: openai/gpt-4o-mini" in primitives
+    assert "PLAYWRIGHT_AGENT_BASE_URL: https://openrouter.ai/api/v1" in primitives
+    assert "PLAYWRIGHT_AGENT_API_KEY_ENV: OPENROUTER_API_KEY" in primitives
     assert "opencode --pure run --auto --print-logs --log-level ERROR --model" in helper
     assert 'cd "$opencode_workdir"' in helper
     assert 'XDG_CONFIG_HOME="$opencode_config"' in helper
@@ -953,11 +953,11 @@ set -Eeuo pipefail
 [[ "$XDG_CACHE_HOME" == "$RUNNER_TEMP/chatgpt-login-opencode/cache" ]] || { touch "$RUNNER_TEMP/agent-shared-cache"; exit 1; }
 [[ ! -e "$XDG_CONFIG_HOME/opencode/plugins/incompatible.js" ]] || { touch "$RUNNER_TEMP/agent-incompatible-plugin"; exit 1; }
 config=$(<"$XDG_CONFIG_HOME/opencode/opencode.json")
-[[ "$config" == *'"opencode-go-openai"'* && "$config" == *'"baseURL": "https://opencode.ai/zen/go/v1"'* && "$config" == *'"apiKey": "{env:OPENCODE_GO_API_KEY}"'* && "$config" == *'"glm-5.3"'* ]] || { touch "$RUNNER_TEMP/agent-missing-provider-config"; exit 1; }
-for name in ACTIONS_RUNTIME_TOKEN BACLUC_AGENT_GITHUB_TOKEN BRAVE_API_KEY CHATGPT_EMAIL CHATGPT_PASSWORD CHATGPT_TOTP_KEY CHATGPT_2FA_KEY GH_TOKEN GITHUB_ENV GITHUB_OUTPUT GITHUB_PATH GITHUB_STATE GITHUB_STEP_SUMMARY GITHUB_TOKEN OPENAI_2FA_KEY OPENAI_PASSWORD OPENAI_USERNAME OPENCODE_AUTH_CONTENT OPENCODE_GO_2_API_KEY OPENROUTER_API_KEY; do
+[[ "$config" == *'"openrouter"'* && "$config" == *'"baseURL": "https://openrouter.ai/api/v1"'* && "$config" == *'"apiKey": "{env:OPENROUTER_API_KEY}"'* && "$config" == *'"openai/gpt-4o-mini"'* ]] || { touch "$RUNNER_TEMP/agent-missing-provider-config"; exit 1; }
+for name in ACTIONS_RUNTIME_TOKEN BACLUC_AGENT_GITHUB_TOKEN BRAVE_API_KEY CHATGPT_EMAIL CHATGPT_PASSWORD CHATGPT_TOTP_KEY CHATGPT_2FA_KEY GH_TOKEN GITHUB_ENV GITHUB_OUTPUT GITHUB_PATH GITHUB_STATE GITHUB_STEP_SUMMARY GITHUB_TOKEN OPENAI_2FA_KEY OPENAI_PASSWORD OPENAI_USERNAME OPENCODE_AUTH_CONTENT OPENCODE_GO_API_KEY OPENCODE_GO_2_API_KEY; do
   [[ -z "${!name:-}" ]] || { touch "$RUNNER_TEMP/agent-secret-env"; exit 1; }
 done
-[[ -n "${OPENCODE_GO_API_KEY:-}" ]] || { touch "$RUNNER_TEMP/missing-provider-env"; exit 1; }
+[[ -n "${OPENROUTER_API_KEY:-}" ]] || { touch "$RUNNER_TEMP/missing-provider-env"; exit 1; }
 if [[ "$FAKE_MODE" == agent-timeout-retry && ! -e "$RUNNER_TEMP/agent-retried" ]]; then
   touch "$RUNNER_TEMP/agent-retried"
   sleep 2
@@ -1091,7 +1091,6 @@ fi
         "OPENAI_PASSWORD": "test-openai-password",
         "OPENAI_USERNAME": "openai@example.invalid",
         "OPENCODE_AUTH_CONTENT": "test-auth-content",
-        "OPENCODE_GO_API_KEY": "test-api-key",
         "OPENCODE_GO_2_API_KEY": "test-api-key-2",
         "OPENROUTER_API_KEY": "test-openrouter-key",
         "XDG_CONFIG_HOME": str(tmp_path / "shared-config"),

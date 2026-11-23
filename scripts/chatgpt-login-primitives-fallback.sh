@@ -89,10 +89,10 @@ recover_blocking_login() {
   local handoff_timeout="${PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS:-300}"
   local command_timeout="${PLAYWRIGHT_COMMAND_TIMEOUT_SECONDS:-20}"
   local agent_timeout="${PLAYWRIGHT_AGENT_TIMEOUT_SECONDS:-120}"
-  local agent_provider="${PLAYWRIGHT_AGENT_PROVIDER:-opencode-go-openai}"
-  local agent_model="${PLAYWRIGHT_AGENT_MODEL:-glm-5.3}"
-  local agent_base_url="${PLAYWRIGHT_AGENT_BASE_URL:-https://opencode.ai/zen/go/v1}"
-  local agent_api_key_env="${PLAYWRIGHT_AGENT_API_KEY_ENV:-OPENCODE_GO_API_KEY}"
+  local agent_provider="${PLAYWRIGHT_AGENT_PROVIDER:-openrouter}"
+  local agent_model="${PLAYWRIGHT_AGENT_MODEL:-openai/gpt-4o-mini}"
+  local agent_base_url="${PLAYWRIGHT_AGENT_BASE_URL:-https://openrouter.ai/api/v1}"
+  local agent_api_key_env="${PLAYWRIGHT_AGENT_API_KEY_ENV:-OPENROUTER_API_KEY}"
   local opencode_root="$RUNNER_TEMP/chatgpt-login-opencode"
   local opencode_workdir="$opencode_root/workdir"
   local opencode_config="$opencode_root/config"
@@ -104,7 +104,7 @@ recover_blocking_login() {
     printf 'Invalid Playwright handoff timeout\n' >&2
     return 1
   fi
-  if [[ ! "$agent_provider" =~ ^[A-Za-z0-9_-]+$ || ! "$agent_model" =~ ^[A-Za-z0-9._:-]+$ || ! "$agent_api_key_env" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+  if [[ ! "$agent_provider" =~ ^[A-Za-z0-9_-]+$ || ! "$agent_model" =~ ^[A-Za-z0-9._:/-]+$ || ! "$agent_api_key_env" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
     printf 'Invalid Playwright recovery agent configuration\n' >&2
     return 1
   fi

@@ -144,11 +144,11 @@ jobs:
           CHATGPT_PASSWORD: ${{ secrets.CHATGPT_PASSWORD || secrets.OPENAI_PASSWORD }}
           CHATGPT_TOTP_KEY: ${{ secrets.CHATGPT_TOTP_KEY || secrets.CHATGPT_2FA_KEY || secrets.OPENAI_2FA_KEY }}
           CHATGPT_HEADLESS: "true"
-          PLAYWRIGHT_AGENT_PROVIDER: opencode-go-openai
-          PLAYWRIGHT_AGENT_MODEL: glm-5.3
-          PLAYWRIGHT_AGENT_BASE_URL: https://opencode.ai/zen/go/v1
-          PLAYWRIGHT_AGENT_API_KEY_ENV: OPENCODE_GO_API_KEY
-          OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_2_API_KEY }}
+          PLAYWRIGHT_AGENT_PROVIDER: openrouter
+          PLAYWRIGHT_AGENT_MODEL: openai/gpt-4o-mini
+          PLAYWRIGHT_AGENT_BASE_URL: https://openrouter.ai/api/v1
+          PLAYWRIGHT_AGENT_API_KEY_ENV: OPENROUTER_API_KEY
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           set -Eeuo pipefail
           scripts/chatgpt-login-primitives-fallback.sh

@@ -199,7 +199,7 @@ jobs:
         uses: ./.github/actions/setup-opencode
 
       - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Check model availability
         id: model-availability
@@ -518,7 +518,7 @@ jobs:
         env:
           MODEL: ${{ steps.select-model.outputs.model }}
           COORDINATOR_TIMEOUT: ${{ inputs.timeout_minutes || 120 }}
-          NO_OUTPUT_TIMEOUT: ${{ inputs.no_output_timeout_minutes || 15 }}
+          NO_OUTPUT_TIMEOUT_MINUTES: ${{ inputs.no_output_timeout_minutes || 15 }}
           VERIFY_WATCHDOG: ${{ inputs.verify_watchdog }}
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
           BACLUC_AGENT_GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
@@ -536,83 +536,25 @@ jobs:
 
           coordinator_session_title='coordinator-run'
           PROMPT=$(printf 'model: %s \n%s\n\n%s' "$MODEL" "$PROMPT" "$(cat "$RUNNER_TEMP/agent-runner/scripts/progress-reporting.txt")")
-          if [[ ! "$COORDINATOR_TIMEOUT" =~ ^[1-9][0-9]*$ || ! "$NO_OUTPUT_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
-            printf 'Coordinator timeouts must be positive integers: total=%s idle=%s\n' "$COORDINATOR_TIMEOUT" "$NO_OUTPUT_TIMEOUT" >&2
-            exit 2
-          fi
           stop_token="$(openssl rand -hex 32)"
           : "${stop_token:?stop-commands fence token generation failed}"
           printf '::stop-commands::%s\n' "$stop_token"
           printf 'Final OpenCode command: opencode run --agent %q --model %q --title %q\n' "$AGENT" "$MODEL" "$coordinator_session_title"
           printf 'Coordinator prompt:\n%s\n' "$PROMPT"
+          # No GNU timeout wrapper: it forks a process group, so kill -- -$pid would miss opencode; a live child (task subagent) suppresses the zero-progress kill. Output goes to a file tailed live while the watchdog samples it.
+          watchdog_script="$RUNNER_TEMP/coordinator-watchdog.sh"
+          cp "$RUNNER_TEMP/agent-runner/scripts/coordinator-watchdog.sh" "$watchdog_script"
           rm -f "$RUNNER_TEMP/coordinator-failure-mode" "$RUNNER_TEMP/coordinator-diagnostic"
-          : > "$RUNNER_TEMP/coordinator.out"
-          # No GNU timeout wrapper: it forks a process group, so kill -- -$pid would miss opencode. A live child (task subagent) suppresses the zero-progress kill. Output is captured to a file and tailed live so Actions logs stay live while the watchdog samples file size.
-          setsid opencode run --agent "$AGENT" --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" > "$RUNNER_TEMP/coordinator.out" 2>&1 &
-          child_pid=$!
-          tail -n +1 -f "$RUNNER_TEMP/coordinator.out" &
-          tail_pid=$!
-          start_time=$(date +%s)
-          last_growth_time=$start_time
-          last_bytes=0
-          total_seconds=$((COORDINATOR_TIMEOUT * 60))
-          idle_seconds=$((NO_OUTPUT_TIMEOUT * 60))
-          failure_mode=''
-          cleanup_done=0
-          cleanup() {
-            ((cleanup_done)) && return
-            cleanup_done=1
-            if kill -0 "$child_pid" 2>/dev/null; then
-              kill -TERM -- "-$child_pid" 2>/dev/null || true
-              sleep 1
-              kill -KILL -- "-$child_pid" 2>/dev/null || true
-              wait "$child_pid" 2>/dev/null || true
-            fi
-            kill "$tail_pid" 2>/dev/null || true
-            wait "$tail_pid" 2>/dev/null || true
-          }
-          trap cleanup EXIT
-          while kill -0 "$child_pid" 2>/dev/null; do
-            now=$(date +%s)
-            bytes=$(stat -c %s "$RUNNER_TEMP/coordinator.out" 2>/dev/null || printf '0')
-            if ((bytes > last_bytes)); then
-              last_bytes=$bytes
-              last_growth_time=$now
-            fi
-            if ((now - start_time >= total_seconds)); then
-              failure_mode=timeout
-              printf 'Coordinator total timeout after %ss; model=%s; session=%s; output_bytes=%s\n' "$((now - start_time))" "$MODEL" "$coordinator_session_title" "$bytes" >&2
-              cleanup
-              opencode_status=124
-              break
-            fi
-            if ((now - last_growth_time >= idle_seconds)) && ! pgrep -P "$child_pid" >/dev/null 2>&1; then
-              failure_mode=zero-progress
-              diagnostic=$(printf '::error::coordinator zero-progress after %sm (grace=%sm, model=%s, session=%s, last_output_bytes=%s)\n' "$(((now - start_time) / 60))" "$NO_OUTPUT_TIMEOUT" "$MODEL" "$coordinator_session_title" "$bytes")
-              printf '%s\n' "$diagnostic" >&2
-              printf '%s\n' "$diagnostic" > "$RUNNER_TEMP/coordinator-diagnostic"
-              cleanup
-              opencode_status=124
-              break
-            fi
-            sleep 30
-          done
-          if [[ -z "$failure_mode" ]]; then
-            set +e
-            wait "$child_pid"
-            opencode_status=$?
-            set -e
-          fi
-          kill "$tail_pid" 2>/dev/null || true
-          wait "$tail_pid" 2>/dev/null || true
-          printf '%s\n' "$opencode_status" > "$RUNNER_TEMP/coordinator-status"
-          printf '%s\n' "$failure_mode" > "$RUNNER_TEMP/coordinator-failure-mode"
+          set +e
+          bash "$watchdog_script" "$RUNNER_TEMP/coordinator.out" "$COORDINATOR_TIMEOUT" "$NO_OUTPUT_TIMEOUT_MINUTES" "$RUNNER_TEMP/coordinator-status" "$AGENT" "$MODEL" "$coordinator_session_title" "$PROMPT"
+          watchdog_status=$?
           printf '::%s::\n' "$stop_token"
           if [[ -f "$RUNNER_TEMP/coordinator-diagnostic" ]]; then
             cat "$RUNNER_TEMP/coordinator-diagnostic"
           fi
-          coordinator_status=$(cat "$RUNNER_TEMP/coordinator-status" 2>/dev/null || printf '%s' "$opencode_status")
-          # tee=0: output is captured to a file and tailed live, not piped through tee.
+          coordinator_status=$(cat "$RUNNER_TEMP/coordinator-status" 2>/dev/null || true)
+          [[ -n "$coordinator_status" ]] || coordinator_status="$watchdog_status"
+          set -e
           printf 'Coordinator statuses: opencode=%s tee=0\n' "$coordinator_status"
           echo "coordinator_status=${coordinator_status}" >> "$GITHUB_OUTPUT"
           echo "coordinator_tee_status=0" >> "$GITHUB_OUTPUT"

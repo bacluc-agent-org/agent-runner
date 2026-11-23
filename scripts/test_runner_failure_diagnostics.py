@@ -85,7 +85,7 @@ def test_silent_output_is_killed_with_diagnostic(tmp_path):
     assert process.returncode == 124
     assert "failure_mode=zero-progress" in output.read_text()
     assert "coordinator_status=124" in output.read_text()
-    assert "::error::coordinator zero-progress" in combined
+    assert combined.count("::error::coordinator zero-progress") == 1
     assert "grace=2m" in combined
     assert "model=model/test" in combined
     assert "session=coordinator-run" in combined

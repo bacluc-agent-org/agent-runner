@@ -66,7 +66,6 @@ while kill -0 "$child_pid" 2>/dev/null; do
   if ((now - last_growth_time >= idle_seconds)) && ! pgrep -P "$child_pid" >/dev/null 2>&1; then
     failure_mode=zero-progress
     diagnostic=$(printf '::error::coordinator zero-progress after %sm (grace=%sm, model=%s, session=%s, last_output_bytes=%s)\n' "$(((now - start_time) / 60))" "$idle_minutes" "$model" "$title" "$bytes")
-    printf '%s\n' "$diagnostic" >&2
     printf '%s\n' "$diagnostic" > "$RUNNER_TEMP/coordinator-diagnostic"
     cleanup
     opencode_status=124

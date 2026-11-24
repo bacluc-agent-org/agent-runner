@@ -6,11 +6,16 @@ on:
       - ".github/workflows/refresh-chatgpt-auth.yml"
       - "scripts/refresh-token.py"
       - "scripts/chatgpt-login.py"
+      - "scripts/chatgpt-login-primitives-fallback.sh"
       - "scripts/opencode_auth.py"
   workflow_dispatch:
     inputs:
       force_fallback:
         description: Skip the token-refresh path and exercise the browser/primitives fallbacks
+        type: boolean
+        default: false
+      force_primitives:
+        description: Skip token refresh and browser login and exercise the primitives fallback
         type: boolean
         default: false
   schedule:
@@ -43,7 +48,7 @@ jobs:
 
       - name: Try token refresh (no browser)
         id: refresh
-        if: ${{ !inputs.force_fallback }}
+        if: ${{ !inputs.force_fallback && !inputs.force_primitives }}
         continue-on-error: true
         env:
           OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON }}
@@ -104,7 +109,7 @@ jobs:
 
       - name: Browser login (fallback)
         id: browser-login
-        if: ${{ !cancelled() && (steps.refresh.outputs.refreshed != 'true' || steps.validate.outcome != 'success') }}
+        if: ${{ !cancelled() && !inputs.force_primitives && (steps.refresh.outputs.refreshed != 'true' || steps.validate.outcome != 'success') }}
         env:
           OPENAI_USERNAME: ${{ secrets.OPENAI_USERNAME }}
           OPENAI_PASSWORD: ${{ secrets.OPENAI_PASSWORD }}
@@ -128,8 +133,9 @@ jobs:
           printf 'Auth refreshed via browser login\n'
 
       - name: Agent-usable primitives fallback (start/status/step)
-        if: ${{ !cancelled() && steps.browser-login.outcome == 'failure' }}
+        if: ${{ !cancelled() && (inputs.force_primitives || steps.browser-login.outcome == 'failure') }}
         env:
+          CHATGPT_HEADLESS: "true"
           CHATGPT_EMAIL: ${{ secrets.CHATGPT_EMAIL || secrets.OPENAI_USERNAME }}
           CHATGPT_PASSWORD: ${{ secrets.CHATGPT_PASSWORD || secrets.OPENAI_PASSWORD }}
           CHATGPT_2FA_KEY: ${{ secrets.CHATGPT_2FA_KEY || secrets.OPENAI_2FA_KEY }}
@@ -139,14 +145,4 @@ jobs:
           CHATGPT_TOTP_KEY: ${{ secrets.CHATGPT_TOTP_KEY }}
         run: |
           set -Eeuo pipefail
-          # Fallback: use agent-usable primitives to try login manually
-          # start launches Chrome with CDP, status reports step, step performs one action
-          echo "Agent fallback: attempting login via primitives..."
-          stop_token="$(openssl rand -hex 32)"
-          : "${stop_token:?stop-commands fence token generation failed}"
-          printf '::stop-commands::%s\n' "$stop_token"
-          uv run scripts/chatgpt-login.py start || true
-          uv run scripts/chatgpt-login.py status || true
-          uv run scripts/chatgpt-login.py step || true
-          printf '::%s::\n' "$stop_token"
-          printf 'Agent primitives fallback attempted\n'
+          bash scripts/chatgpt-login-primitives-fallback.sh

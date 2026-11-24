@@ -83,7 +83,8 @@ OTP_SELECTORS = [
 TWO_FA_TEXTS = ["Two-factor", "Two-factor authentication", "authenticator"]
 
 def _is_headless() -> bool:
-    return os.environ.get("CHATGPT_HEADLESS", "").lower() in ("1", "true")
+    configured = os.environ.get("CHATGPT_HEADLESS", "").lower()
+    return configured in ("1", "true") or not os.environ.get("DISPLAY")
 
 
 _DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.7103.92 Safari/537.36"
@@ -230,7 +231,15 @@ def _step_for_path(path: str) -> str:
 
 
 def _redact_debug_text(value: str) -> str:
-    for name in ("OPENAI_USERNAME", "OPENAI_PASSWORD", "OPENAI_2FA_KEY"):
+    for name in (
+        "CHATGPT_EMAIL",
+        "CHATGPT_PASSWORD",
+        "CHATGPT_2FA_KEY",
+        "CHATGPT_TOTP_KEY",
+        "OPENAI_USERNAME",
+        "OPENAI_PASSWORD",
+        "OPENAI_2FA_KEY",
+    ):
         secret = os.environ.get(name)
         if secret:
             value = value.replace(secret, "[redacted]")
@@ -471,22 +480,32 @@ def _exchange_code(code: str, verifier: str) -> dict:
 
 
 def _do_email_step(page, email: str) -> bool:
-    if not _fill_first_visible(page, ['input[type="email"]', 'input[name="email"]', 'input[id="email"]'], email, delay_ms=100):
+    if not _fill_first_visible(page, ['input[type="email"]', 'input[name="email"]', 'input[id="email"]'], email, delay_ms=200):
         return False
-    time.sleep(1)
+    time.sleep(2)
     return _click_first_visible(page, ['button[type="submit"]', 'button:has-text("Continue")'])
 
 
 def _do_password_step(page, password: str) -> bool:
-    if not _fill_first_visible(page, ['input[type="password"]'], password, delay_ms=100):
+    if not _fill_first_visible(page, ['input[type="password"]'], password, delay_ms=200):
         return False
-    time.sleep(2)
+    time.sleep(4)
     clicked = _click_first_visible(page, ['button[type="submit"]', 'button:has-text("Continue")'])
     if clicked:
-        # Password submit triggers a SPA navigation; give it time to land
-        # before callers inspect the page again.
-        time.sleep(2)
+        time.sleep(8)
+        _wait_for_blocking_clear(page, timeout_s=30)
     return clicked
+
+
+def _browser_startup_error(error: Exception) -> None:
+    STATE_FILE.unlink(missing_ok=True)
+    details = _redact_debug_text(str(error))
+    display = os.environ.get("DISPLAY") or "<unset>"
+    print(
+        f"Failed to launch browser: {details}; headless={_is_headless()} DISPLAY={display}. "
+        "If Chrome is missing, run: uv run playwright install --with-deps chrome",
+        file=sys.stderr,
+    )
 
 
 def _do_2fa_step(page, totp_key: str) -> bool:
@@ -573,7 +592,7 @@ def cmd_start() -> int:
         try:
             browser = _launch_browser(p, _is_headless(), cdp_port=cdp_port)
         except Exception as e:
-            print(f"Failed to launch browser: {e}. If chrome is not installed, run: playwright install chrome", file=sys.stderr)
+            _browser_startup_error(e)
             callback.close()
             return 1
         context = browser.new_context(user_agent=_DESKTOP_UA, viewport=_DESKTOP_VIEWPORT)
@@ -589,13 +608,10 @@ def cmd_start() -> int:
             return 1
 
         _log_step(page, "authorize")
-        blocking = _wait_for_blocking_clear(page, timeout_s=120)
+        blocking = _has_blocking_screen(page)
         if blocking:
             _capture_debug(page, "start", "authorize", blocking, page_errors)
             print(f"Login blocked: {blocking}", file=sys.stderr)
-            browser.close()
-            callback.close()
-            return 2
         print(
             f"[chatgpt-login] attach: playwright-cli attach --cdp=http://localhost:{cdp_port}; "
             f"drive: scripts/chatgpt-login.py status|step",
@@ -719,11 +735,15 @@ def cmd_step() -> int:
             json.dump({"step": "done"}, sys.stdout)
             return 0
 
-        email = os.environ.get("OPENAI_USERNAME")
-        password = os.environ.get("OPENAI_PASSWORD")
-        totp_key = os.environ.get("OPENAI_2FA_KEY")
+        email = os.environ.get("CHATGPT_EMAIL") or os.environ.get("OPENAI_USERNAME")
+        password = os.environ.get("CHATGPT_PASSWORD") or os.environ.get("OPENAI_PASSWORD")
+        totp_key = (
+            os.environ.get("CHATGPT_TOTP_KEY")
+            or os.environ.get("CHATGPT_2FA_KEY")
+            or os.environ.get("OPENAI_2FA_KEY")
+        )
         if not email or not password:
-            print("OPENAI_USERNAME and OPENAI_PASSWORD must be set", file=sys.stderr)
+            print("CHATGPT_EMAIL/OPENAI_USERNAME and CHATGPT_PASSWORD/OPENAI_PASSWORD must be set", file=sys.stderr)
             return 1
 
         page_errors = _watch_page_errors(page)
@@ -758,12 +778,16 @@ def cmd_step() -> int:
 
 
 def _full_login() -> int:
-    email = os.environ.get("OPENAI_USERNAME")
-    password = os.environ.get("OPENAI_PASSWORD")
-    totp_key = os.environ.get("OPENAI_2FA_KEY")
+    email = os.environ.get("CHATGPT_EMAIL") or os.environ.get("OPENAI_USERNAME")
+    password = os.environ.get("CHATGPT_PASSWORD") or os.environ.get("OPENAI_PASSWORD")
+    totp_key = (
+        os.environ.get("CHATGPT_TOTP_KEY")
+        or os.environ.get("CHATGPT_2FA_KEY")
+        or os.environ.get("OPENAI_2FA_KEY")
+    )
 
     if not email or not password:
-        print("OPENAI_USERNAME and OPENAI_PASSWORD must be set", file=sys.stderr)
+        print("CHATGPT_EMAIL/OPENAI_USERNAME and CHATGPT_PASSWORD/OPENAI_PASSWORD must be set", file=sys.stderr)
         return 1
 
     verifier, _ = _generate_pkce()
@@ -787,7 +811,7 @@ def _full_login() -> int:
         try:
             browser = _launch_browser(p, _is_headless())
         except Exception as e:
-            print(f"Failed to launch browser: {e}. If chrome is not installed, run: playwright install chrome", file=sys.stderr)
+            _browser_startup_error(e)
             callback.close()
             return 1
         context = browser.new_context(user_agent=_DESKTOP_UA, viewport=_DESKTOP_VIEWPORT)

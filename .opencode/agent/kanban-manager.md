@@ -71,7 +71,7 @@ state justified by freshly read evidence. Re-read project state after each recon
 nothing until at most one WIP item remains and its state is consistent. Then consider only the
 highest-priority eligible `refined` item and deduplicate
 before each dispatch against its `agent-running` label, an open PR, and an active `opencode.yml`
-run; print `skip #<n>: <reason>` for every skipped candidate. Dispatch with the supplied issue
+run; print one line per skipped candidate in the exact format `skip #<n>: <absolute issue or PR URL>: <exact blocking condition> (evidence: <absolute URL>)`, naming the precise blocker (the open PR URL, the failing check name plus its run/job URL, the unanswered review-thread URL, the missing review run, or the `agent-running` label/active run URL) and never a bare reason such as "already covered" or "no eligible item". Dispatch with the supplied issue
 number, an absolute issue URL, `agent=coordinator`, and the absolute repository target. Move the
 item to `in progress` only after dispatch exits 0. Treat an unsuccessful dispatch as no dispatch;
 do not consume the cap or mark it in progress. Use `MAX_AGENT_DISPATCHES`, defaulting to 5 when
@@ -98,3 +98,16 @@ duplicate or closed project items, every eligible item has the correct `Kanban S
 ordering is reflected when the approved ordering path was available, at most one item is `in progress`
 or `agent review`, no human-review item was dispatched, and every successful dispatch is represented
 by an `in progress` item. Do not close issues automatically.
+
+Reporting concreteness: every action in the final output and in the sole `<!-- agent-progress -->`
+comment must name the action type (reconciliation, status transition, dispatch, or blocking/skip),
+identify the affected issue or project item by absolute URL or `#number`, and give the evidence or
+reason — before/after `Kanban Status` for reconciliations and transitions, target agent plus dispatch
+exit result for dispatches, and the specific blocking reason for each skip or block. Use the forms
+`dispatched <absolute issue URL>`, `moved <absolute issue URL> to Kanban Status=in progress`,
+`added <absolute PR URL> with Kanban Status=<option>`, and
+`reconciled <absolute item URL> from <old> to <new> because <evidence URL>`. Enumerate every decision,
+every item kept back with its exact blocker, and every dispatch result in the Management summary and
+Design decisions; write "none" for any category with no action. Ban vague summaries such as "feedback
+was checked", "all items were already present", "decisions were made explicit", "some", "various",
+"as needed", "already covered", and "other items" unless the named items follow.

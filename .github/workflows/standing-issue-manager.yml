@@ -16,45 +16,11 @@ permissions:
   repository-projects: write
 
 jobs:
-  availability:
-    if: vars.STANDING_PROJECT_NUMBER != ''
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    outputs:
-      available_models: ${{ steps.model-availability.outputs.available-models }}
-      cache_issue: ${{ steps.model-availability.outputs.cache-issue }}
-    env:
-      GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
-      OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
-      OPENCODE_GO_2_API_KEY: ${{ secrets.OPENCODE_GO_2_API_KEY }}
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-      BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
-      OPENCODE_AUTH_CONTENT: ${{ secrets.OPENCODE_AUTH_JSON }}
-      ISSUE_REPOSITORY: ${{ vars.ISSUE_REPOSITORY || github.repository }}
-      MODEL_AVAILABILITY_CACHE_ISSUE: ${{ vars.MODEL_AVAILABILITY_CACHE_ISSUE }}
-      GITHUB_FORK_INVITE_USER: ${{ vars.FORK_INVITE_USER || secrets.FORK_INVITE_USER }}
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          token: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
-
-      - name: Set up OpenCode
-        uses: ./.github/actions/setup-opencode
-
-      - name: Check model availability
-        id: model-availability
-        timeout-minutes: 10
-        uses: ./.github/actions/model-availability
-
   manage:
-    needs: availability
     if: vars.STANDING_PROJECT_NUMBER != ''
     uses: ./.github/workflows/opencode.yml
     with:
       agent: standing-issue-manager
-      available_models: ${{ needs.availability.outputs.available_models }}
-      cache_issue: ${{ needs.availability.outputs.cache_issue }}
       prompt: >-
         Manage the standing-issues GitHub Project. Use the project conventions
         and the complete instructions in

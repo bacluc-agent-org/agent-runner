@@ -1634,6 +1634,8 @@ class TestHourlyAvailabilityHandoff:
     OPENCODE = ROOT / ".github/workflows/opencode.yml"
     KANBAN_MANAGER = ROOT / ".github/workflows/kanban-manager.yml"
     STANDING_MANAGER = ROOT / ".github/workflows/standing-issue-manager.yml"
+    KANBAN_AGENT = ROOT / ".opencode/agent/kanban-manager.md"
+    STANDING_AGENT = ROOT / ".opencode/agent/standing-issue-manager.md"
 
     @staticmethod
     def _probe_decision(available_models, cache_issue):
@@ -1688,23 +1690,53 @@ class TestHourlyAvailabilityHandoff:
         assert "inputs.cache_issue || steps.model-availability.outputs.cache-issue" in content
         assert "(inputs.cache_issue || steps.model-availability.outputs.cache-issue) != ''" in content
 
-    @pytest.mark.parametrize("workflow", [KANBAN_MANAGER, STANDING_MANAGER])
-    def test_manager_workflows_hand_off_model_availability(self, workflow):
+    @pytest.mark.parametrize(
+        ("workflow", "agent"),
+        [
+            (KANBAN_MANAGER, "kanban-manager"),
+            (STANDING_MANAGER, "standing-issue-manager"),
+        ],
+    )
+    def test_manager_workflows_do_not_pre_probe(self, workflow, agent):
         content = workflow.read_text()
-        assert "uses: ./.github/actions/setup-opencode" in content
-        assert "uses: ./.github/actions/model-availability" in content
-        assert "available_models: ${{ steps.model-availability.outputs.available-models }}" in content
-        assert "cache_issue: ${{ steps.model-availability.outputs.cache-issue }}" in content
-        assert "needs: availability" in content
-        assert "available_models: ${{ needs.availability.outputs.available_models }}" in content
-        assert "cache_issue: ${{ needs.availability.outputs.cache_issue }}" in content
-        assert "secrets: inherit" in content
-        for env_line in (
-            "GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}",
-            "OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}",
-            "OPENCODE_GO_2_API_KEY: ${{ secrets.OPENCODE_GO_2_API_KEY }}",
-            "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}",
-            "ISSUE_REPOSITORY: ${{ vars.ISSUE_REPOSITORY || github.repository }}",
-            "MODEL_AVAILABILITY_CACHE_ISSUE: ${{ vars.MODEL_AVAILABILITY_CACHE_ISSUE }}",
+        for forbidden in (
+            "uses: ./.github/actions/setup-opencode",
+            "uses: ./.github/actions/model-availability",
+            "needs: availability",
+            "available_models: ${{ needs.availability.outputs.available_models }}",
+            "cache_issue: ${{ needs.availability.outputs.cache_issue }}",
         ):
-            assert env_line in content
+            assert forbidden not in content
+        assert "uses: ./.github/workflows/opencode.yml" in content
+        assert "secrets: inherit" in content
+        assert f"agent: {agent}" in content
+
+    def test_dispatch_declares_handoff_inputs(self):
+        content = self.OPENCODE.read_text()
+        dispatch = content.split("workflow_dispatch:", 1)[1].split("workflow_call:", 1)[0]
+        assert (
+            "      available_models:\n"
+            "        description: Optional model-availability output from the caller\n"
+            "        required: false\n"
+            "        type: string\n"
+            '        default: ""\n'
+        ) in dispatch
+        assert (
+            "      cache_issue:\n"
+            "        description: Optional model-availability cache issue from the caller\n"
+            "        required: false\n"
+            "        type: string\n"
+            '        default: ""\n'
+        ) in dispatch
+
+    def test_coordinator_exposes_resolved_availability(self):
+        content = self.OPENCODE.read_text()
+        coordinator = content.split("- name: Run coordinator", 1)[1].split("- name: Fatal guard", 1)[0]
+        assert "AVAILABLE_MODELS: ${{ inputs.available_models || steps.model-availability.outputs.available-models }}" in coordinator
+        assert "CACHE_ISSUE: ${{ inputs.cache_issue || steps.model-availability.outputs.cache-issue }}" in coordinator
+
+    @pytest.mark.parametrize("agent", [KANBAN_AGENT, STANDING_AGENT])
+    def test_manager_agents_forward_availability(self, agent):
+        content = agent.read_text()
+        assert '-f available_models="$AVAILABLE_MODELS"' in content
+        assert '-f cache_issue="$CACHE_ISSUE"' in content

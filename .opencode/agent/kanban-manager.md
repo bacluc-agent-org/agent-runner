@@ -29,7 +29,10 @@ pull requests created for those issues are on the project. Move items to the
 status that matches their current state. Do not close issues automatically.
 When a backlog item is ready for an agent, dispatch the `opencode.yml`
 workflow with the issue number, a precise task prompt, and the
-`coordinator` agent. Dispatch at most `MAX_AGENT_DISPATCHES` items, defaulting
+`coordinator` agent. Pass the availability already determined for this run on
+every child dispatch with `-f available_models="$AVAILABLE_MODELS" -f cache_issue="$CACHE_ISSUE"`
+so the child skips its own probe. The model list is multi-line and must be
+quoted. Dispatch at most `MAX_AGENT_DISPATCHES` items, defaulting
 to 5 when the variable is empty or invalid.
 
 Before every dispatch, deduplicate against the issue's `agent-running` label,

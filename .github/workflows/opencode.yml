@@ -74,6 +74,16 @@ on:
         required: false
         type: string
         default: coordinator
+      available_models:
+        description: Optional model-availability output from the caller
+        required: false
+        type: string
+        default: ""
+      cache_issue:
+        description: Optional model-availability cache issue from the caller
+        required: false
+        type: string
+        default: ""
   workflow_call:
     inputs:
       prompt:
@@ -509,6 +519,8 @@ jobs:
           BACLUC_AGENT_GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
           OPENCODE_FATAL_STAGE: coordinator
           AGENT: ${{ inputs.agent || 'coordinator' }}
+          AVAILABLE_MODELS: ${{ inputs.available_models || steps.model-availability.outputs.available-models }}
+          CACHE_ISSUE: ${{ inputs.cache_issue || steps.model-availability.outputs.cache-issue }}
         run: |
           set -Eeuo pipefail
           rm -f "$RUNNER_TEMP/opencode-fatal.json"

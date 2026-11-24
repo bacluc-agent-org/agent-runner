@@ -6,3 +6,5 @@ Put durable context for later runs inside the collapsible <details> block; keep 
 Post a separate comment ONLY as a short reply to a human comment: quote the human comment and add one acknowledgement line. Never the run report.
 Pass these rules verbatim into every subagent prompt.
 Pull request body: a description of the change that opens with the absolute link to the issue, then Management summary, then Verification evidence, then the same five-column Action runs table.
+
+Generated Markdown report, evidence, and analysis files must not be created in the repository. For target-issue runs, put reports and evidence in the single issue progress comment; for no-target runs, put results in run output. Genuine tracked documentation changes remain allowed when they are actually requested.

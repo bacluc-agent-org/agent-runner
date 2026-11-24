@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import model_availability
+from model_availability import parse_jsonc
 
 
 CONFIG = {
@@ -20,8 +21,9 @@ CONFIG = {
 
 
 @pytest.fixture(autouse=True)
-def _provider_api_keys(monkeypatch):
+def _provider_api_keys(monkeypatch, tmp_path):
     """Provider discovery tests exercise the real PROVIDERS loop; provide the keys."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
     monkeypatch.setenv("OPENCODE_GO_API_KEY", "test-go-key")
     monkeypatch.setenv("OPENCODE_GO_2_API_KEY", "test-go-2-key")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-or-key")
@@ -315,6 +317,8 @@ class TestDiscoverModels:
             model_availability.urllib.request, "urlopen", lambda *a, **kw: FakeResponse()
         )
         monkeypatch.setattr(model_availability.subprocess, "run", fake_run_filter)
+        monkeypatch.delenv("VSHN_US_AI_API_KEY", raising=False)
+        monkeypatch.delenv("VSHN_US_BASE_URL", raising=False)
         free_models, provider_models = model_availability.discover_models()
         assert "cortecs2/glm-5.1" not in free_models
         assert "vshn-us-ai/subscription.glm-5.2" not in free_models
@@ -364,7 +368,82 @@ class TestDiscoverModels:
 
 EXAMPLE_OPENCODE_WHITELIST = [r"(?:-|:)free$", r"big-pickle", r"glm", r"gpt-5\.6-luna", r"qwen", r"kimi"]
 
-class TestProviderProbeable:
+class TestProviderCredentials:
+    def test_auth_json_api_key_makes_configured_provider_probeable(self, monkeypatch, tmp_path):
+        data_home = tmp_path / "data"
+        auth_dir = data_home / "opencode"
+        auth_dir.mkdir(parents=True)
+        (auth_dir / "auth.json").write_text(
+            json.dumps({"vshn-us-ai": {"type": "api", "key": "auth-key"}})
+        )
+        source = tmp_path / "opencode.json"
+        source.write_text(
+            '{"provider":{"vshn-us-ai":{"options":{"baseURL":"https://example.test/v1"}}}}'
+        )
+        monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+
+        def fake_run(*args, **kwargs):
+            kwargs["stdout"].write(json.dumps([{"path": str(source)}]))
+            return types.SimpleNamespace(stdout="")
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+
+        config = model_availability.load_provider_config()
+
+        assert config["vshn-us-ai"]["apiKey"] == "auth-key"
+        assert model_availability.provider_probeable("vshn-us-ai/model", config, {})
+
+    def test_auth_json_oauth_access_makes_configured_provider_probeable(self, monkeypatch, tmp_path):
+        data_home = tmp_path / "data"
+        auth_dir = data_home / "opencode"
+        auth_dir.mkdir(parents=True)
+        (auth_dir / "auth.json").write_text(
+            json.dumps({"vshn-us-ai": {"type": "oauth", "access": "oauth-access-token"}})
+        )
+        source = tmp_path / "opencode.json"
+        source.write_text(
+            '{"provider":{"vshn-us-ai":{"options":{"baseURL":"https://example.test/v1"}}}}'
+        )
+        monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+
+        def fake_run(*args, **kwargs):
+            kwargs["stdout"].write(json.dumps([{"path": str(source)}]))
+            return types.SimpleNamespace(stdout="")
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+
+        config = model_availability.load_provider_config()
+
+        assert config["vshn-us-ai"]["apiKey"] == "oauth-access-token"
+        assert model_availability.provider_probeable("vshn-us-ai/model", config, {})
+
+    def test_config_source_jsonc_is_parsed_and_takes_precedence_over_auth(self, monkeypatch, tmp_path):
+        source = tmp_path / "opencode.jsonc"
+        source.write_text(
+            '{\n'
+            '  // active provider configuration\n'
+            '  "provider": {\n'
+            '    "vshn-us-ai": {"options": {"baseURL": "https://example.test/v1", '
+            '"apiKey": "config-key",}},\n'
+            '  },\n'
+            '}\n'
+        )
+        data_home = tmp_path / "data"
+        auth_dir = data_home / "opencode"
+        auth_dir.mkdir(parents=True)
+        (auth_dir / "auth.json").write_text(
+            json.dumps({"vshn-us-ai": {"type": "api", "key": "auth-key"}})
+        )
+        monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+
+        def fake_run(*args, **kwargs):
+            kwargs["stdout"].write(json.dumps([{"path": str(source)}]))
+            return types.SimpleNamespace(stdout="")
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+
+        assert model_availability.load_provider_config()["vshn-us-ai"]["apiKey"] == "config-key"
+
     @pytest.mark.parametrize("config", [{"openrouter": []}, {"openrouter": {"baseURL": []}}])
     def test_malformed_provider_config_is_not_probeable(self, config):
         assert not model_availability.provider_probeable("openrouter/foo:free", config, {})
@@ -413,6 +492,179 @@ class TestProviderProbeable:
 
     def test_openai_passes_like_builtin_provider(self):
         assert model_availability.provider_probeable("openai/gpt-5.6-luna", {}, {})
+
+    def test_provider_without_resolvable_env_credentials_is_not_probeable(self):
+        config = {"vshn-us-ai": {"baseURL": "https://example.test/v1", "apiKey": "{env:MISSING_KEY}"}}
+        assert not model_availability.provider_probeable("vshn-us-ai/model", config, {})
+
+    def test_provider_with_resolved_credentials_is_probeable(self):
+        config = {"vshn-us-ai": {"baseURL": "{env:VSHN_BASE_URL}", "apiKey": "{env:VSHN_KEY}"}}
+        assert model_availability.provider_probeable(
+            "vshn-us-ai/model", config, {"VSHN_BASE_URL": "https://example.test/v1", "VSHN_KEY": "secret"}
+        )
+
+    def test_auth_json_fills_unresolvable_config_key(self, monkeypatch, tmp_path):
+        data_home = tmp_path / "data"
+        auth_dir = data_home / "opencode"
+        auth_dir.mkdir(parents=True)
+        (auth_dir / "auth.json").write_text(
+            json.dumps({"p": {"type": "api", "key": "auth-key"}})
+        )
+        source = tmp_path / "opencode.json"
+        source.write_text(
+            '{"provider":{"p":{"options":{"baseURL":"https://x.test/v1","apiKey":"{env:DEFINITELY_UNSET}"}}}}'
+        )
+        monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+        monkeypatch.delenv("DEFINITELY_UNSET", raising=False)
+
+        def fake_run(*args, **kwargs):
+            kwargs["stdout"].write(json.dumps([{"path": str(source)}]))
+            return types.SimpleNamespace(stdout="")
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+
+        config = model_availability.load_provider_options()
+        assert config["p"]["apiKey"] == "auth-key"
+        assert model_availability.provider_probeable("p/model", config, {}) is True
+
+    def test_partial_config_does_not_raise(self, monkeypatch, tmp_path):
+        source = tmp_path / "opencode.json"
+        source.write_text('{"provider":{"p":{"options":{"apiKey":"k"}}}}')
+        monkeypatch.delenv("VSHN_US_AI_API_KEY", raising=False)
+        monkeypatch.delenv("VSHN_US_BASE_URL", raising=False)
+
+        def fake_run(args, *a, **kw):
+            if args == ["opencode", "models"]:
+                return types.SimpleNamespace(stdout="", stderr="")
+            if args == ["opencode", "debug", "config"]:
+                kw["stdout"].write(json.dumps([{"path": str(source)}]))
+                return types.SimpleNamespace(stdout="")
+            raise AssertionError(f"unexpected args: {args}")
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+
+        config = model_availability.load_provider_options()
+        assert config["p"] == {"baseURL": None, "apiKey": "k"}
+        assert model_availability.load_provider_base_urls() == {}
+        free_models, provider_models = model_availability.discover_models()
+        assert isinstance(free_models, list)
+        assert isinstance(provider_models, dict)
+
+    def test_masked_key_is_not_probeable(self):
+        config = {"p": {"baseURL": "https://x.test/v1", "apiKey": "***"}}
+        assert not model_availability.provider_probeable("p/model", config, {})
+
+    def test_baseurl_env_ref_resolved_in_discover_models(self, monkeypatch, tmp_path):
+        source = tmp_path / "opencode.json"
+        source.write_text(
+            '{"provider":{"p":{"options":{"baseURL":"{env:TEST_BASE_URL}","apiKey":"k"}}}}'
+        )
+
+        def fake_run(args, *a, **kw):
+            if args == ["opencode", "models"]:
+                return types.SimpleNamespace(stdout="p/model\n")
+            if args == ["opencode", "debug", "config"]:
+                kw["stdout"].write(json.dumps([{"path": str(source)}]))
+                return types.SimpleNamespace(stdout="")
+            raise AssertionError(f"unexpected args: {args}")
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+        monkeypatch.setenv("TEST_BASE_URL", "https://x.test/v1")
+        free_models, _ = model_availability.discover_models()
+        assert "p/model" in free_models
+
+        monkeypatch.delenv("TEST_BASE_URL", raising=False)
+        free_models, _ = model_availability.discover_models()
+        assert "p/model" not in free_models
+
+    def test_both_vshn_vars_set_keeps_vshn(self, monkeypatch, tmp_path):
+        source = tmp_path / "opencode.json"
+        source.write_text(
+            '{"provider":{"vshn-us-ai":{"options":{"baseURL":"{env:VSHN_US_BASE_URL}","apiKey":"{env:VSHN_US_AI_API_KEY}"}}}}'
+        )
+
+        def fake_run(args, *a, **kw):
+            if args == ["opencode", "models"]:
+                return types.SimpleNamespace(stdout="vshn-us-ai/model\n")
+            if args == ["opencode", "debug", "config"]:
+                kw["stdout"].write(json.dumps([{"path": str(source)}]))
+                return types.SimpleNamespace(stdout="")
+            raise AssertionError(f"unexpected args: {args}")
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+        monkeypatch.setenv("VSHN_US_BASE_URL", "https://vshn.test/v1")
+        monkeypatch.setenv("VSHN_US_AI_API_KEY", "secret")
+        free_models, _ = model_availability.discover_models()
+        assert "vshn-us-ai/model" in free_models
+        config = model_availability.load_provider_options()
+        assert model_availability.provider_probeable("vshn-us-ai/model", config, os.environ) is True
+
+    def _assert_vshn_unprobeable_when_only(self, monkeypatch, tmp_path, set_var, set_value):
+        source = tmp_path / "opencode.json"
+        source.write_text(
+            '{"provider":{"vshn-us-ai":{"options":{"baseURL":"{env:VSHN_US_BASE_URL}","apiKey":"{env:VSHN_US_AI_API_KEY}"}}}}'
+        )
+
+        def fake_run(args, *a, **kw):
+            if args == ["opencode", "models"]:
+                return types.SimpleNamespace(stdout="vshn-us-ai/model\n")
+            if args == ["opencode", "debug", "config"]:
+                kw["stdout"].write(json.dumps([{"path": str(source)}]))
+                return types.SimpleNamespace(stdout="")
+            raise AssertionError(f"unexpected args: {args}")
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+        monkeypatch.delenv("VSHN_US_AI_API_KEY", raising=False)
+        monkeypatch.delenv("VSHN_US_BASE_URL", raising=False)
+        monkeypatch.setenv(set_var, set_value)
+
+        free_models, _ = model_availability.discover_models()
+        assert "vshn-us-ai/model" not in free_models
+
+        cache = {"vshn-us-ai/model": {"ok": True, "checked": "x"}}
+        config = model_availability.load_provider_options()
+        assert model_availability.available_models(
+            cache, ["vshn-us-ai/model"], {}, config, os.environ
+        ) == []
+        assert model_availability.provider_has_credentials(
+            "vshn-us-ai", config["vshn-us-ai"], os.environ
+        ) is False
+
+    def test_vshn_dropped_when_api_key_unset(self, monkeypatch, tmp_path):
+        self._assert_vshn_unprobeable_when_only(
+            monkeypatch, tmp_path, "VSHN_US_BASE_URL", "https://vshn.test/v1"
+        )
+
+    def test_vshn_dropped_when_base_url_unset(self, monkeypatch, tmp_path):
+        self._assert_vshn_unprobeable_when_only(
+            monkeypatch, tmp_path, "VSHN_US_AI_API_KEY", "secret"
+        )
+
+    def test_provider_has_credentials_direct(self):
+        assert model_availability.provider_has_credentials(
+            "p", {"baseURL": "https://x.test/v1", "apiKey": "k"}, {}
+        ) is True
+        assert model_availability.provider_has_credentials(
+            "p", {"baseURL": "not-a-url", "apiKey": "k"}, {}
+        ) is False
+        assert model_availability.provider_has_credentials("p", {"apiKey": "k"}, {}) is True
+        assert model_availability.provider_has_credentials("p", [], {}) is False
+
+    def test_list_shaped_debug_config_in_discover_models(self, monkeypatch, tmp_path):
+        source = tmp_path / "opencode.json"
+        source.write_text('{"provider":{"p":{"options":{"baseURL":"https://x.test/v1","apiKey":"k"}}}}')
+
+        def fake_run(args, *a, **kw):
+            if args == ["opencode", "models"]:
+                return types.SimpleNamespace(stdout="p/model\n")
+            if args == ["opencode", "debug", "config"]:
+                kw["stdout"].write(json.dumps([{"path": str(source)}]))
+                return types.SimpleNamespace(stdout="")
+            raise AssertionError(f"unexpected args: {args}")
+
+        monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
+        free_models, _ = model_availability.discover_models()
+        assert "p/model" in free_models
 
 class TestParseWhitelistedModels:
     def test_uses_exact_openai_patterns_without_changing_opencode_matching(self):
@@ -553,6 +805,31 @@ class TestParseGoModelIds:
 
     def test_invalid_json_returns_empty(self):
         assert model_availability.parse_go_model_ids("not json") == []
+
+
+class TestParseJsonc:
+    def test_block_comments_and_trailing_commas(self):
+        text = """{
+            /* active provider */
+            "provider": {
+                "vshn-us-ai": {"options": {"baseURL": "https://example.test/v1",},},
+            },
+        }"""
+        assert parse_jsonc(text) == {
+            "provider": {
+                "vshn-us-ai": {"options": {"baseURL": "https://example.test/v1"}}
+            }
+        }
+
+    def test_trailing_comma_pattern_inside_string_preserved(self):
+        assert parse_jsonc('{"apiKey": "secret,}",}') == {"apiKey": "secret,}"}
+
+    def test_malformed_returns_none(self):
+        assert parse_jsonc("{not valid json") is None
+
+    def test_double_slash_in_url_preserved(self):
+        text = '{"baseURL": "https://example.test/v1", // trailing comment\n "apiKey": "k"}'
+        assert parse_jsonc(text) == {"baseURL": "https://example.test/v1", "apiKey": "k"}
 
 
 class TestBuildCandidates:
@@ -802,6 +1079,34 @@ class TestAvailableModels:
             "opencode-go-openai/glm-5.2",
             "opencode-go-openai-2/glm-5.2",
         ]
+
+    def test_cached_vshn_excluded_when_unresolvable(self, monkeypatch):
+        cache = {"vshn-us-ai/model": {"ok": True, "checked": "x"}}
+        provider_config = {
+            "vshn-us-ai": {
+                "baseURL": "{env:VSHN_US_BASE_URL}",
+                "apiKey": "{env:VSHN_US_AI_API_KEY}",
+            }
+        }
+        monkeypatch.delenv("VSHN_US_AI_API_KEY", raising=False)
+        monkeypatch.delenv("VSHN_US_BASE_URL", raising=False)
+        assert model_availability.available_models(
+            cache, ["vshn-us-ai/model"], {}, provider_config, os.environ
+        ) == []
+
+    def test_cached_vshn_included_when_resolvable(self, monkeypatch):
+        cache = {"vshn-us-ai/model": {"ok": True, "checked": "x"}}
+        provider_config = {
+            "vshn-us-ai": {
+                "baseURL": "{env:VSHN_US_BASE_URL}",
+                "apiKey": "{env:VSHN_US_AI_API_KEY}",
+            }
+        }
+        monkeypatch.setenv("VSHN_US_AI_API_KEY", "secret")
+        monkeypatch.setenv("VSHN_US_BASE_URL", "https://vshn.test/v1")
+        assert model_availability.available_models(
+            cache, ["vshn-us-ai/model"], {}, provider_config, os.environ
+        ) == ["vshn-us-ai/model"]
 
 
 class TestResolveCacheIssue:
@@ -1201,7 +1506,7 @@ class TestMainProbeSummary:
     def test_prints_fresh_cache_summary_without_probing(self, monkeypatch, capsys):
         monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: None)
         monkeypatch.setattr(
-            model_availability, "discover_models", lambda: (["opencode/a-free"], {})
+            model_availability, "discover_models", lambda *args: (["opencode/a-free"], {})
         )
         monkeypatch.setattr(
             model_availability, "build_candidates", lambda *args: ["opencode/a-free"]
@@ -1219,7 +1524,7 @@ class TestMainProbeSummary:
 
     def test_does_not_invoke_probe_for_empty_pending(self, monkeypatch):
         monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: None)
-        monkeypatch.setattr(model_availability, "discover_models", lambda: ([], {}))
+        monkeypatch.setattr(model_availability, "discover_models", lambda *args: ([], {}))
         monkeypatch.setattr(model_availability, "build_candidates", lambda *args: [])
         monkeypatch.setattr(model_availability, "select_pending", lambda *args: ([], 0))
         calls = []
@@ -1231,7 +1536,7 @@ class TestMainProbeSummary:
     def test_prints_checked_probe_summary(self, monkeypatch, capsys):
         monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: None)
         monkeypatch.setattr(
-            model_availability, "discover_models", lambda: (["opencode/a-free", "opencode/b-free"], {})
+            model_availability, "discover_models", lambda *args: (["opencode/a-free", "opencode/b-free"], {})
         )
         monkeypatch.setattr(
             model_availability, "build_candidates", lambda *args: ["opencode/a-free", "opencode/b-free"]
@@ -1288,7 +1593,7 @@ class TestDiscoveryTimeout:
         monkeypatch.setattr(model_availability.subprocess, "run", fake_run)
         monkeypatch.setattr(model_availability, "load_provider_config", lambda: {})
 
-        assert model_availability.discover_models() == ([], {})
+        assert model_availability.discover_models(provider_config={}) == ([], {})
         assert model_availability.DISCOVERY_TIMED_OUT is False
         assert "timed out" not in capsys.readouterr().err
 
@@ -1322,7 +1627,7 @@ class TestMainDiscoveryTimeout:
     }
 
     @staticmethod
-    def _timed_out_discovery():
+    def _timed_out_discovery(*args):
         model_availability.DISCOVERY_TIMED_OUT = True
         return [], {}
 
@@ -1367,6 +1672,52 @@ class TestMainDiscoveryTimeout:
         assert "opencode/a-free" in out
         assert "opencode/c-stale" in out
         assert "opencode/b-failed" not in out
+
+    def test_timeout_fallback_excludes_unresolvable_vshn(self, monkeypatch):
+        outputs = []
+        cache = {
+            "opencode/a-free": {"ok": True, "checked": "2026-11-10T00:00:00Z"},
+            "vshn-us-ai/model": {"ok": True, "checked": "2026-11-10T00:00:00Z"},
+        }
+        provider_config = {
+            "vshn-us-ai": {
+                "baseURL": "{env:VSHN_US_BASE_URL}",
+                "apiKey": "{env:VSHN_US_AI_API_KEY}",
+            }
+        }
+        monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: "49")
+        monkeypatch.setattr(model_availability, "read_cache", lambda issue: dict(cache))
+        monkeypatch.setattr(model_availability, "load_provider_config", lambda: provider_config)
+        monkeypatch.setattr(model_availability, "discover_models", self._timed_out_discovery)
+        monkeypatch.setattr(model_availability, "write_outputs", lambda *args: outputs.append(args))
+        monkeypatch.delenv("VSHN_US_AI_API_KEY", raising=False)
+        monkeypatch.delenv("VSHN_US_BASE_URL", raising=False)
+
+        assert model_availability.main() == 0
+        assert outputs == [("49", cache, ["opencode/a-free"])]
+
+    def test_timeout_fallback_includes_vshn_when_resolvable(self, monkeypatch):
+        outputs = []
+        cache = {
+            "opencode/a-free": {"ok": True, "checked": "2026-11-10T00:00:00Z"},
+            "vshn-us-ai/model": {"ok": True, "checked": "2026-11-10T00:00:00Z"},
+        }
+        provider_config = {
+            "vshn-us-ai": {
+                "baseURL": "{env:VSHN_US_BASE_URL}",
+                "apiKey": "{env:VSHN_US_AI_API_KEY}",
+            }
+        }
+        monkeypatch.setattr(model_availability, "resolve_cache_issue", lambda: "49")
+        monkeypatch.setattr(model_availability, "read_cache", lambda issue: dict(cache))
+        monkeypatch.setattr(model_availability, "load_provider_config", lambda: provider_config)
+        monkeypatch.setattr(model_availability, "discover_models", self._timed_out_discovery)
+        monkeypatch.setattr(model_availability, "write_outputs", lambda *args: outputs.append(args))
+        monkeypatch.setenv("VSHN_US_AI_API_KEY", "secret")
+        monkeypatch.setenv("VSHN_US_BASE_URL", "https://vshn.test/v1")
+
+        assert model_availability.main() == 0
+        assert outputs == [("49", cache, ["opencode/a-free", "vshn-us-ai/model"])]
 
     def test_reports_none_with_empty_cache(self, monkeypatch, capsys):
         outputs = []

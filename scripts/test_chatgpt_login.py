@@ -57,7 +57,7 @@ def test_status_payload_describes_email_verification_and_unknown_routes():
     )
     assert verification_default["blocking"] == (
         "email verification required; no inbox/OTP source is configured, "
-        "so use an allowed auth route or stop the session"
+        "so use an allowed auth route"
     )
 
     unknown = chatgpt_login._status_payload(
@@ -669,6 +669,7 @@ def test_primitives_fallback_observes_retries_and_validates_login_output():
     assert 'agent_timeout="${PLAYWRIGHT_AGENT_TIMEOUT_SECONDS:-120}"' in helper
     assert 'agent_provider="${PLAYWRIGHT_AGENT_PROVIDER:-openrouter}"' in helper
     assert 'agent_model="${PLAYWRIGHT_AGENT_MODEL:-openai/gpt-4o-mini}"' in helper
+    assert 'agent_model" =~ ^[A-Za-z0-9._:/-]+$' in helper
     assert 'agent_base_url="${PLAYWRIGHT_AGENT_BASE_URL:-https://openrouter.ai/api/v1}"' in helper
     assert 'agent_api_key_env="${PLAYWRIGHT_AGENT_API_KEY_ENV:-OPENROUTER_API_KEY}"' in helper
     assert "PLAYWRIGHT_AGENT_PROVIDER: openrouter" in primitives
@@ -737,7 +738,7 @@ def test_primitives_fallback_steps_after_a_blocking_status():
     step_block = helper[step_start:step_end]
     assert "step_status == 1 || step_status == 2" in step_block
     assert "recovery_attempted=true" in step_block
-    assert "recover_blocking_login || exit 1" in step_block
+    assert "if ! recover_blocking_login; then" in step_block
     assert "Primitive login could not progress after Playwright recovery" in helper
 
 
@@ -834,6 +835,18 @@ def test_cmd_status_reports_the_openai_error_page_as_blocking(monkeypatch, capsy
     assert payload["step"] == "email"
 
 
+def test_cmd_status_emits_blocking_payload_when_no_auth_page_is_found(monkeypatch, capsys):
+    _stub_browser(monkeypatch, _FakePage("<html></html>"))
+    _stub_auth_env(monkeypatch)
+    monkeypatch.setattr(chatgpt_login, "_find_auth_page", lambda browser: None)
+    assert chatgpt_login.cmd_status() == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["step"] == "unknown"
+    assert payload["blocking"] == "no allowlisted auth page; agent recovery required"
+    assert payload["code_ready"] is False
+    assert "error" not in payload
+
+
 def test_cmd_step_emits_blocking_status_json_on_the_openai_error_page(monkeypatch, capsys):
     _stub_browser(monkeypatch, _FakePage(_OPENAI_ERROR_BODY))
     _stub_auth_env(monkeypatch)
@@ -916,6 +929,9 @@ case "${3:-}" in
     elif [[ "$FAKE_MODE" == invalid-status ]]; then
       touch "$RUNNER_TEMP/release-start"
       printf '%s\\n' 'not-json'
+    elif [[ "$FAKE_MODE" == off-domain ]]; then
+      touch "$RUNNER_TEMP/release-start"
+      printf '%s\\n' '{"step":"unknown","url":"","title":"","blocking":"no allowlisted auth page; agent recovery required","code_ready":false}'
     else
       touch "$RUNNER_TEMP/release-start"
       printf '%s\\n' '{"step":"email","blocking":"challenge","code_ready":false}'
@@ -969,7 +985,7 @@ if [[ "$FAKE_MODE" == provider-error ]]; then
   printf '%s\\n' 'AI_APICallError: OpenCode Go usage limit reached for test@example.invalid test-password test-totp-key 123456' >&2
   exit 1
 fi
-if [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == handoff-write-failure ]]; then
+if [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == handoff-write-failure || "$FAKE_MODE" == off-domain ]]; then
   snapshot=$(<"$RUNNER_TEMP/chatgpt-login-recovery.snapshot")
   [[ "$snapshot" == 'inspectable snapshot' ]] || exit 1
   touch "$RUNNER_TEMP/agent-read-snapshot"
@@ -1027,7 +1043,7 @@ if [[ "$FAKE_MODE" == snapshot-failure && "${2:-}" == snapshot ]]; then
   printf '%s\\n' 'secret-password snapshot failure' >&2
   exit 1
 fi
-if [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == detach-hang || "$FAKE_MODE" == handoff-write-failure || "$FAKE_MODE" == agent-timeout-retry || "$FAKE_MODE" == provider-error || "$FAKE_MODE" == global-deadline || "$FAKE_MODE" == status-step ]] && [[ "${2:-}" == snapshot ]]; then
+if [[ "$FAKE_MODE" == recovered || "$FAKE_MODE" == detach-failure || "$FAKE_MODE" == detach-hang || "$FAKE_MODE" == handoff-write-failure || "$FAKE_MODE" == agent-timeout-retry || "$FAKE_MODE" == provider-error || "$FAKE_MODE" == global-deadline || "$FAKE_MODE" == status-step || "$FAKE_MODE" == off-domain ]] && [[ "${2:-}" == snapshot ]]; then
   touch "$RUNNER_TEMP/recovered"
   printf '%s\\n' 'inspectable snapshot'
 fi
@@ -1111,6 +1127,11 @@ fi
     assert recovered.returncode == 0
     assert "test-access" in (tmp_path / "auth.json").read_text()
     assert (tmp_path / "agent-read-snapshot").exists()
+    assert "Primitive login: browser start launched" in recovered.stderr
+    assert "Playwright recovery: attached to login browser" in recovered.stderr
+    assert "Playwright recovery: snapshot captured" in recovered.stderr
+    assert "Playwright recovery: invoking agent attempt 1" in recovered.stderr
+    assert "Playwright recovery command: fill_secret" in recovered.stderr
     assert not (tmp_path / "agent-secret-env").exists()
     snapshot = tmp_path / "chatgpt-login-recovery.snapshot"
     assert not snapshot.exists()
@@ -1213,6 +1234,7 @@ exec /bin/mv "$@"
         ["bash", str(helper)], env={**env, "FAKE_MODE": "blocked", "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "1"}, capture_output=True, text=True, timeout=10
     )
     assert blocked.returncode != 0
+    assert "Primitive login failed closed after Playwright recovery" in blocked.stderr
     assert (tmp_path / "stopped").exists()
     assert not (tmp_path / "gh-call").exists()
     assert (tmp_path / "playwright-cli-calls").read_text().splitlines() == [
@@ -1286,6 +1308,20 @@ exec /bin/mv "$@"
     calls = (tmp_path / "uv-calls").read_text().splitlines() if (tmp_path / "uv-calls").exists() else []
     assert "status" in calls and "step" in calls
     assert "recoverable status 2" in status_step.stderr
+
+    for path in tmp_path.iterdir():
+        if path.is_file():
+            path.unlink()
+    off_domain = subprocess.run(
+        ["bash", str(helper)],
+        env={**env, "FAKE_MODE": "off-domain", "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "2"},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert off_domain.returncode != 0
+    assert (tmp_path / "agent-read-snapshot").exists()
+    assert "no allowlisted auth page" in off_domain.stderr
 
     for path in tmp_path.iterdir():
         if path.is_file():

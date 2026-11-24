@@ -16,6 +16,7 @@ if [[ -z "${OPENAI_USERNAME:-}" && -z "${CHATGPT_EMAIL:-}" ]] || [[ -z "${OPENAI
 fi
 uv run scripts/chatgpt-login.py start > "$auth_file" 2> "$stderr_file" &
 start_pid=$!
+printf 'Primitive login: browser start launched (pid %s)\n' "$start_pid" >&2
 
 cleanup() {
   uv run scripts/chatgpt-login.py stop > /dev/null 2>&1 || true
@@ -76,6 +77,10 @@ sanitize_status() {
 recovery_attempted=false
 recover_blocking_login() {
   local session='chatgpt-auth-recovery'
+  recovery_fail() {
+    printf 'Playwright recovery: command failed\n' >&2
+    return 1
+  }
   local cdp_port="${OPENAI_CDP_PORT:-9222}"
   local snapshot_file="$RUNNER_TEMP/chatgpt-login-recovery.snapshot"
   local handoff_file="$RUNNER_TEMP/chatgpt-login-recovery.handoff"
@@ -149,6 +154,7 @@ PY
     redact_snapshot "$snapshot_tmp" || return 1
     [[ -s "$snapshot_tmp" ]] || return 1
     mv -f -- "$snapshot_tmp" "$snapshot_file" || return 1
+    printf 'Playwright recovery: snapshot captured\n' >&2
     snapshot_tmp=$(mktemp "$snapshot_file.XXXXXX")
     chmod 600 "$snapshot_tmp"
   }
@@ -185,6 +191,7 @@ PY
     return 1
   fi
   attached=true
+  printf 'Playwright recovery: attached to login browser\n' >&2
   cat > "$handoff_tmp" << EOF
 session=$session
 cdp=http://127.0.0.1:$cdp_port
@@ -257,6 +264,7 @@ EOF
     ((agent_attempt += 1))
     : > "$agent_log"
     chmod 600 "$agent_log"
+    printf 'Playwright recovery: invoking agent attempt %s\n' "$agent_attempt" >&2
     if ! run_agent_with_deadline "$run_timeout" opencode --pure run --auto --print-logs --log-level ERROR --model "$agent_provider/$agent_model" --title chatgpt-auth-recovery "$recovery_prompt" > /dev/null; then
       local reason=''
       if [[ -s "$agent_log" ]] && redact_snapshot "$agent_log"; then
@@ -279,6 +287,7 @@ EOF
       ((SECONDS < deadline)) && sleep 1
       continue
     fi
+    printf 'Playwright recovery: agent attempt %s completed\n' "$agent_attempt" >&2
     if [[ -s "$command_file" ]]; then
       batch_file=$(mktemp "$command_file.batch.XXXXXX")
       chmod 600 "$batch_file"
@@ -300,6 +309,7 @@ EOF
         command="${command#"${command%%[![:space:]]*}"}"
         command="${command%"${command##*[![:space:]]}"}"
         [[ -n "$command" ]] || continue
+        printf 'Playwright recovery command: %s\n' "${command%% *}" >&2
         ((command_count += 1))
         ((command_count <= 32)) || return 1
         if ((${#command} > 512)) || [[ "$command" == *$'\r'* ]]; then
@@ -311,20 +321,35 @@ EOF
         elif [[ "$command" =~ ^(click|hover|check|uncheck)\ (e[0-9]+)$ ]]; then
           operation="${BASH_REMATCH[1]}"
           ref="${BASH_REMATCH[2]}"
-          run_with_deadline "$command_timeout" playwright-cli "-s=$session" "$operation" "$ref" > /dev/null 2>&1 || return 1
+          run_with_deadline "$command_timeout" playwright-cli "-s=$session" "$operation" "$ref" > /dev/null 2>&1 || {
+            recovery_fail
+            return 1
+          }
         elif [[ "$command" =~ ^fill\ (e[0-9]+)\ ([[:print:]]{1,200})$ ]]; then
           ref="${BASH_REMATCH[1]}"
           text="${BASH_REMATCH[2]}"
-          run_with_deadline "$command_timeout" playwright-cli "-s=$session" fill "$ref" "$text" > /dev/null 2>&1 || return 1
+          run_with_deadline "$command_timeout" playwright-cli "-s=$session" fill "$ref" "$text" > /dev/null 2>&1 || {
+            recovery_fail
+            return 1
+          }
         elif [[ "$command" =~ ^type\ (e[0-9]+)\ ([[:print:]]{1,200})$ ]]; then
           ref="${BASH_REMATCH[1]}"
           text="${BASH_REMATCH[2]}"
-          run_with_deadline "$command_timeout" playwright-cli "-s=$session" click "$ref" > /dev/null 2>&1 || return 1
-          run_with_deadline "$command_timeout" playwright-cli "-s=$session" type "$text" > /dev/null 2>&1 || return 1
+          run_with_deadline "$command_timeout" playwright-cli "-s=$session" click "$ref" > /dev/null 2>&1 || {
+            recovery_fail
+            return 1
+          }
+          run_with_deadline "$command_timeout" playwright-cli "-s=$session" type "$text" > /dev/null 2>&1 || {
+            recovery_fail
+            return 1
+          }
         elif [[ "$command" =~ ^select\ (e[0-9]+)\ ([[:print:]]{1,200})$ ]]; then
           ref="${BASH_REMATCH[1]}"
           value="${BASH_REMATCH[2]}"
-          run_with_deadline "$command_timeout" playwright-cli "-s=$session" select "$ref" "$value" > /dev/null 2>&1 || return 1
+          run_with_deadline "$command_timeout" playwright-cli "-s=$session" select "$ref" "$value" > /dev/null 2>&1 || {
+            recovery_fail
+            return 1
+          }
         elif [[ "$command" =~ ^(fill_secret|type_secret)\ (e[0-9]+)\ (email|password)$ ]]; then
           operation="${BASH_REMATCH[1]}"
           ref="${BASH_REMATCH[2]}"
@@ -336,25 +361,38 @@ EOF
             run_with_deadline "$command_timeout" playwright-cli "-s=$session" click "$ref" > /dev/null 2>&1 || return 1
             run_with_deadline "$command_timeout" playwright-cli "-s=$session" type "$secret_value" > /dev/null 2>&1 || return 1
           else
-            run_with_deadline "$command_timeout" playwright-cli "-s=$session" fill "$ref" "$secret_value" > /dev/null 2>&1 || return 1
+            run_with_deadline "$command_timeout" playwright-cli "-s=$session" fill "$ref" "$secret_value" > /dev/null 2>&1 || {
+              recovery_fail
+              return 1
+            }
           fi
         elif [[ "$command" =~ ^otp\ (e[0-9]+)$ ]]; then
           ref="${BASH_REMATCH[1]}"
           otp_code=$(CHATGPT_TOTP_KEY="${CHATGPT_TOTP_KEY:-${CHATGPT_2FA_KEY:-${OPENAI_2FA_KEY:-}}}" uv run python -c 'import os, pyotp; print(pyotp.TOTP(os.environ["CHATGPT_TOTP_KEY"]).now())') || return 1
           [[ "$otp_code" =~ ^[0-9]{6}$ ]] || return 1
-          run_with_deadline "$command_timeout" playwright-cli "-s=$session" fill "$ref" "$otp_code" > /dev/null 2>&1 || return 1
+          run_with_deadline "$command_timeout" playwright-cli "-s=$session" fill "$ref" "$otp_code" > /dev/null 2>&1 || {
+            recovery_fail
+            return 1
+          }
         elif [[ "$command" =~ ^press\ ([A-Za-z0-9+_-]{1,32})$ ]]; then
           key="${BASH_REMATCH[1]}"
-          run_with_deadline "$command_timeout" playwright-cli "-s=$session" press "$key" > /dev/null 2>&1 || return 1
+          run_with_deadline "$command_timeout" playwright-cli "-s=$session" press "$key" > /dev/null 2>&1 || {
+            recovery_fail
+            return 1
+          }
         elif [[ "$command" =~ ^goto\ (https://(([A-Za-z0-9-]+\.)*(openai|chatgpt)\.com)([/?#][^[:space:]\\]*)?)$ ]]; then
           url="${BASH_REMATCH[1]}"
-          run_with_deadline "$command_timeout" playwright-cli "-s=$session" goto "$url" > /dev/null 2>&1 || return 1
+          run_with_deadline "$command_timeout" playwright-cli "-s=$session" goto "$url" > /dev/null 2>&1 || {
+            recovery_fail
+            return 1
+          }
         elif [[ "$command" == step ]]; then
           step_status=0
           step_json=$(run_with_deadline "$command_timeout" uv run scripts/chatgpt-login.py step) || step_status=$?
           printf '%s\n' "$step_json" > "$status_tmp"
           sanitize_status "$status_tmp" || return 1
           if ((step_status > 2)); then
+            recovery_fail
             return "$step_status"
           fi
           if ((step_status == 1 || step_status == 2)); then
@@ -368,9 +406,15 @@ EOF
             status_json=$(run_with_deadline "$command_timeout" uv run scripts/chatgpt-login.py status) || status_status=$?
             printf '%s\n' "$status_json" > "$status_tmp"
             sanitize_status "$status_tmp" || return 1
-            ((status_status == 0)) || return "$status_status"
+            ((status_status == 0)) || {
+              recovery_fail
+              return "$status_status"
+            }
           else
-            run_with_deadline "$command_timeout" playwright-cli "-s=$session" "$operation" > /dev/null 2>&1 || return 1
+            run_with_deadline "$command_timeout" playwright-cli "-s=$session" "$operation" > /dev/null 2>&1 || {
+              recovery_fail
+              return 1
+            }
           fi
         else
           printf 'Playwright handoff rejected an invalid command\n' >&2
@@ -381,7 +425,10 @@ EOF
       batch_file=''
     fi
     status_json=$(run_with_deadline "$command_timeout" uv run scripts/chatgpt-login.py status) || return 1
-    printf '%s\n' "$status_json" | jq -e 'type == "object" and (.error == null) and (.step | type == "string")' > /dev/null || return 1
+    printf '%s\n' "$status_json" | jq -e 'type == "object" and (.error == null) and (.step | type == "string")' > /dev/null || {
+      recovery_fail
+      return 1
+    }
     if [[ "$(jq -r '.code_ready // false' <<< "$status_json")" == true ]]; then
       handoff_ready=true
       break
@@ -435,13 +482,21 @@ while ((SECONDS < login_deadline)); do
     printf 'Primitive login reported invalid status\n' >&2
     exit 1
   }
+  printf 'Primitive login status: step=%s blocking=%s code_ready=%s\n' \
+    "$(jq -r '.step // "?"' <<< "$status_json")" \
+    "$(jq -r '.blocking // "none"' <<< "$status_json")" \
+    "$(jq -r '.code_ready // false' <<< "$status_json")" >&2
   if [[ -n "$(jq -r '.blocking // empty' <<< "$status_json")" ]]; then
     if [[ "$recovery_attempted" == true ]]; then
       printf 'Primitive login remained blocked after Playwright recovery\n' >&2
       exit 1
     fi
     recovery_attempted=true
-    recover_blocking_login || exit 1
+    printf 'Primitive login blocked; invoking Playwright recovery agent\n' >&2
+    if ! recover_blocking_login; then
+      printf 'Primitive login failed closed after Playwright recovery; no auth token stored\n' >&2
+      exit 1
+    fi
     sleep 5
     continue
   fi
@@ -460,7 +515,11 @@ while ((SECONDS < login_deadline)); do
         exit 1
       fi
       recovery_attempted=true
-      recover_blocking_login || exit 1
+      printf 'Primitive login blocked; invoking Playwright recovery agent\n' >&2
+      if ! recover_blocking_login; then
+        printf 'Primitive login failed closed after Playwright recovery; no auth token stored\n' >&2
+        exit 1
+      fi
       sleep 5
       continue
     fi

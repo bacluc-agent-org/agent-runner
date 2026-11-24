@@ -129,6 +129,7 @@ def test_run_coordinator_uses_opencode_status_not_tee(
         ("17", "", "Run result: ⚠️ failed (coordinator exit 17)"),
         ("", "", "Run result: ⚠️ failed (coordinator did not report an exit status)"),
         ("1", "balance", "Run result: ❌ fatal error: balance"),
+        ("124", "", "Run result: ⚠️ failed (coordinator timeout)"),
     ],
 )
 def test_post_run_result_comment_reports_the_real_status(status, fatal, expected):

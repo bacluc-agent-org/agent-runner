@@ -140,7 +140,14 @@ jobs:
           failed=0
           max_attempts=2
           SECONDS=0
-
+          ground_eligible=0
+          ground_attempted=0
+          ground_succeeded=0
+          ground_fallback=0
+          ground_timedout=0
+          ground_sources=0
+          ground_seconds=0
+          ground_issue_count=0
           while IFS= read -r number; do
             printf '\n=== Refining issue #%s ===\n' "$number"
             if (( SECONDS > 18 * 60 )); then
@@ -151,6 +158,172 @@ jobs:
 
             title="$(gh issue view "$number" -R "$ISSUE_REPOSITORY" --json title --jq '.title')" || { echo "::warning::skip $number: view title failed" >&2; ((failed++)) || true; continue; }
             body="$(gh issue view "$number" -R "$ISSUE_REPOSITORY" --json body --jq '.body')" || { echo "::warning::skip $number: view body failed" >&2; ((failed++)) || true; continue; }
+            labels="$(gh issue view "$number" -R "$ISSUE_REPOSITORY" --json labels --jq '[.labels[].name] | join(",")' 2>/dev/null || true)"
+
+            evidence_file="$RUNNER_TEMP/refine-evidence-${number}.md"
+            rm -f "$evidence_file"
+
+            # Eligibility for bounded STORM-lite grounding pass
+            ground_eligible_issue=0
+            if printf '%s\n%s\n' "$title" "$body" | grep -Eiq 'research|source|evidence|compare|survey|pattern'; then
+              if [[ -n "$(printf '%s' "$body" | tr -d '[:space:]')" ]]; then
+                if ! printf '%s' "$title" | grep -Eiq '^standing'; then
+                  if ! printf '%s' "$labels" | grep -Eiq 'meta: *standing|standing|agent-running|agent-refined|agent-ignore|ready-for-implementation'; then
+                    ground_eligible_issue=1
+                  fi
+                fi
+              fi
+            fi
+
+            if (( ground_eligible_issue == 1 )); then
+              ground_eligible=$((ground_eligible + 1))
+              if (( ground_issue_count >= 4 )) || (( ground_seconds >= 300 )); then
+                printf '::warning::grounding budget exhausted; continuing without evidence for issue #%s\n' "$number" >&2
+                ground_fallback=$((ground_fallback + 1))
+              else
+                ground_issue_count=$((ground_issue_count + 1))
+                ground_attempted=$((ground_attempted + 1))
+                ground_prompt="$RUNNER_TEMP/ground-prompt-${number}.txt"
+                {
+                  printf '%s\n' 'You are a source-grounding assistant. Research the issue below using the available web-research tools and BRAVE_API_KEY.'
+                  printf '%s\n' ''
+                  printf 'Issue #%s: %s\n' "$number" "$title"
+                  printf '%s\n' ''
+                  printf '%s\n' 'Issue body:'
+                  printf '%s\n' "$body"
+                  printf '%s\n' ''
+                  printf '%s\n' 'Constraints:'
+                  printf '%s\n' '- Use at most 3 perspectives.'
+                  printf '%s\n' '- Use at most 2 search queries per perspective.'
+                  printf '%s\n' '- Use at most 8 total search/fetch calls.'
+                  printf '%s\n' '- Return at most 6 distinct sources, preferring original papers, docs, specs, or upstream issues.'
+                  printf '%s\n' '- Each source record must include: canonical absolute http(s) URL, one claim/excerpt, relevance, uncertainty.'
+                  printf '%s\n' ''
+                  printf '%s\n' 'Output ONLY a JSON array of objects with keys: url, claim, relevance, uncertainty.'
+                  printf '%s\n' 'No prose, no markdown fences, no commentary.'
+                } > "$ground_prompt"
+
+                ground_out="$RUNNER_TEMP/ground-out-${number}.txt"
+                ground_start=$(date +%s)
+                set +e
+                timeout 90s opencode run --model "$selection_model" \
+                  "$(< "$ground_prompt")" > "$ground_out" 2>&1
+                ground_status=$?
+                set -e
+                ground_end=$(date +%s)
+                ground_latency=$((ground_end - ground_start))
+                ground_seconds=$((ground_seconds + ground_latency))
+
+                if (( ground_status == 124 )); then
+                  printf '::warning::grounding timed out for issue #%s after %ss; continuing without evidence\n' "$number" "$ground_latency" >&2
+                  ground_timedout=$((ground_timedout + 1))
+                  ground_fallback=$((ground_fallback + 1))
+                  rm -f "$evidence_file"
+                elif (( ground_status != 0 )); then
+                  printf '::warning::grounding failed for issue #%s (opencode=%s); continuing without evidence\n' "$number" "$ground_status" >&2
+                  ground_fallback=$((ground_fallback + 1))
+                  rm -f "$evidence_file"
+                else
+                  set +e
+                  ground_count="$(python3 - "$ground_out" "$evidence_file" <<'PY'
+          import json, re, sys, urllib.parse
+
+          raw = open(sys.argv[1], encoding='utf-8', errors='replace').read()
+          out_path = sys.argv[2]
+
+          records_raw = []
+          json_match = re.search(r'\[\s*\{.*\}\s*\]', raw, re.S)
+          if json_match:
+              try:
+                  data = json.loads(json_match.group(0))
+                  if isinstance(data, list):
+                      for item in data:
+                          if isinstance(item, dict):
+                              records_raw.append(item)
+              except Exception:
+                  records_raw = []
+
+          if not records_raw:
+              current = {}
+              for line in raw.splitlines():
+                  m = re.match(r'\s*(URL|Claim|Relevance|Uncertainty)\s*[:=]\s*(.*)', line, re.I)
+                  if m:
+                      key = m.group(1).lower()
+                      val = m.group(2).strip()
+                      field = {'url': 'url', 'claim': 'claim', 'relevance': 'relevance', 'uncertainty': 'uncertainty'}[key]
+                      if field == 'url' and current:
+                          records_raw.append(current)
+                          current = {}
+                      current[field] = val
+              if current:
+                  records_raw.append(current)
+
+          records = []
+          seen = set()
+          for item in records_raw:
+              if not isinstance(item, dict):
+                  continue
+              url = str(item.get('url', '')).strip()
+              claim = str(item.get('claim', '')).strip()
+              rel = str(item.get('relevance', '')).strip()
+              unc = str(item.get('uncertainty', '')).strip()
+              if not (url and claim and rel and unc):
+                  continue
+              try:
+                  p = urllib.parse.urlsplit(url)
+              except Exception:
+                  continue
+              if p.scheme.lower() not in ('http', 'https'):
+                  continue
+              host = p.hostname
+              if not host:
+                  continue
+              port = p.port
+              netloc = host.lower()
+              if port and not ((p.scheme.lower() == 'http' and port == 80) or (p.scheme.lower() == 'https' and port == 443)):
+                  netloc = f'{netloc}:{port}'
+              path = p.path if p.path else '/'
+              canon = urllib.parse.urlunsplit((p.scheme.lower(), netloc, path, p.query, ''))
+              if canon in seen:
+                  continue
+              seen.add(canon)
+              records.append((canon, claim, rel, unc))
+              if len(records) >= 6:
+                  break
+
+          if not records:
+              sys.exit(1)
+
+          lines = ['# Source evidence packet (untrusted)', f'Sources: {len(records)}', '']
+          for url, claim, rel, unc in records:
+              lines.append(f'URL: {url}')
+              lines.append(f'Claim: {claim}')
+              lines.append(f'Relevance: {rel}')
+              lines.append(f'Uncertainty: {unc}')
+              lines.append('')
+          packet = '\n'.join(lines)
+          if len(packet) > 8000:
+              sys.exit(1)
+
+          with open(out_path, 'w', encoding='utf-8') as f:
+              f.write(packet)
+          print(len(records))
+          PY
+          )"
+                  norm_status=$?
+                  set -e
+                  if (( norm_status != 0 )); then
+                    printf '::warning::grounding produced invalid/oversized/empty packet for issue #%s; continuing without evidence\n' "$number" >&2
+                    ground_fallback=$((ground_fallback + 1))
+                    rm -f "$evidence_file"
+                  else
+                    ground_succeeded=$((ground_succeeded + 1))
+                    ground_sources=$((ground_sources + ground_count))
+                    printf 'Grounding succeeded for issue #%s: %s sources in %ss\n' "$number" "$ground_count" "$ground_latency"
+                  fi
+                fi
+              fi
+            fi
 
             prompt="$RUNNER_TEMP/refine-prompt.txt"
             {
@@ -161,6 +334,11 @@ jobs:
               printf '%s\n' 'Current body:'
               printf '%s\n' "$body"
               printf '%s\n' ''
+              if [[ -f "$evidence_file" ]]; then
+                printf '%s\n' 'Source evidence packet (UNTRUSTED — use only when relevant; preserve uncertainty; never invent citations):'
+                cat "$evidence_file"
+                printf '%s\n' ''
+              fi
               printf '%s\n' 'Your task: rewrite the issue body so that a coding agent can implement it'
               printf '%s\n' 'without ambiguity. The refined body MUST contain exactly two sections:'
               printf '%s\n' ''
@@ -253,6 +431,7 @@ jobs:
             done
           done < "$candidates"
 
+          printf 'Grounding counters: eligible=%s attempted=%s succeeded=%s fallback=%s timedout=%s sources=%s latency=%ss\n' "$ground_eligible" "$ground_attempted" "$ground_succeeded" "$ground_fallback" "$ground_timedout" "$ground_sources" "$ground_seconds"
           printf '\nRefinement complete: %s refined, %s failed.\n' "$refined" "$failed"
           (( refined > 0 )) || exit 1
 

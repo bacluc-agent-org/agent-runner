@@ -33,6 +33,7 @@ def test_model_discovery_status_precedes_tee_status_and_falls_back():
 def _run_fragment(fragment, command_status, tee_status, command_output=""):
     with TemporaryDirectory() as directory:
         root = Path(directory)
+        github_output = root / "github-output"
         bin_dir = root / "bin"
         bin_dir.mkdir()
         timeout = bin_dir / "timeout"
@@ -51,14 +52,18 @@ def _run_fragment(fragment, command_status, tee_status, command_output=""):
             FAKE_COMMAND_STATUS=str(command_status),
             FAKE_TEE_STATUS=str(tee_status),
             FAKE_COMMAND_OUTPUT=command_output,
+            RUNNER_TEMP=str(root),
+            GITHUB_OUTPUT=str(github_output),
         )
-        return subprocess.run(
+        result = subprocess.run(
             ["bash", "-Eeuo", "pipefail", "-c", fragment],
             cwd=ROOT,
             env=environment,
             capture_output=True,
             text=True,
         )
+        output_text = github_output.read_text() if github_output.exists() else ""
+        return result, output_text
 
 
 def test_selector_status_handling_executes_all_command_and_tee_combinations():
@@ -67,8 +72,8 @@ def test_selector_status_handling_executes_all_command_and_tee_combinations():
     start = content.rindex("set +e", 0, status_start)
     end = content.index("          if ! grep -q", start)
     fragment = content[start:end]
-    for command_status, tee_status, expected in [(0, 0, 0), (124, 0, 124), (7, 0, 7), (0, 9, 9)]:
-        result = _run_fragment(
+    for command_status, tee_status, expected in [(0, 0, 0), (124, 0, 124), (7, 0, 7), (0, 9, 9), (124, 9, 124), (7, 9, 7)]:
+        result, _ = _run_fragment(
             "selection=/tmp/selection.out\nselection_model=model\nprompt=prompt\nSELECTION_TIMEOUT_MINUTES=10\n" + fragment,
             command_status,
             tee_status,
@@ -93,9 +98,9 @@ def test_model_discovery_status_handling_executes_all_command_and_tee_combinatio
         "printf '%s\\n' fallback/model discovered/model > \"$available_models_file\"\n"
         "deny_re='^$'\n"
     )
-    cases = [(0, 0, "discovered/model"), (124, 0, "fallback/model"), (7, 0, "fallback/model"), (0, 9, "fallback/model")]
+    cases = [(0, 0, "discovered/model"), (124, 0, "fallback/model"), (7, 0, "fallback/model"), (0, 9, "fallback/model"), (124, 9, "fallback/model"), (7, 9, "fallback/model")]
     for command_status, tee_status, expected_model in cases:
-        result = _run_fragment(
+        result, _ = _run_fragment(
             setup + fragment + "printf 'model=%s\\n' \"$model\"\n",
             command_status,
             tee_status,
@@ -120,14 +125,14 @@ def test_coordinator_status_handling_executes_all_command_and_tee_combinations()
         "MODEL=model\n"
         "PROMPT=prompt\n"
     )
-    for command_status, tee_status in [(0, 0), (124, 0), (7, 0), (0, 9)]:
-        result = _run_fragment(
-            setup + fragment,
-            command_status,
-            tee_status,
-        )
-        assert result.returncode == command_status
+    cases = [(0, 0, False), (124, 0, True), (7, 0, False), (0, 9, False), (124, 9, True), (7, 9, False)]
+    for command_status, tee_status, timed_out in cases:
+        result, outputs = _run_fragment(setup + fragment, command_status, tee_status)
+        assert result.returncode == command_status, result.stderr
         assert f"opencode={command_status} tee={tee_status}" in result.stdout
+        assert f"coordinator_status={command_status}" in outputs.splitlines()
+        assert f"coordinator_tee_status={tee_status}" in outputs.splitlines()
+        assert ("failure_mode=timeout" in outputs.splitlines()) == timed_out
 
 
 def test_run_result_classifier_reports_timeout_and_non_fatal_tee_failure():
@@ -136,12 +141,14 @@ def test_run_result_classifier_reports_timeout_and_non_fatal_tee_failure():
     end = content.index("\n\n          # Check for existing PRs", start)
     fragment = content[start:end]
     cases = [
-        ("0", "0", "✅ completed"),
-        ("0", "9", "✅ completed (tee log capture failed: exit 9)"),
-        ("124", "0", "⏱️ coordinator timed out (exit 124)"),
-        ("7", "0", "⚠️ failed (coordinator exit 7)"),
+        ("0", "0", "", "✅ completed"),
+        ("0", "9", "", "✅ completed (tee log capture failed: exit 9)"),
+        ("124", "0", "", "⏱️ coordinator timed out (exit 124)"),
+        ("124", "9", "auth", "⏱️ coordinator timed out (exit 124)"),
+        ("7", "0", "auth", "❌ fatal error: auth"),
+        ("7", "0", "", "⚠️ failed (coordinator exit 7)"),
     ]
-    for coordinator_status, tee_status, expected in cases:
+    for coordinator_status, tee_status, fatal_reason, expected in cases:
         result = subprocess.run(
             [
                 "bash",
@@ -155,10 +162,17 @@ def test_run_result_classifier_reports_timeout_and_non_fatal_tee_failure():
                 os.environ,
                 COORDINATOR_STATUS=coordinator_status,
                 COORDINATOR_TEE_STATUS=tee_status,
-                FATAL_REASON="",
+                FATAL_REASON=fatal_reason,
             ),
             capture_output=True,
             text=True,
         )
         assert result.returncode == 0, result.stderr
-        assert expected in result.stdout
+        assert result.stdout.strip() == expected
+
+
+def test_classifier_reads_coordinator_step_outputs():
+    content = OPENCODE_WORKFLOW.read_text()
+    block = content[content.index("- name: Post run-result comment"):]
+    assert "COORDINATOR_STATUS: ${{ steps.coordinator.outputs.coordinator_status }}" in block
+    assert "COORDINATOR_TEE_STATUS: ${{ steps.coordinator.outputs.coordinator_tee_status }}" in block

@@ -70,7 +70,7 @@ run state; retain the active and most advanced item, and reconcile stale or dupl
 state justified by freshly read evidence. Re-read project state after each reconciliation. Dispatch
 nothing until at most one WIP item remains and its state is consistent. Then consider only the
 highest-priority eligible `refined` item and deduplicate
-before each dispatch against its `agent-running` label, an open PR, and an active `opencode.yml`
+before each dispatch against any issue label starting with `agent-running` (run-scoped claims), an open PR, and an active `opencode.yml`
 run; print `skip #<n>: <reason>` for every skipped candidate. Dispatch with the supplied issue
 number, an absolute issue URL, `agent=coordinator`, and the absolute repository target. Move the
 item to `in progress` only after dispatch exits 0. Treat an unsuccessful dispatch as no dispatch;

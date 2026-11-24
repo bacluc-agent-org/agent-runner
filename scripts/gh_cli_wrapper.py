@@ -131,7 +131,8 @@ def validate_api(args):
     if path.lower() == "graphql":
         validate_graphql(parsed)
         return
-    if not re.fullmatch(r"[A-Za-z0-9_{}.-]+(?:/[A-Za-z0-9_{}.-]+)*", path) or any(
+    # Colon stays allowed after the first segment because label names like agent-running:<id> are canonical; encoding remains denied.
+    if not re.fullmatch(r"[A-Za-z0-9_{}.-]+(?:/[A-Za-z0-9_{}.:-]+)*", path) or any(
         part in {".", ".."} for part in path.split("/")
     ):
         deny("use a canonical github.com REST path without encoding or routing overrides")

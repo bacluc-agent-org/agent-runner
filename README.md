@@ -138,6 +138,13 @@ The installer saves the real CLI's absolute path before changing PATH.
   `--input`. Ambiguous options, noncanonical paths and routing overrides fail
   closed. Ordinary REST reads, issue comments, PATCH, forks and dispatches remain
   available; accepted calls preserve arguments, stdin, output and exit status.
+- Rate-limited non-interactive calls are retried up to three times. Primary-limit
+  retries wait for the matching GitHub resource reset when it is within the
+  configured cap; secondary-limit retries honor `Retry-After` when gh surfaces it and otherwise use bounded exponential backoff. The
+  wrapper replays stdin, preserves the backend exit status, and emits an
+  actionable error when the reset is beyond the cap. Configure the cap with
+  `GH_CLI_WRAPPER_MAX_SLEEP_SECONDS` and attempts with
+  `GH_CLI_WRAPPER_MAX_ATTEMPTS`.
 - Direct non-project-v2 `gh api graphql`, configured alias execution, alias management and
   extension commands are denied. Project-v2 GraphQL queries and mutations are limited to the
   supported project fields and operations; use builtin CLI commands or canonical REST endpoints

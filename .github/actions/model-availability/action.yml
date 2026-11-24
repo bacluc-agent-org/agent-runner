@@ -10,9 +10,8 @@ description: >-
   for 1 hour. Model discovery has an internal 120-second timeout: when it
   expires the action exits 0 with the previously cached available models
   (possibly none), while other discovery errors fail the step. Probes at
-  most 30 stale candidates per run, highest priority first. Relies on the
-  job-level OPENCODE_GO_API_KEY, OPENCODE_GO_2_API_KEY and
-  OPENROUTER_API_KEY env vars set by the caller.
+  most 30 stale candidates per run, highest priority first. Provider
+  credentials come from OpenCode config files plus the environment.
 outputs:
   cache-issue:
     description: Resolved model-availability cache issue number (empty when none)
@@ -23,7 +22,8 @@ outputs:
   available-models:
     description: >-
       Newline-separated model IDs with ok=true in the merged cache, free
-      models first, then paid models
+      models first, then paid models. Provider credentials come from
+      OpenCode config files plus the environment.
     value: ${{ steps.check.outputs.available-models }}
 runs:
   using: composite

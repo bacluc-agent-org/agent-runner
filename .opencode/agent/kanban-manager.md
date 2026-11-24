@@ -44,7 +44,7 @@ deduplicating by URL, and give them the linked issue's `Kanban Status`. Do not c
 remove valid items, or set `Done`. Immediately after adding every newly added project #2 item,
 assign the mapped `backlog` option ID on the selected `Kanban Status` field; preserve the
 default `Status` field unchanged. Re-read the resulting project item state after additions.
-Do not add Standing issues or issues that should never be closed.
+Do not add Standing issues or issues that should never be closed. When scripting reconciliation, reduce `gh --format json` label entries to their `name` strings before any set, membership, or dedup operation (the CLI returns labels as objects, so `set()` of raw entries raises `TypeError: unhashable type: 'dict'`), and parse each JSON document on its own, failing closed on a parse error instead of concatenating outputs. Deduplicate by canonical URL/number string keys, never by object identity.
 
 Process one top item at a time in this order: `agent review`, `in progress`, `prioritized`,
 `refined`, then `backlog`. `human review` is terminal for this run: inspect it but never

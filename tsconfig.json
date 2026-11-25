@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "es2024",
+    "module": "nodenext",
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "skipLibCheck": true
+  },
+  "include": [".opencode/**/*.ts", "src/**/*.ts", ".github/actions/**/*.ts"]
+}

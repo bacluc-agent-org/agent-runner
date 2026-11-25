@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import types
 from datetime import datetime, timezone
@@ -1663,13 +1664,34 @@ class TestHourlyAvailabilityHandoff:
         assert "available_models:" in content
         assert "cache_issue:" in content
 
-    def test_reusable_declares_optional_handoff_inputs(self):
+    @staticmethod
+    def _workflow_inputs(section):
+        inputs = {}
+        for line in section.splitlines():
+            match = re.match(r"^      ([a-z_]+):$", line)
+            if match:
+                inputs[match.group(1)] = ""
+                continue
+            if inputs and re.match(r"^        ", line):
+                last = next(reversed(inputs))
+                inputs[last] += line + "\n"
+        return inputs
+
+    def _dispatch_and_call_inputs(self):
         content = self.OPENCODE.read_text()
-        assert "available_models:" in content
-        assert "cache_issue:" in content
-        assert 'available_models:\n        description:' in content
-        assert 'cache_issue:\n        description:' in content
-        assert content.count('default: ""') >= 4
+        dispatch = content.split("  workflow_dispatch:", 1)[1].split("  workflow_call:", 1)[0]
+        call = content.split("  workflow_call:", 1)[1].split("\npermissions:", 1)[0]
+        return self._workflow_inputs(dispatch), self._workflow_inputs(call)
+
+    def test_reusable_declares_optional_handoff_inputs(self):
+        dispatch, call = self._dispatch_and_call_inputs()
+        for inputs in (dispatch, call):
+            for name in ("available_models", "cache_issue"):
+                declaration = inputs[name]
+                assert "description:" in declaration
+                assert "required: false" in declaration
+                assert "type: string" in declaration
+        assert len(dispatch) <= 10
 
     def test_complete_handoff_skips_probe(self):
         assert "if: inputs.available_models == '' || inputs.cache_issue == ''" in self.OPENCODE.read_text()
@@ -1688,23 +1710,40 @@ class TestHourlyAvailabilityHandoff:
         assert "inputs.cache_issue || steps.model-availability.outputs.cache-issue" in content
         assert "(inputs.cache_issue || steps.model-availability.outputs.cache-issue) != ''" in content
 
-    @pytest.mark.parametrize("workflow", [KANBAN_MANAGER, STANDING_MANAGER])
-    def test_manager_workflows_hand_off_model_availability(self, workflow):
+    def test_run_coordinator_receives_handoff_env(self):
+        content = self.OPENCODE.read_text()
+        step = content.split("- name: Run coordinator", 1)[1].split("      - name:", 1)[0]
+        assert "AVAILABLE_MODELS: ${{ inputs.available_models || steps.model-availability.outputs.available-models }}" in step
+        assert (
+            "MODEL_AVAILABILITY_CACHE_ISSUE: ${{ inputs.cache_issue || "
+            "steps.model-availability.outputs.cache-issue || vars.MODEL_AVAILABILITY_CACHE_ISSUE }}" in step
+        )
+
+    @pytest.mark.parametrize(
+        ("workflow", "agent"),
+        [(KANBAN_MANAGER, "kanban-manager"), (STANDING_MANAGER, "standing-issue-manager")],
+    )
+    def test_manager_workflows_let_dispatch_inherit_availability(self, workflow, agent):
         content = workflow.read_text()
-        assert "uses: ./.github/actions/setup-opencode" in content
-        assert "uses: ./.github/actions/model-availability" in content
-        assert "available_models: ${{ steps.model-availability.outputs.available-models }}" in content
-        assert "cache_issue: ${{ steps.model-availability.outputs.cache-issue }}" in content
-        assert "needs: availability" in content
-        assert "available_models: ${{ needs.availability.outputs.available_models }}" in content
-        assert "cache_issue: ${{ needs.availability.outputs.cache_issue }}" in content
-        assert "secrets: inherit" in content
-        for env_line in (
-            "GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}",
-            "OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}",
-            "OPENCODE_GO_2_API_KEY: ${{ secrets.OPENCODE_GO_2_API_KEY }}",
-            "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}",
-            "ISSUE_REPOSITORY: ${{ vars.ISSUE_REPOSITORY || github.repository }}",
-            "MODEL_AVAILABILITY_CACHE_ISSUE: ${{ vars.MODEL_AVAILABILITY_CACHE_ISSUE }}",
+        for forbidden in (
+            "model-availability",
+            "setup-opencode",
+            "needs: availability",
+            "needs.availability.outputs",
+            "available_models:",
+            "cache_issue:",
         ):
-            assert env_line in content
+            assert forbidden not in content
+        assert "uses: ./.github/workflows/opencode.yml" in content
+        assert f"agent: {agent}" in content
+        assert "secrets: inherit" in content
+
+    @pytest.mark.parametrize(
+        "agent_file",
+        ["kanban-manager.md", "standing-issue-manager.md"],
+    )
+    def test_manager_agents_pass_determined_availability(self, agent_file):
+        content = (self.ROOT / ".opencode/agent" / agent_file).read_text()
+        assert "gh workflow run opencode.yml" in content
+        assert '-f available_models="$AVAILABLE_MODELS"' in content
+        assert '-f cache_issue="$MODEL_AVAILABILITY_CACHE_ISSUE"' in content

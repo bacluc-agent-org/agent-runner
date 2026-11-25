@@ -72,7 +72,9 @@ nothing until at most one WIP item remains and its state is consistent. Then con
 highest-priority eligible `refined` item and deduplicate
 before each dispatch against its `agent-running` label, an open PR, and an active `opencode.yml`
 run; print `skip #<n>: <reason>` for every skipped candidate. Dispatch with the supplied issue
-number, an absolute issue URL, `agent=coordinator`, and the absolute repository target. Move the
+number, an absolute issue URL, `agent=coordinator`, and the absolute repository target. Run
+`gh workflow run opencode.yml -f available_models="$AVAILABLE_MODELS" -f cache_issue="$MODEL_AVAILABILITY_CACHE_ISSUE"`
+with the other dispatch inputs so the dispatch inherits the already-determined model list. Move the
 item to `in progress` only after dispatch exits 0. Treat an unsuccessful dispatch as no dispatch;
 do not consume the cap or mark it in progress. Use `MAX_AGENT_DISPATCHES`, defaulting to 5 when
 empty or invalid, and never exceed it.

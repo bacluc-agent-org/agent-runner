@@ -107,7 +107,7 @@ jobs:
           for pr_key in "${unique_prs[@]}"; do
             repo="${pr_key%#*}"
             pr_number="${pr_key##*#}"
-            pr_info=$(gh pr view "$pr_number" -R "$repo" --json number,title,headRefName,url 2>/dev/null) || {
+            pr_info=$(gh pr view "$pr_number" -R "$repo" --json number,title,headRefName,url,body 2>/dev/null) || {
               printf 'Skipping PR %s: gh pr view failed\n' "$pr_key" >&2
               continue
             }
@@ -127,7 +127,12 @@ jobs:
                 "implement the requested changes, push to the PR branch, and verify" \
                 "the changes work. Update the existing comment containing <!-- agent-progress --> on the corresponding issue instead of posting new comments.")
             fi
-            pr_info=$(jq --arg prompt "$prompt" '. + {prompt: $prompt}' <<<"$pr_info")
+            body=$(jq -r '.body // ""' <<<"$pr_info")
+            issue_number=$(printf '%s' "$body" | grep -oE 'issues/[0-9]+' | grep -oE '[0-9]+' | head -n1 || true)
+            if [[ -z "$issue_number" ]]; then
+              issue_number=$(printf '%s' "$body" | grep -oE '([A-Za-z0-9_.-]+/)?[A-Za-z0-9_.-]+#[0-9]+' | grep -oE '#[0-9]+' | grep -oE '[0-9]+' | head -n1 || true)
+            fi
+            pr_info=$(jq --arg prompt "$prompt" --arg issue_number "$issue_number" '. + {prompt: $prompt, issue_number: $issue_number} | del(.body)' <<<"$pr_info")
             pr_metadata=$(jq --argjson pr "$pr_info" --arg key "$pr_key" --arg repo "$repo" \
               '. + {($key): ($pr + {repository: $repo})}' <<<"$pr_metadata")
           done
@@ -171,5 +176,6 @@ jobs:
     uses: ./.github/workflows/opencode.yml
     with:
       prompt: ${{ fromJson(needs.find-prs.outputs.pr_metadata)[matrix.pr].prompt }}
+      issue_number: ${{ fromJson(needs.find-prs.outputs.pr_metadata)[matrix.pr].issue_number }}
       model: ${{ inputs.model }}
     secrets: inherit

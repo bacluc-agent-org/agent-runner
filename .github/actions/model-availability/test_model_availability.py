@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import types
 from datetime import datetime, timezone
@@ -1626,3 +1627,123 @@ class TestWorkflowOpenRouterSelection:
             text=True,
         )
         assert kept.returncode == 0, "opencode/big-pickle must be kept"
+
+
+class TestHourlyAvailabilityHandoff:
+    ROOT = Path(__file__).parents[3]
+    HOURLY = ROOT / ".github/workflows/hourly-issue.yml"
+    OPENCODE = ROOT / ".github/workflows/opencode.yml"
+    KANBAN_MANAGER = ROOT / ".github/workflows/kanban-manager.yml"
+    STANDING_MANAGER = ROOT / ".github/workflows/standing-issue-manager.yml"
+
+    @staticmethod
+    def _probe_decision(available_models, cache_issue):
+        result = subprocess.run(
+            [
+                "bash",
+                "-Eeuo",
+                "pipefail",
+                "-c",
+                'if [[ -z "$AVAILABLE_MODELS" || -z "$CACHE_ISSUE" ]]; then printf probe; else printf skip; fi',
+            ],
+            env={
+                **os.environ,
+                "AVAILABLE_MODELS": available_models,
+                "CACHE_ISSUE": cache_issue,
+            },
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        return result.stdout
+
+    def test_hourly_wires_both_outputs_to_reusable_workflow(self):
+        content = self.HOURLY.read_text()
+        assert "available_models: ${{ steps.model-availability.outputs.available-models }}" in content
+        assert "cache_issue: ${{ steps.model-availability.outputs.cache-issue }}" in content
+        assert "available_models:" in content
+        assert "cache_issue:" in content
+
+    @staticmethod
+    def _workflow_inputs(section):
+        inputs = {}
+        for line in section.splitlines():
+            match = re.match(r"^      ([a-z_]+):$", line)
+            if match:
+                inputs[match.group(1)] = ""
+                continue
+            if inputs and re.match(r"^        ", line):
+                last = next(reversed(inputs))
+                inputs[last] += line + "\n"
+        return inputs
+
+    def _dispatch_and_call_inputs(self):
+        content = self.OPENCODE.read_text()
+        dispatch = content.split("  workflow_dispatch:", 1)[1].split("  workflow_call:", 1)[0]
+        call = content.split("  workflow_call:", 1)[1].split("\npermissions:", 1)[0]
+        return self._workflow_inputs(dispatch), self._workflow_inputs(call)
+
+    def test_reusable_declares_optional_handoff_inputs(self):
+        dispatch, call = self._dispatch_and_call_inputs()
+        for inputs in (dispatch, call):
+            for name in ("available_models", "cache_issue"):
+                declaration = inputs[name]
+                assert "description:" in declaration
+                assert "required: false" in declaration
+                assert "type: string" in declaration
+        assert len(dispatch) <= 10
+
+    def test_complete_handoff_skips_probe(self):
+        assert "if: inputs.available_models == '' || inputs.cache_issue == ''" in self.OPENCODE.read_text()
+        assert self._probe_decision("opencode/big-pickle", "429") == "skip"
+
+    @pytest.mark.parametrize(
+        ("available_models", "cache_issue"),
+        [("", "429"), ("opencode/big-pickle", ""), ("", "")],
+    )
+    def test_missing_or_empty_handoff_probes(self, available_models, cache_issue):
+        assert self._probe_decision(available_models, cache_issue) == "probe"
+
+    def test_incomplete_handoff_uses_action_output_fallbacks(self):
+        content = self.OPENCODE.read_text()
+        assert "inputs.available_models || steps.model-availability.outputs.available-models" in content
+        assert "inputs.cache_issue || steps.model-availability.outputs.cache-issue" in content
+        assert "(inputs.cache_issue || steps.model-availability.outputs.cache-issue) != ''" in content
+
+    def test_run_coordinator_receives_handoff_env(self):
+        content = self.OPENCODE.read_text()
+        step = content.split("- name: Run coordinator", 1)[1].split("      - name:", 1)[0]
+        assert "AVAILABLE_MODELS: ${{ inputs.available_models || steps.model-availability.outputs.available-models }}" in step
+        assert (
+            "MODEL_AVAILABILITY_CACHE_ISSUE: ${{ inputs.cache_issue || "
+            "steps.model-availability.outputs.cache-issue || vars.MODEL_AVAILABILITY_CACHE_ISSUE }}" in step
+        )
+
+    @pytest.mark.parametrize(
+        ("workflow", "agent"),
+        [(KANBAN_MANAGER, "kanban-manager"), (STANDING_MANAGER, "standing-issue-manager")],
+    )
+    def test_manager_workflows_let_dispatch_inherit_availability(self, workflow, agent):
+        content = workflow.read_text()
+        for forbidden in (
+            "model-availability",
+            "setup-opencode",
+            "needs: availability",
+            "needs.availability.outputs",
+            "available_models:",
+            "cache_issue:",
+        ):
+            assert forbidden not in content
+        assert "uses: ./.github/workflows/opencode.yml" in content
+        assert f"agent: {agent}" in content
+        assert "secrets: inherit" in content
+
+    @pytest.mark.parametrize(
+        "agent_file",
+        ["kanban-manager.md", "standing-issue-manager.md"],
+    )
+    def test_manager_agents_pass_determined_availability(self, agent_file):
+        content = (self.ROOT / ".opencode/agent" / agent_file).read_text()
+        assert "gh workflow run opencode.yml" in content
+        assert '-f available_models="$AVAILABLE_MODELS"' in content
+        assert '-f cache_issue="$MODEL_AVAILABILITY_CACHE_ISSUE"' in content

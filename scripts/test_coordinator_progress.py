@@ -215,7 +215,7 @@ def test_refusal_verdict_overrides_apparent_delivery(tmp_path):
     verdict.write_text("VERDICT: REFUSAL\n")
     result = run_check(workspace, output, baseline, "--verdict", str(verdict))
     assert result.returncode == 1
-    assert "refusal" in result.stdout.lower()
+    assert "failing closed" in result.stdout.lower()
 
     verdict.write_text("VERDICT: OK\n")
     result = run_check(workspace, output, baseline, "--verdict", str(verdict))

@@ -179,9 +179,11 @@ jobs:
           checker="$(pick "$primary" check_coordinator_progress.py "$fallback")" || checker=""
           deny="$(pick "$primary" model-deny-list.txt "$fallback")" || { printf 'Missing model deny-list\n' >&2; exit 1; }
           report="$(pick "$primary" progress-reporting.txt "$fallback")" || { printf 'Missing progress-reporting contract\n' >&2; exit 1; }
-          printf 'COORDINATOR_PROGRESS_CHECKER=%s\n' "$checker" >> "$GITHUB_ENV"
-          printf 'MODEL_DENY_LIST=%s\n' "$deny" >> "$GITHUB_ENV"
-          printf 'PROGRESS_REPORTING=%s\n' "$report" >> "$GITHUB_ENV"
+          {
+            printf 'COORDINATOR_PROGRESS_CHECKER=%s\n' "$checker"
+            printf 'MODEL_DENY_LIST=%s\n' "$deny"
+            printf 'PROGRESS_REPORTING=%s\n' "$report"
+          } >> "$GITHUB_ENV"
 
       - name: Configure repository git identity
         run: |

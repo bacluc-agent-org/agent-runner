@@ -29,8 +29,10 @@ status=0
 # entry, while regular untracked files of this repository stay checked.
 prettier_ignore=".prettierignore.completion-check"
 trap 'rm -f "$prettier_ignore"' EXIT
-cat .gitignore .prettierignore 2> /dev/null > "$prettier_ignore" || true
-printf '%s\n' "$prettier_ignore" >> "$prettier_ignore"
+{
+  cat .gitignore .prettierignore 2> /dev/null || true
+  printf '\n'
+} > "$prettier_ignore"
 while IFS= read -r entry; do
   if [[ -e "${entry%/}/.git" ]]; then printf '%s\n' "${entry%/}/"; fi
 done < <(git ls-files --others --exclude-standard) >> "$prettier_ignore"

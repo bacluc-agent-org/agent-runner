@@ -13,7 +13,7 @@ case "$FAKE_MODE" in
   silent) while :; do :; done ;;
   periodic) for i in {1..4}; do printf 'progress %s\\n' "$i"; sleep 1; done ;;
   child) (sleep 30) & printf '%s\\n' $! > "$FAKE_CHILD_FILE"; wait ;;
-  storage) while :; do mkdir -p "$HOME/.local/share/opencode/storage"; printf x >> "$HOME/.local/share/opencode/storage/session"; sleep 1; done ;;
+  storage) while :; do mkdir -p "$HOME/.local/share/opencode/log"; printf 'coordinator-run %s\\n' "$RANDOM" >> "$HOME/.local/share/opencode/log/coordinator-run.log"; sleep 1; done ;;
 esac
 """
 
@@ -86,12 +86,13 @@ def test_silent_output_is_killed_with_diagnostic(tmp_path):
     assert "failure_mode=zero-progress" in output.read_text()
     assert "coordinator_status=124" in output.read_text()
     assert combined.count("::error::coordinator zero-progress") == 1
+    assert combined.count("::error::") == 1
     assert "::error::coordinator exceeded the" not in combined
     assert "grace=2m" in combined
     assert "model=model/test" in combined
     assert "session=coordinator-run" in combined
     assert "last_output_bytes=0" in combined
-    assert elapsed < 8
+    assert elapsed < 6
     assert (runner_temp / "coordinator-failure-mode").read_text().strip() == "zero-progress"
     assert not _alive(int((tmp_path / "pid").read_text()))
 
@@ -101,6 +102,8 @@ def test_periodic_output_completes_without_kill(tmp_path):
     combined = process.stdout + process.stderr
     assert process.returncode == 0
     assert "coordinator_status=0" in output.read_text()
+    assert "coordinator_tee_status=0" in output.read_text()
+    assert combined.count("::stop-commands::") == 1
     assert "progress 4" in (runner_temp / "coordinator.out").read_text()
     assert "zero-progress" not in combined
     assert not (runner_temp / "coordinator-diagnostic").exists()
@@ -108,9 +111,10 @@ def test_periodic_output_completes_without_kill(tmp_path):
 
 
 def test_silent_parent_with_live_child_is_spared(tmp_path):
-    process, output, _, runner_temp = run_block(tmp_path, "child", idle=1)
+    process, output, elapsed, runner_temp = run_block(tmp_path, "child", idle=1)
     combined = process.stdout + process.stderr
     assert process.returncode == 124
+    assert elapsed >= 5
     assert "failure_mode=timeout" in output.read_text()
     assert "total timeout" in combined
     assert "zero-progress" not in combined
@@ -119,15 +123,20 @@ def test_silent_parent_with_live_child_is_spared(tmp_path):
 
 
 def test_storage_activity_counts_as_progress(tmp_path):
-    process, _, _, runner_temp = run_block(tmp_path, "storage")
+    process, output, elapsed, runner_temp = run_block(tmp_path, "storage")
     combined = process.stdout + process.stderr
+    assert process.returncode == 124
+    assert "coordinator_status=124" in output.read_text()
+    assert "coordinator_tee_status=0" in output.read_text()
+    assert elapsed >= 8
     assert "zero-progress" not in combined
     assert (runner_temp / "coordinator-failure-mode").read_text().strip() == "timeout"
 
 
 def test_workflow_wires_failure_mode_and_diagnostic():
     workflow = open(WORKFLOW, encoding="utf-8").read()
-    assert '[[ -n "$failure_mode" ]] && echo "failure_mode=$failure_mode" >> "$GITHUB_OUTPUT"' in workflow
+    assert 'echo "failure_mode=${failure_mode}" >> "$GITHUB_OUTPUT"' in workflow
+    assert 'echo "failure_mode=timeout" >> "$GITHUB_OUTPUT"' in workflow
     assert 'cat "$RUNNER_TEMP/coordinator-diagnostic"' in workflow
     assert 'NO_OUTPUT_TIMEOUT_MINUTES: ${{ inputs.no_output_timeout_minutes || 15 }}' in workflow
     assert 'bash "$watchdog_script" "$RUNNER_TEMP/coordinator.out" "$COORDINATOR_TIMEOUT" "$NO_OUTPUT_TIMEOUT_MINUTES"' in workflow

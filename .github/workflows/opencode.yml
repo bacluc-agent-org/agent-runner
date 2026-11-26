@@ -532,7 +532,14 @@ jobs:
           rm -f "$RUNNER_TEMP/opencode-fatal.json"
           if [[ "${VERIFY_WATCHDOG:-false}" == "true" ]]; then
             mkdir -p "$RUNNER_TEMP/stub-bin"
-            printf '#!/usr/bin/env bash\nwhile :; do :; done\n' > "$RUNNER_TEMP/stub-bin/opencode"
+            cat > "$RUNNER_TEMP/stub-bin/opencode" <<'STUB'
+            #!/usr/bin/env bash
+            case "${AGENT:-}" in
+              coordinator-child) sleep 300 & while :; do :; done ;;
+              coordinator-storage) while :; do mkdir -p "$HOME/.local/share/opencode/log"; printf 'coordinator-run %s\n' "$(date +%s)" >> "$HOME/.local/share/opencode/log/coordinator-run.log"; sleep 1; done ;;
+              *) while :; do :; done ;;
+            esac
+          STUB
             chmod +x "$RUNNER_TEMP/stub-bin/opencode"
             export PATH="$RUNNER_TEMP/stub-bin:$PATH"
           fi
@@ -559,11 +566,15 @@ jobs:
           coordinator_status=$(cat "$RUNNER_TEMP/coordinator-status" 2>/dev/null || true)
           [[ -n "$coordinator_status" ]] || coordinator_status="$watchdog_status"
           set -e
-          printf 'Coordinator statuses: opencode=%s tee=0\n' "$coordinator_status"
+          printf 'Coordinator statuses: opencode=%s tee=%s\n' "$coordinator_status" "$coordinator_tee_status"
           echo "coordinator_status=${coordinator_status}" >> "$GITHUB_OUTPUT"
-          echo "coordinator_tee_status=0" >> "$GITHUB_OUTPUT"
+          echo "coordinator_tee_status=${coordinator_tee_status}" >> "$GITHUB_OUTPUT"
           failure_mode=$(cat "$RUNNER_TEMP/coordinator-failure-mode" 2>/dev/null || true)
-          [[ -n "$failure_mode" ]] && echo "failure_mode=$failure_mode" >> "$GITHUB_OUTPUT"
+          if [[ -n "$failure_mode" ]]; then
+            echo "failure_mode=${failure_mode}" >> "$GITHUB_OUTPUT"
+          elif ((coordinator_status == 124)); then
+            echo "failure_mode=timeout" >> "$GITHUB_OUTPUT"
+          fi
           if ((coordinator_tee_status != 0)); then
             printf '::warning::coordinator log capture failed (tee exit %s); the coordinator result is unaffected\n' "$coordinator_tee_status"
           fi

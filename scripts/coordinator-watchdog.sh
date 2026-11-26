@@ -25,10 +25,10 @@ last_mtime=$(stat -c %Y "$output_file" 2>/dev/null || printf '0')
 total_seconds=$((total_minutes * 60))
 idle_seconds=$((idle_minutes * 60))
 failure_mode=''
-storage_dir="$HOME/.local/share/opencode/storage"
+storage_dir="$HOME/.local/share/opencode"
 storage_state() {
   [[ -d "$storage_dir" ]] || { printf 'none\n'; return; }
-  find "$storage_dir" -type f -printf '%p %T@ %s\n' 2>/dev/null | LC_ALL=C sort | sha256sum | cut -d' ' -f1
+  { grep -rl --binary-files=text -- "$title" "$storage_dir" 2>/dev/null || true; } | while IFS= read -r f; do stat -c '%n %Y %s' "$f"; done | LC_ALL=C sort | sha256sum | cut -d' ' -f1
 }
 last_storage=$(storage_state)
 cleanup_done=0

@@ -114,11 +114,14 @@ def test_model_discovery_status_handling_executes_all_command_and_tee_combinatio
 def test_coordinator_status_handling_executes_all_command_and_tee_combinations():
     content = OPENCODE_WORKFLOW.read_text()
     search_start = content.index("id: coordinator")
-    start = content.index("          set +e", search_start)
-    end = content.index("\n\n      - name: Fatal guard", start)
-    fragment = content[start:end]
+    func_start = content.index("run_coordinator() {", search_start)
+    func_end = content.index("\n          }", func_start) + len("\n          }")
+    call_start = content.index('run_coordinator "$COORDINATOR_TIMEOUT" "$PROMPT"', func_end)
+    end = content.index('\n          if [[ -n "$COORDINATOR_PROGRESS_CHECKER" ]]; then', call_start)
+    fragment = content[func_start:func_end] + "\n" + content[call_start:end]
     setup = (
         "COORDINATOR_TIMEOUT=10\n"
+        "COORDINATOR_PROGRESS_CHECKER=\n"
         "stop_token=stop\n"
         "coordinator_session_title=coordinator\n"
         "AGENT=coordinator\n"
@@ -141,14 +144,16 @@ def test_run_result_classifier_reports_timeout_and_non_fatal_tee_failure():
     end = content.index("\n\n          # Check for existing PRs", start)
     fragment = content[start:end]
     cases = [
-        ("0", "0", "", "✅ completed"),
-        ("0", "9", "", "✅ completed (tee log capture failed: exit 9)"),
-        ("124", "0", "", "⏱️ coordinator timed out (exit 124)"),
-        ("124", "9", "auth", "⏱️ coordinator timed out (exit 124)"),
-        ("7", "0", "auth", "❌ fatal error: auth"),
-        ("7", "0", "", "⚠️ failed (coordinator exit 7)"),
+        ("0", "0", "", "", "✅ completed"),
+        ("0", "9", "", "", "✅ completed (tee log capture failed: exit 9)"),
+        ("124", "0", "", "", "⏱️ coordinator timed out (exit 124)"),
+        ("124", "9", "auth", "", "⏱️ coordinator timed out (exit 124)"),
+        ("7", "0", "auth", "", "❌ fatal error: auth"),
+        ("7", "0", "", "", "⚠️ failed (coordinator exit 7)"),
+        ("0", "0", "", "incomplete", "❌ failed (incomplete)"),
+        ("0", "0", "", "completion-gate-error", "❌ failed (completion-gate-error)"),
     ]
-    for coordinator_status, tee_status, fatal_reason, expected in cases:
+    for coordinator_status, tee_status, fatal_reason, failure_mode, expected in cases:
         result = subprocess.run(
             [
                 "bash",
@@ -163,6 +168,7 @@ def test_run_result_classifier_reports_timeout_and_non_fatal_tee_failure():
                 COORDINATOR_STATUS=coordinator_status,
                 COORDINATOR_TEE_STATUS=tee_status,
                 FATAL_REASON=fatal_reason,
+                FAILURE_MODE=failure_mode,
             ),
             capture_output=True,
             text=True,
@@ -176,3 +182,22 @@ def test_classifier_reads_coordinator_step_outputs():
     block = content[content.index("- name: Post run-result comment"):]
     assert "COORDINATOR_STATUS: ${{ steps.coordinator.outputs.coordinator_status }}" in block
     assert "COORDINATOR_TEE_STATUS: ${{ steps.coordinator.outputs.coordinator_tee_status }}" in block
+    assert "FAILURE_MODE: ${{ steps.coordinator.outputs.failure_mode || steps.fatal-guard.outputs.failure_mode }}" in block
+
+
+def test_coordinator_fences_and_stale_output_clear_are_ordered():
+    content = OPENCODE_WORKFLOW.read_text()
+    step = content[content.index("id: coordinator") : content.index("- name: Fatal guard")]
+    for name in ("run_coordinator() {", "audit_output() {"):
+        start = step.index(name)
+        block = step[start : step.index("\n          }", start)]
+        assert 'fence_token="$(openssl rand -hex 32)"' in block
+        assert ': "${fence_token:?fence token generation failed}"' in block
+        assert "printf '::stop-commands::%s\\n' \"$fence_token\"" in block
+        assert "printf '::%s::\\n' \"$fence_token\"" in block
+        assert "$stop_token" not in block
+
+    tail = step.index('tail -n 120 "$RUNNER_TEMP/coordinator.out"')
+    clear = step.index('rm -f "$RUNNER_TEMP/coordinator.out"', tail)
+    resume = step.index('run_coordinator "$COORDINATOR_RESUME_TIMEOUT" "$resume_prompt"')
+    assert tail < clear < resume

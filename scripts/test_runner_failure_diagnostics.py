@@ -86,6 +86,7 @@ def test_silent_output_is_killed_with_diagnostic(tmp_path):
     assert "failure_mode=zero-progress" in output.read_text()
     assert "coordinator_status=124" in output.read_text()
     assert combined.count("::error::coordinator zero-progress") == 1
+    assert "::error::coordinator exceeded the" not in combined
     assert "grace=2m" in combined
     assert "model=model/test" in combined
     assert "session=coordinator-run" in combined
@@ -126,7 +127,7 @@ def test_storage_activity_counts_as_progress(tmp_path):
 
 def test_workflow_wires_failure_mode_and_diagnostic():
     workflow = open(WORKFLOW, encoding="utf-8").read()
-    assert 'echo "failure_mode=$(cat "$RUNNER_TEMP/coordinator-failure-mode")" >> "$GITHUB_OUTPUT"' in workflow
+    assert '[[ -n "$failure_mode" ]] && echo "failure_mode=$failure_mode" >> "$GITHUB_OUTPUT"' in workflow
     assert 'cat "$RUNNER_TEMP/coordinator-diagnostic"' in workflow
     assert 'NO_OUTPUT_TIMEOUT_MINUTES: ${{ inputs.no_output_timeout_minutes || 15 }}' in workflow
     assert 'bash "$watchdog_script" "$RUNNER_TEMP/coordinator.out" "$COORDINATOR_TIMEOUT" "$NO_OUTPUT_TIMEOUT_MINUTES"' in workflow

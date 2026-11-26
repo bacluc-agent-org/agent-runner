@@ -1231,7 +1231,7 @@ exec /bin/mv "$@"
     (tmp_path / "gh-call").unlink()
     (tmp_path / "playwright-cli-calls").unlink()
     blocked = subprocess.run(
-        ["bash", str(helper)], env={**env, "FAKE_MODE": "blocked", "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "1"}, capture_output=True, text=True, timeout=10
+        ["bash", str(helper)], env={**env, "FAKE_MODE": "blocked", "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "5"}, capture_output=True, text=True, timeout=10
     )
     assert blocked.returncode != 0
     assert "Primitive login failed closed after Playwright recovery" in blocked.stderr

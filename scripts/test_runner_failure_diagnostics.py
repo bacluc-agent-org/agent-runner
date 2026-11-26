@@ -1,4 +1,6 @@
 import os
+import shlex
+import shutil
 import subprocess
 import time
 
@@ -39,7 +41,7 @@ def coordinator_block():
     return "\n".join(block)
 
 
-def run_block(tmp_path, mode, total=10, idle=2):
+def run_block(tmp_path, mode, total=10, idle=2, stat_fail_prefix=None):
     runner_temp = tmp_path / "runner-temp"
     scripts = runner_temp / "agent-runner" / "scripts"
     scripts.mkdir(parents=True)
@@ -52,6 +54,18 @@ def run_block(tmp_path, mode, total=10, idle=2):
     stub = bin_dir / "opencode"
     stub.write_text(STUB_SOURCE, encoding="utf-8")
     stub.chmod(0o755)
+    if stat_fail_prefix:
+        real_stat = shutil.which("stat")
+        stat = bin_dir / "stat"
+        stat.write_text(
+            "#!/usr/bin/env bash\n"
+            'for arg in "$@"; do\n'
+            f'  [[ "$arg" == {shlex.quote(stat_fail_prefix)}* ]] && exit 1\n'
+            "done\n"
+            f'exec {shlex.quote(real_stat)} "$@"\n',
+            encoding="utf-8",
+        )
+        stat.chmod(0o755)
     env = {
         **os.environ,
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
@@ -131,6 +145,19 @@ def test_storage_activity_counts_as_progress(tmp_path):
     assert elapsed >= 8
     assert "zero-progress" not in combined
     assert (runner_temp / "coordinator-failure-mode").read_text().strip() == "timeout"
+
+
+def test_storage_scan_survives_file_vanishing_before_stat(tmp_path):
+    storage_dir = tmp_path / ".local" / "share" / "opencode"
+    (storage_dir / "log").mkdir(parents=True)
+    (storage_dir / "log" / "coordinator-run.log").write_text("coordinator-run\n", encoding="utf-8")
+    process, output, _, _ = run_block(
+        tmp_path, "silent", idle=1, stat_fail_prefix=str(storage_dir)
+    )
+    combined = process.stdout + process.stderr
+    assert process.returncode == 124
+    assert "failure_mode=zero-progress" in output.read_text()
+    assert combined.count("::error::coordinator zero-progress") == 1
 
 
 def test_workflow_wires_failure_mode_and_diagnostic():

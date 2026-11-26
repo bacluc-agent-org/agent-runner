@@ -18,19 +18,6 @@ child_pid=$!
 # Live-stream the captured output to stdout (Actions log) without coupling to opencode's process group.
 tail -n +1 -f "$output_file" &
 tail_pid=$!
-start_time=$(date +%s)
-last_growth_time=$start_time
-last_bytes=0
-last_mtime=$(stat -c %Y "$output_file" 2>/dev/null || printf '0')
-total_seconds=$((total_minutes * 60))
-idle_seconds=$((idle_minutes * 60))
-failure_mode=''
-storage_dir="$HOME/.local/share/opencode"
-storage_state() {
-  [[ -d "$storage_dir" ]] || { printf 'none\n'; return; }
-  { grep -rl --binary-files=text -- "$title" "$storage_dir" 2>/dev/null || true; } | while IFS= read -r f; do stat -c '%n %Y %s' "$f"; done | LC_ALL=C sort | sha256sum | cut -d' ' -f1
-}
-last_storage=$(storage_state)
 cleanup_done=0
 cleanup() {
   ((cleanup_done)) && return
@@ -45,6 +32,19 @@ cleanup() {
   wait "$tail_pid" 2>/dev/null || true
 }
 trap cleanup EXIT
+start_time=$(date +%s)
+last_growth_time=$start_time
+last_bytes=0
+last_mtime=$(stat -c %Y "$output_file" 2>/dev/null || printf '0')
+total_seconds=$((total_minutes * 60))
+idle_seconds=$((idle_minutes * 60))
+failure_mode=''
+storage_dir="$HOME/.local/share/opencode"
+storage_state() {
+  [[ -d "$storage_dir" ]] || { printf 'none\n'; return; }
+  { grep -rl --binary-files=text -- "$title" "$storage_dir" 2>/dev/null || true; } | while IFS= read -r f; do stat -c '%n %Y %s' "$f" 2>/dev/null || true; done | LC_ALL=C sort | sha256sum | cut -d' ' -f1
+}
+last_storage=$(storage_state)
 while kill -0 "$child_pid" 2>/dev/null; do
   now=$(date +%s)
   bytes=$(stat -c %s "$output_file" 2>/dev/null || printf '0')

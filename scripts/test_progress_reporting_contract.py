@@ -22,7 +22,7 @@ def test_opencode_workflow_injects_progress_reporting_contract():
     workflow = (ROOT / ".github/workflows/opencode.yml").read_text()
 
     assert 'cat "$PROGRESS_REPORTING"' in workflow
-    assert 'pick "$primary" progress-reporting.txt "$fallback"' in workflow
+    assert 'report="$scripts/progress-reporting.txt"' in workflow
     assert 'PROMPT=$(printf' in workflow
 
 
@@ -47,7 +47,7 @@ def test_opencode_workflow_gates_success_and_bounds_continuation():
     assert workflow.count("--check") == 2
     assert "COORDINATOR_RESUME_TIMEOUT: 10" in workflow
     assert workflow.count("run_coordinator \"$COORDINATOR_RESUME_TIMEOUT\"") == 1
-    assert 'run_coordinator "$COORDINATOR_TIMEOUT" "-a" "$PROMPT"' in workflow
+    assert 'run_coordinator "$COORDINATOR_TIMEOUT" "$PROMPT"' in workflow
     assert 'rm -f "$RUNNER_TEMP/coordinator.out"' in workflow
     assert "AGENT_RESULT: NO_CODE_CHANGE" in workflow
     assert "failure_mode=incomplete" in workflow

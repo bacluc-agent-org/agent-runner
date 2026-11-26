@@ -1,5 +1,6 @@
 import argparse
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -64,8 +65,8 @@ def relevant_status(root):
             for nested in nested_paths
         ):
             continue
-        if Path(path).parts[:1] == (".opencode",):
-            # opencode rewrites .opencode/ at runtime; those changes are not delivery
+        if Path(path) in {Path(".opencode/package.json"), Path(".opencode/package-lock.json")}:
+            # these two files are rewritten at runtime; other .opencode/ files count as delivery
             continue
         status.append(line)
     return "\n".join(status)
@@ -82,8 +83,7 @@ def repository_state(root):
 
 
 def snapshot(workspace):
-    root = str(Path(workspace).resolve())
-    return {root: repository_state(root)}
+    return {root: repository_state(root) for root in repository_roots(workspace)}
 
 
 def has_delivery(baseline, current):
@@ -95,16 +95,20 @@ def has_delivery(baseline, current):
     return False
 
 
+def _normalize_lines(text):
+    return [re.sub(r"\x1b\[[0-9;]*m", "", line).strip() for line in text.splitlines()]
+
+
 def check(workspace, output, baseline_path, verdict_path=None):
     baseline = json.loads(Path(baseline_path).read_text())
     current = snapshot(workspace)
-    if verdict_path is not None and OK_VERDICT not in Path(verdict_path).read_text().splitlines():
+    if verdict_path is not None and OK_VERDICT not in _normalize_lines(Path(verdict_path).read_text()):
         print("output audit did not return VERDICT: OK; failing closed")
         return 1
     if has_delivery(baseline, current):
         print("observable delivery detected")
         return 0
-    if NO_CODE_CHANGE in Path(output).read_text().splitlines():
+    if NO_CODE_CHANGE in _normalize_lines(Path(output).read_text()):
         print("explicit no-code-change result")
         return 2
     print("incomplete coordinator run: no observable delivery or exact no-code-change result")

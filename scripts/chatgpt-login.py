@@ -264,7 +264,7 @@ def _status_payload(page, blocking: str | None, code_ready: bool, cdp_port: int)
     if step == "email-verification" and blocking is None:
         blocking = "email verification required; no inbox/OTP source is configured, so use an allowed auth route"
     elif step == "unknown" and blocking is None:
-        blocking = f"unknown authentication route; use playwright-cli attach --cdp=http://localhost:{cdp_port}"
+        blocking = "unknown authentication route; use status/step/goto/snapshot primitives to adapt the login path"
     try:
         url = page.url.split("?", 1)[0].split("#", 1)[0]
         title = _redact_debug_text(page.title())

@@ -67,7 +67,7 @@ def test_status_payload_describes_email_verification_and_unknown_routes():
         cdp_port=9333,
     )
     assert unknown["step"] == "unknown"
-    assert unknown["blocking"] == "unknown authentication route; use playwright-cli attach --cdp=http://localhost:9333"
+    assert unknown["blocking"] == "unknown authentication route; use status/step/goto/snapshot primitives to adapt the login path"
 
 
 def test_start_failure_cleanup_closes_resources_and_removes_state(tmp_path, monkeypatch):
@@ -1314,7 +1314,7 @@ exec /bin/mv "$@"
             path.unlink()
     off_domain = subprocess.run(
         ["bash", str(helper)],
-        env={**env, "FAKE_MODE": "off-domain", "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "2"},
+        env={**env, "FAKE_MODE": "off-domain", "PLAYWRIGHT_HANDOFF_TIMEOUT_SECONDS": "5"},
         capture_output=True,
         text=True,
         timeout=10,

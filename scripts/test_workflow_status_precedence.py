@@ -176,3 +176,36 @@ def test_classifier_reads_coordinator_step_outputs():
     block = content[content.index("- name: Post run-result comment"):]
     assert "COORDINATOR_STATUS: ${{ steps.coordinator.outputs.coordinator_status }}" in block
     assert "COORDINATOR_TEE_STATUS: ${{ steps.coordinator.outputs.coordinator_tee_status }}" in block
+
+
+def test_coordinator_success_with_tee_failure_reaches_completed_status():
+    """Real coordinator outputs must feed the real classifier without a false failure."""
+    content = OPENCODE_WORKFLOW.read_text()
+    coord_start = content.index("          set +e", content.index("id: coordinator"))
+    coord_end = content.index("\n\n      - name: Fatal guard", coord_start)
+    classifier_start = content.index("          # Determine status")
+    classifier_end = content.index("\n\n          # Check for existing PRs", classifier_start)
+    setup = (
+        "COORDINATOR_TIMEOUT=10\n"
+        "stop_token=stop\n"
+        "coordinator_session_title=coordinator\n"
+        "AGENT=coordinator\n"
+        "MODEL=model\n"
+        "PROMPT=prompt\n"
+    )
+    result, outputs = _run_fragment(setup + content[coord_start:coord_end], 0, 9)
+    assert result.returncode == 0, result.stderr
+    lines = outputs.splitlines()
+    assert "coordinator_status=0" in lines
+    assert "coordinator_tee_status=9" in lines
+    status = next(line.split("=", 1)[1] for line in lines if line.startswith("coordinator_status="))
+    tee_status = next(line.split("=", 1)[1] for line in lines if line.startswith("coordinator_tee_status="))
+    classified = subprocess.run(
+        ["bash", "-Eeuo", "pipefail", "-c", content[classifier_start:classifier_end] + '\nprintf "%s\\n" "$STATUS"\n'],
+        cwd=ROOT,
+        env=dict(os.environ, COORDINATOR_STATUS=status, COORDINATOR_TEE_STATUS=tee_status, FATAL_REASON=""),
+        capture_output=True,
+        text=True,
+    )
+    assert classified.returncode == 0, classified.stderr
+    assert classified.stdout.strip() == "✅ completed (tee log capture failed: exit 9)"

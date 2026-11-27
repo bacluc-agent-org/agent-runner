@@ -235,7 +235,7 @@ class TestFinish:
         )
 
         assert (
-            upc.main(_argv("--result", "⚠️ failed (coordinator exit failure)", "--mode", "finish"))
+            upc.main(_argv("--result", "⚠️ failed (coordinator exit 7)", "--mode", "finish"))
             == 0
         )
 
@@ -246,7 +246,7 @@ class TestFinish:
                 RUN_URL,
                 "opencode/big-pickle",
                 "run started",
-                "⚠️ failed (coordinator exit failure)",
+                "⚠️ failed (coordinator exit 7)",
                 "",
             ]
         ]

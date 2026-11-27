@@ -1,7 +1,5 @@
-import type { Event, ProviderAuthError } from "@opencode-ai/sdk";
-
-// AnyEvent: union to support v1 (properties) vs v2 (data) payload shapes and error variations
-export type AnyEvent = Event | { type: string; properties?: any; data?: any };
+// AnyEvent: structural type supporting v1 (properties) and v2 (data) payload shapes
+export type AnyEvent = { type: string; properties?: any; data?: any };
 
 export type FatalReason =
   "auth" | "balance" | "model_unavailable" | "retry_limit";

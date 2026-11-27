@@ -39,12 +39,13 @@ An item is ineligible when any of the following holds:
 
 - the issue is closed;
 - an `opencode.yml` run for that issue is in progress or queued: the issue
-  carries the `agent-running` label, the issue's progress comment contains a run
-  row for it, or
-  `gh run list -R bacluc-agent-org/agent-runner --workflow opencode.yml --limit 100 --json databaseId,status,displayTitle`
-  lists a queued or in-progress run for it. Logs are unavailable for
-  non-completed runs, so an active run that cannot be ruled out makes the issue
-  ineligible;
+  carries the `agent-running` label, or its progress comment contains a run row
+  with an empty or `pending` result whose run is still queued or in progress
+  (`gh run view <run-url> --json status`; `--log` fails for an in-progress run).
+  Do not use `gh run list --json displayTitle` to map a run to an issue: every
+  `workflow_dispatch` run is titled `OpenCode agent`. An unrelated active run
+  does not make the issue ineligible. If a pending row's run cannot be resolved,
+  treat the issue as ineligible;
 - the issue body or its latest comments state an unelapsed cadence or deferral
   (`weekly`, `next eligible`, `wait until`, `deferred`, `blocked`); or
 - the issue explicitly waits for human approval or selection.

@@ -368,3 +368,17 @@ class TestRegression189:
         assert "--- Coordinator transcript: export failed ---" not in out
         assert "--- Subagent transcript: planner (ses_child1) ---" in out
         assert "[planner] done" in out
+
+
+class TestInlineAgentSegments:
+    def test_extracts_and_deduplicates_inline_agents(self):
+        root_export = {
+            "info": {"agent": "coordinator"},
+            "messages": [
+                {"parts": [{"type": "text", "text": "[Build Agent] done"}]},
+                {"parts": [{"type": "text", "text": "[Build Agent] again"}]},
+                {"info": {"agent": "ses_planner"}, "parts": [{"type": "text", "text": "hi"}]},
+            ],
+        }
+        segments = dump_subagent_transcripts.inline_agent_segments(root_export)
+        assert [name for name, _ in segments] == ["Build Agent", "ses_planner"]

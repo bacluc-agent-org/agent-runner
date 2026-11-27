@@ -20,7 +20,7 @@ commands and ordinary REST `gh api` endpoints. Never call GraphQL directly excep
 repository's approved guarded path documented below for project item positioning.
 Print concise inspection and dispatch results so the workflow log is useful.
 
-The project has one status: `backlog`. Ensure the standing issues are on this
+The project has one status: `Backlog`. Ensure the standing issues are on this
 project and preserve their priority order. A successfully dispatched item moves
 to the end of the backlog, and an ineligible top item is also moved to the end so
 useful work can continue without losing it (see Rotation and Dispatch).
@@ -40,8 +40,10 @@ An item is ineligible when any of the following holds:
 - the issue is closed;
 - an `opencode.yml` run for that issue is in progress or queued: the issue
   carries the `agent-running` label, or its progress comment contains a run row
-  with an empty or `pending` result whose run is still queued or in progress
-  (`gh run view <run-url> --json status`; `--log` fails for an in-progress run).
+  with an empty or `pending` result whose run status is not `completed`
+  (`gh run view <run-id> -R bacluc-agent-org/agent-runner --json status`, where
+  `<run-id>` is the numeric trailing segment of the run URL; `--log` fails for
+  an in-progress run).
   Do not use `gh run list --json displayTitle` to map a run to an issue: every
   `workflow_dispatch` run is titled `OpenCode agent`. An unrelated active run
   does not make the issue ineligible. If a pending row's run cannot be resolved,

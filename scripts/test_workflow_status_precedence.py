@@ -119,19 +119,30 @@ def test_coordinator_status_handling_executes_all_command_and_tee_combinations()
     fragment = content[start:end]
     setup = (
         "COORDINATOR_TIMEOUT=10\n"
+        "NO_OUTPUT_TIMEOUT_MINUTES=1\n"
         "stop_token=stop\n"
         "coordinator_session_title=coordinator\n"
         "AGENT=coordinator\n"
         "MODEL=model\n"
         "PROMPT=prompt\n"
+        "watchdog_script=\"$RUNNER_TEMP/coordinator-watchdog.sh\"\n"
+        "cat > \"$watchdog_script\" <<'WATCHDOG'\n"
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$FAKE_COMMAND_STATUS\" > \"$4\"\n"
+        "if [[ \"$FAKE_COMMAND_STATUS\" == 124 ]]; then\n"
+        "  printf 'timeout\\n' > \"$RUNNER_TEMP/coordinator-failure-mode\"\n"
+        "fi\n"
+        "exit \"$FAKE_COMMAND_STATUS\"\n"
+        "WATCHDOG\n"
+        "chmod +x \"$watchdog_script\"\n"
     )
     cases = [(0, 0, False), (124, 0, True), (7, 0, False), (0, 9, False), (124, 9, True), (7, 9, False)]
     for command_status, tee_status, timed_out in cases:
         result, outputs = _run_fragment(setup + fragment, command_status, tee_status)
         assert result.returncode == command_status, result.stderr
-        assert f"opencode={command_status} tee={tee_status}" in result.stdout
+        assert "tee=0" in result.stdout
         assert f"coordinator_status={command_status}" in outputs.splitlines()
-        assert f"coordinator_tee_status={tee_status}" in outputs.splitlines()
+        assert "coordinator_tee_status=0" in outputs.splitlines()
         assert ("failure_mode=timeout" in outputs.splitlines()) == timed_out
 
 

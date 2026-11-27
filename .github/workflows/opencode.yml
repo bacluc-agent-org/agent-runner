@@ -69,6 +69,16 @@ on:
         required: false
         type: number
         default: 5
+      no_output_timeout_minutes:
+        description: Coordinator idle output timeout in minutes
+        required: false
+        type: number
+        default: 15
+      verify_watchdog:
+        description: Verify the zero-progress watchdog with a stub silent opencode (fails the coordinator step on purpose)
+        required: false
+        type: boolean
+        default: false
       agent:
         description: OpenCode agent to run
         required: false
@@ -94,6 +104,16 @@ on:
         required: false
         type: number
         default: 120
+      no_output_timeout_minutes:
+        description: Coordinator idle output timeout in minutes
+        required: false
+        type: number
+        default: 15
+      verify_watchdog:
+        description: Verify the zero-progress watchdog with a stub silent opencode (fails the coordinator step on purpose)
+        required: false
+        type: boolean
+        default: false
       agent:
         description: OpenCode agent to run
         required: false
@@ -137,14 +157,18 @@ jobs:
           printf "requested_model: %s\n" "$requested"
           printf "timeout_minutes: %s\n" "$TIMEOUT_MINUTES"
           printf 'discovery_timeout_minutes: %s\n' "$DISCOVERY_TIMEOUT_MINUTES"
+          printf 'no_output_timeout_minutes: %s\n' "$NO_OUTPUT_TIMEOUT_MINUTES"
           printf 'agent: %s\n' "$AGENT"
+          printf 'verify_watchdog: %s\n' "$VERIFY_WATCHDOG"
           printf '::%s::\n' "$stop_token"
         env:
           MODEL_TEXT: ${{ inputs.model }}
           MODEL_CHOICE: ${{ inputs.model_choice }}
           TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
           DISCOVERY_TIMEOUT_MINUTES: ${{ inputs.discovery_timeout_minutes }}
+          NO_OUTPUT_TIMEOUT_MINUTES: ${{ inputs.no_output_timeout_minutes }}
           AGENT: ${{ inputs.agent || 'coordinator' }}
+          VERIFY_WATCHDOG: ${{ inputs.verify_watchdog }}
 
       - name: Check out target repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -497,6 +521,8 @@ jobs:
         env:
           MODEL: ${{ steps.select-model.outputs.model }}
           COORDINATOR_TIMEOUT: ${{ inputs.timeout_minutes || 120 }}
+          NO_OUTPUT_TIMEOUT_MINUTES: ${{ inputs.no_output_timeout_minutes || 15 }}
+          VERIFY_WATCHDOG: ${{ inputs.verify_watchdog }}
           GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
           BACLUC_AGENT_GITHUB_TOKEN: ${{ secrets.BACLUC_AGENT_GITHUB_TOKEN }}
           OPENCODE_FATAL_STAGE: coordinator
@@ -504,6 +530,20 @@ jobs:
         run: |
           set -Eeuo pipefail
           rm -f "$RUNNER_TEMP/opencode-fatal.json"
+          if [[ "${VERIFY_WATCHDOG:-false}" == "true" ]]; then
+            mkdir -p "$RUNNER_TEMP/stub-bin"
+            cat > "$RUNNER_TEMP/stub-bin/opencode" <<'STUB'
+            #!/usr/bin/env bash
+            case "${AGENT:-}" in
+              coordinator-child) sleep 300 & while :; do :; done ;;
+              coordinator-storage) while :; do mkdir -p "$HOME/.local/share/opencode/log"; printf 'coordinator-run %s\n' "$(date +%s)" >> "$HOME/.local/share/opencode/log/coordinator-run.log"; sleep 1; done ;;
+              coordinator-exit0) exit 0 ;;
+              *) while :; do :; done ;;
+            esac
+          STUB
+            chmod +x "$RUNNER_TEMP/stub-bin/opencode"
+            export PATH="$RUNNER_TEMP/stub-bin:$PATH"
+          fi
 
           coordinator_session_title='coordinator-run'
           PROMPT=$(printf 'model: %s \n%s\n\n%s' "$MODEL" "$PROMPT" "$(cat "$RUNNER_TEMP/agent-runner/scripts/progress-reporting.txt")")
@@ -512,24 +552,37 @@ jobs:
           printf '::stop-commands::%s\n' "$stop_token"
           printf 'Final OpenCode command: opencode run --agent %q --model %q --title %q\n' "$AGENT" "$MODEL" "$coordinator_session_title"
           printf 'Coordinator prompt:\n%s\n' "$PROMPT"
+          # No GNU timeout wrapper: it forks a process group, so kill -- -$pid would miss opencode; a live child (task subagent) suppresses the zero-progress kill. Output goes to a file tailed live while the watchdog samples it.
+          watchdog_script="$RUNNER_TEMP/coordinator-watchdog.sh"
+          cp "$RUNNER_TEMP/agent-runner/scripts/coordinator-watchdog.sh" "$watchdog_script"
+          rm -f "$RUNNER_TEMP/coordinator-failure-mode" "$RUNNER_TEMP/coordinator-diagnostic"
           set +e
-          timeout "${COORDINATOR_TIMEOUT}m" opencode run --agent "$AGENT" --model "$MODEL" --title "$coordinator_session_title" "$PROMPT" 2>&1 | tee "$RUNNER_TEMP/coordinator.out"
-          coordinator_statuses=("${PIPESTATUS[@]}")
+          bash "$watchdog_script" "$RUNNER_TEMP/coordinator.out" "$COORDINATOR_TIMEOUT" "$NO_OUTPUT_TIMEOUT_MINUTES" "$RUNNER_TEMP/coordinator-status" "$AGENT" "$MODEL" "$coordinator_session_title" "$PROMPT"
+          watchdog_status=$?
+          coordinator_tee_status=0
           printf '\n::%s::\n' "$stop_token"
-          coordinator_status=${coordinator_statuses[0]}
-          coordinator_tee_status=${coordinator_statuses[1]}
+          if [[ -f "$RUNNER_TEMP/coordinator-diagnostic" ]]; then
+            cat "$RUNNER_TEMP/coordinator-diagnostic"
+          fi
+          coordinator_status=$(cat "$RUNNER_TEMP/coordinator-status" 2>/dev/null || true)
+          [[ -n "$coordinator_status" ]] || coordinator_status="$watchdog_status"
           set -e
           printf 'Coordinator statuses: opencode=%s tee=%s\n' "$coordinator_status" "$coordinator_tee_status"
           echo "coordinator_status=${coordinator_status}" >> "$GITHUB_OUTPUT"
           echo "coordinator_tee_status=${coordinator_tee_status}" >> "$GITHUB_OUTPUT"
-          if ((coordinator_status == 124)); then
+          failure_mode=$(cat "$RUNNER_TEMP/coordinator-failure-mode" 2>/dev/null || true)
+          if [[ -n "$failure_mode" ]]; then
+            echo "failure_mode=${failure_mode}" >> "$GITHUB_OUTPUT"
+          elif ((coordinator_status == 124)); then
             echo "failure_mode=timeout" >> "$GITHUB_OUTPUT"
           fi
           if ((coordinator_tee_status != 0)); then
             printf '::warning::coordinator log capture failed (tee exit %s); the coordinator result is unaffected\n' "$coordinator_tee_status"
           fi
           if ((coordinator_status != 0)); then
-            ((coordinator_status == 124)) && printf '::error::coordinator exceeded the %sm limit (opencode exit %s)\n' "$COORDINATOR_TIMEOUT" "$coordinator_status"
+            if ((coordinator_status == 124)) && [[ "$failure_mode" != "zero-progress" ]]; then
+              printf '::error::coordinator exceeded the %sm limit (opencode exit %s)\n' "$COORDINATOR_TIMEOUT" "$coordinator_status"
+            fi
             exit "$coordinator_status"
           fi
           exit 0
@@ -553,7 +606,7 @@ jobs:
           fi
 
       - name: Update cache on coordinator failure
-        if: (failure() || steps.fatal-guard.outputs.fatal-model != '') && (steps.select-model.outputs.model != '' || steps.fatal-guard.outputs.fatal-model != '') && steps.model-availability.outputs.cache-issue != ''
+        if: (failure() || steps.fatal-guard.outputs.fatal-model != '') && (steps.select-model.outputs.model != '' || steps.fatal-guard.outputs.fatal-model != '') && steps.model-availability.outputs.cache-issue != '' && inputs.verify_watchdog != true
         shell: bash
         env:
           MODEL: ${{ steps.fatal-guard.outputs.fatal-model || steps.select-model.outputs.model }}
@@ -681,7 +734,7 @@ jobs:
           printf '::%s::\n' "$stop_token"
 
       - name: Post run-result comment
-        if: always() && steps.target-issue.outputs.issue_number != ''
+        if: always() && steps.target-issue.outputs.issue_number != '' && inputs.verify_watchdog != true
         continue-on-error: true
         shell: bash
         env:
